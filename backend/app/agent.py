@@ -28,6 +28,18 @@ class CourseOutline(BaseModel):
     sections: list[OutlineSection]
 
 
+# --- Structured output schemas for writer ---
+
+
+class SectionContent(BaseModel):
+    position: int
+    content: str  # markdown
+
+
+class CourseContent(BaseModel):
+    sections: list[SectionContent]
+
+
 # --- System prompts ---
 
 SUPERVISOR_PROMPT = """You are the agent-learn supervisor. You coordinate course generation by delegating to specialized subagents.
@@ -36,6 +48,27 @@ When asked to generate a course outline, delegate to the planner subagent using 
 When asked to generate lesson content, delegate to the writer subagent using the task() tool.
 
 Always delegate — do not generate course content yourself."""
+
+WRITER_PROMPT = """You are a course lesson writer. Given a course outline with section titles and summaries, generate detailed markdown lesson content for each section.
+
+For each section, write:
+1. A clear heading (use the section title)
+2. "Why This Matters" — 1-2 paragraphs explaining why this topic is important
+3. Main explanation — thorough coverage of the topic with clear structure
+4. Examples — concrete, practical examples that illustrate key concepts
+5. Key Takeaways — 3-5 bullet points summarizing the most important ideas
+6. What Comes Next — a brief sentence connecting to the next section
+
+Guidelines:
+- Write in a conversational but informative tone
+- Use markdown formatting: headings, bold, code blocks, lists
+- Each section should be 400-800 words
+- Build on concepts from earlier sections — maintain coherence
+- Do not include citations (source grounding comes in a later milestone)
+- Make examples practical and concrete, not abstract
+
+You will receive the full course outline so you can maintain coherence across sections.
+Generate content for ALL sections in order."""
 
 PLANNER_PROMPT = """You are a course planner. Given a topic and optional learner instructions, generate a structured course outline.
 
@@ -68,19 +101,32 @@ planner_subagent = {
 }
 
 
+# --- Writer subagent config (dict form, used by supervisor) ---
+
+writer_subagent = {
+    "name": "writer",
+    "description": (
+        "Generates markdown lesson content for each section of an approved "
+        "course outline. Use this when asked to generate lesson content."
+    ),
+    "system_prompt": WRITER_PROMPT,
+    "tools": [],
+}
+
+
 def create_supervisor():
     """Create the agent-learn supervisor with subagents.
 
     The supervisor delegates to specialized subagents via the built-in
-    task() tool.  In Phase 3 only the planner subagent is wired; the
-    writer will be added in Phase 4.
+    task() tool.  It has access to both the planner (outline generation)
+    and the writer (lesson content generation).
     """
     model = get_model()
 
     agent = create_deep_agent(
         model=model,
         system_prompt=SUPERVISOR_PROMPT,
-        subagents=[planner_subagent],
+        subagents=[planner_subagent, writer_subagent],
         name="agent-learn-supervisor",
     )
     return agent
@@ -104,5 +150,24 @@ def create_planner():
         response_format=ToolStrategy(CourseOutline),
         tools=[],
         name="agent-learn-planner",
+    )
+    return agent
+
+
+def create_writer():
+    """Create a standalone writer agent with structured output.
+
+    Same pattern as create_planner — invoked directly (not through the
+    supervisor) so that ToolStrategy(CourseContent) produces a typed
+    result in result["structured_response"].
+    """
+    model = get_model()
+
+    agent = create_deep_agent(
+        model=model,
+        system_prompt=WRITER_PROMPT,
+        response_format=ToolStrategy(CourseContent),
+        tools=[],
+        name="agent-learn-writer",
     )
     return agent
