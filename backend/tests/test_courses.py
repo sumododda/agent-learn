@@ -3,16 +3,32 @@ from unittest.mock import patch, AsyncMock
 
 
 @pytest.mark.anyio
-async def test_create_course(client, mock_outline):
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_outline):
+async def test_create_course(client, mock_outline_with_briefs):
+    # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
+    mock_return = (mock_outline_with_briefs, False)
+    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
         response = await client.post("/api/courses", json={"topic": "Python basics"})
 
     assert response.status_code == 200
     data = response.json()
     assert data["topic"] == "Python basics"
     assert data["status"] == "outline_ready"
+    assert data["ungrounded"] is False
     assert len(data["sections"]) == 3
     assert data["sections"][0]["title"] == "Introduction"
+
+
+@pytest.mark.anyio
+async def test_create_course_ungrounded(client, mock_outline_with_briefs):
+    # When discovery research fails, ungrounded=True
+    mock_return = (mock_outline_with_briefs, True)
+    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+        response = await client.post("/api/courses", json={"topic": "Python basics"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "outline_ready"
+    assert data["ungrounded"] is True
 
 
 @pytest.mark.anyio
@@ -22,8 +38,9 @@ async def test_get_course_not_found(client):
 
 
 @pytest.mark.anyio
-async def test_create_and_get_course(client, mock_outline):
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_outline):
+async def test_create_and_get_course(client, mock_outline_with_briefs):
+    mock_return = (mock_outline_with_briefs, False)
+    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
@@ -33,8 +50,9 @@ async def test_create_and_get_course(client, mock_outline):
 
 
 @pytest.mark.anyio
-async def test_generate_course(client, mock_outline, mock_content):
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_outline):
+async def test_generate_course(client, mock_outline_with_briefs, mock_content):
+    mock_return = (mock_outline_with_briefs, False)
+    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
@@ -46,3 +64,25 @@ async def test_generate_course(client, mock_outline, mock_content):
     data = gen_response.json()
     assert data["status"] == "completed"
     assert data["sections"][0]["content"] is not None
+
+
+@pytest.mark.anyio
+async def test_regenerate_course(client, mock_outline_with_briefs):
+    mock_return = (mock_outline_with_briefs, False)
+    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+        create_response = await client.post("/api/courses", json={"topic": "Testing"})
+
+    course_id = create_response.json()["id"]
+
+    # Regenerate with feedback
+    mock_return_2 = (mock_outline_with_briefs, False)
+    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return_2):
+        regen_response = await client.post(
+            f"/api/courses/{course_id}/regenerate",
+            json={"overall_comment": "Add more detail", "section_comments": []},
+        )
+
+    assert regen_response.status_code == 200
+    data = regen_response.json()
+    assert data["status"] == "outline_ready"
+    assert len(data["sections"]) == 3
