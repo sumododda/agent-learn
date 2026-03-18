@@ -5,3 +5,9 @@ __pycache__/
 .env
 backend/.env
 .venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+test.db
