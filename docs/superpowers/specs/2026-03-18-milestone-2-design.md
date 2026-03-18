@@ -149,6 +149,8 @@ One row per course. JSON columns for flexible structured data.
 - `editing` — editorial pass in progress
 - Existing: `outline_ready`, `generating` (removed — replaced by granular states), `completed`, `failed`
 
+**Course.ungrounded** — New boolean column (default false). Set to true when discovery research fails and the planner falls back to model knowledge. The UI uses this to indicate "Sources unavailable for this course."
+
 **Section** — New column:
 - `citations` — JSON: `[{number, claim, source_url, source_title}]` for rendering [1] [2] references
 
@@ -204,6 +206,7 @@ Single Alembic migration adding the three new tables, new Course status enum val
   - Read the blackboard glossary — don't re-define terms already defined
   - Read concept ownership — reference prior sections instead of re-explaining
   - Read coverage map — know what's been said, build on it
+- **Citation population:** The service layer populates `Section.citations` from the verified evidence cards used for that section (mapping `[N]` to the corresponding card's source URL/title). The writer embeds `[N]` markers in markdown; the service layer builds the citations array from the evidence cards.
 - **Change from M1:** Now evidence-driven instead of model-knowledge-only. Receives blackboard for coherence.
 
 ### 4.6 Editor (new)
