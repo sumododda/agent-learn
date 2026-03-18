@@ -28,6 +28,32 @@ class CourseOutline(BaseModel):
     sections: list[OutlineSection]
 
 
+# --- Extended planner schemas (M2: research briefs) ---
+
+
+class ResearchBriefItem(BaseModel):
+    section_position: int
+    questions: list[str]
+    source_policy: dict  # {"preferred_tiers": [1, 2], "scope": "...", "out_of_scope": "..."}
+
+
+class CourseOutlineWithBriefs(BaseModel):
+    sections: list[OutlineSection]
+    research_briefs: list[ResearchBriefItem]
+
+
+# --- Structured output schemas for discovery researcher ---
+
+
+class TopicBrief(BaseModel):
+    key_concepts: list[str]
+    subtopics: list[str]
+    authoritative_sources: list[str]
+    learning_progression: str
+    open_debates: list[str]
+    raw_search_results: list[dict]  # preserve for reference
+
+
 # --- Structured output schemas for writer ---
 
 
@@ -72,22 +98,58 @@ Guidelines:
 You will receive the full course outline so you can maintain coherence across sections.
 Generate content for ALL sections in order. Each section MUST start with ## followed by the section title."""
 
-PLANNER_PROMPT = """You are a course planner. Given a topic and optional learner instructions, generate a structured course outline.
+PLANNER_PROMPT = """You are a course planner. Given a topic and optional learner instructions, generate a structured course outline with research briefs.
 
 Your job:
 - Identify the key concepts the learner needs to understand
 - Order sections by conceptual dependency (prerequisites first)
 - Write a concise summary for each section describing what the lesson will cover
 - Target 5-10 sections depending on topic scope
+- For each section, generate a research brief to guide evidence gathering
 
 Each section needs:
 - position: integer starting at 1
 - title: clear, descriptive section title
 - summary: 1-2 sentences describing what this section covers
 
-Output your response as a structured CourseOutline with a list of sections.
+Each research brief needs:
+- section_position: integer matching the section position
+- questions: 3-5 must-answer questions that the section's lesson must address with evidence
+- source_policy: a dict with keys:
+  - "preferred_tiers": list of preferred source tiers [1, 2] where 1=official docs/papers, 2=reputable blogs/tutorials, 3=forums/repos
+  - "scope": brief description of what sources should cover
+  - "out_of_scope": topics or sources to avoid for this section
+
+If you receive research findings about the topic, use them to inform your outline structure and research briefs. The findings contain key concepts, subtopics, authoritative sources, and learning progressions discovered from web research. Incorporate this knowledge to create a well-grounded outline.
+
+Output your response as a structured CourseOutlineWithBriefs with both a list of sections and a list of research_briefs.
 Do NOT include introductions or conclusions as separate sections unless they contain real content.
-Focus on substance — every section should teach something specific."""
+Focus on substance — every section should teach something specific.
+Every section MUST have a corresponding research brief."""
+
+DISCOVERY_RESEARCHER_PROMPT = """You are a topic discovery researcher. Your job is to synthesize web search results into a structured topic brief that will guide course planning.
+
+You will receive:
+- A topic description
+- Raw search results from web searches (title, URL, content snippets)
+
+Your task:
+1. Identify the key concepts that any learner must understand about this topic
+2. Discover the natural subtopics and their relationships
+3. Identify authoritative sources (official documentation, academic papers, well-known tutorials)
+4. Determine the best learning progression (what should be taught first, what builds on what)
+5. Note any open debates, controversies, or areas where expert opinions differ
+6. Preserve the raw search results for reference
+
+Guidelines:
+- Focus on factual, well-supported information from the search results
+- Prefer information from multiple corroborating sources
+- Note when information comes from a single source or may be outdated
+- Identify both foundational concepts and advanced topics
+- Consider different skill levels when suggesting learning progression
+- Be specific about authoritative sources — include names and URLs when available
+
+Output a structured TopicBrief with all fields populated based on the search results."""
 
 
 # --- Planner subagent config (dict form, used by supervisor) ---
@@ -142,14 +204,14 @@ def create_planner():
     Deep Agents excludes `structured_response` from subagent return
     state, so a supervisor-delegated call would lose the typed output.
     Calling the planner directly with response_format gives us a
-    guaranteed CourseOutline in result["structured_response"].
+    guaranteed CourseOutlineWithBriefs in result["structured_response"].
     """
     model = get_model()
 
     agent = create_deep_agent(
         model=model,
         system_prompt=PLANNER_PROMPT,
-        response_format=ToolStrategy(CourseOutline),
+        response_format=ToolStrategy(CourseOutlineWithBriefs),
         tools=[],
         name="agent-learn-planner",
     )
@@ -169,5 +231,24 @@ def create_writer():
         system_prompt=WRITER_PROMPT,
         tools=[],
         name="agent-learn-writer",
+    )
+    return agent
+
+
+def create_discovery_researcher():
+    """Create a discovery researcher agent that synthesizes search results.
+
+    The agent receives pre-fetched Tavily search results and produces
+    a structured TopicBrief. It does NOT call Tavily itself — the
+    service layer handles all search API calls.
+    """
+    model = get_model()
+
+    agent = create_deep_agent(
+        model=model,
+        system_prompt=DISCOVERY_RESEARCHER_PROMPT,
+        response_format=ToolStrategy(TopicBrief),
+        tools=[],
+        name="agent-learn-discovery-researcher",
     )
     return agent

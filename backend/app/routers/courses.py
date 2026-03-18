@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.agent_service import generate_outline, generate_lessons
 from app.database import SessionDep
-from app.models import Course, Section
+from app.models import Course, Section, ResearchBrief
 from app.schemas import CourseCreate, CourseResponse, GenerateResponse, RegenerateRequest
 
 logger = logging.getLogger(__name__)
@@ -17,17 +17,23 @@ router = APIRouter()
 
 @router.post("/courses", response_model=CourseResponse)
 async def create_course(body: CourseCreate, session: SessionDep):
-    # Create course row first
-    course = Course(topic=body.topic, instructions=body.instructions)
+    # Create course row first with "researching" status
+    course = Course(topic=body.topic, instructions=body.instructions, status="researching")
     session.add(course)
     await session.flush()
 
     try:
-        # Generate outline via Deep Agents planner
-        outline = await generate_outline(body.topic, body.instructions)
+        # Generate outline via discovery research + planner
+        # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
+        outline_with_briefs, ungrounded = await generate_outline(
+            body.topic, body.instructions
+        )
+
+        # Set ungrounded flag if discovery research failed
+        course.ungrounded = ungrounded
 
         # Create section rows from the structured outline
-        for section_data in outline.sections:
+        for section_data in outline_with_briefs.sections:
             section = Section(
                 course_id=course.id,
                 position=section_data.position,
@@ -35,6 +41,27 @@ async def create_course(body: CourseCreate, session: SessionDep):
                 summary=section_data.summary,
             )
             session.add(section)
+
+        # Save discovery brief (section_position=null) if discovery succeeded
+        if not ungrounded:
+            discovery_brief = ResearchBrief(
+                course_id=course.id,
+                section_position=None,  # null = discovery brief
+                questions=[],  # discovery brief has no per-section questions
+                source_policy={},
+                findings="Discovery research completed successfully",
+            )
+            session.add(discovery_brief)
+
+        # Save per-section research briefs
+        for brief_item in outline_with_briefs.research_briefs:
+            research_brief = ResearchBrief(
+                course_id=course.id,
+                section_position=brief_item.section_position,
+                questions=brief_item.questions,
+                source_policy=brief_item.source_policy,
+            )
+            session.add(research_brief)
 
         course.status = "outline_ready"
         await session.commit()
@@ -176,10 +203,26 @@ async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, sessi
         await session.delete(section)
     await session.flush()
 
-    try:
-        outline = await generate_outline(course.topic, enhanced_instructions)
+    # Delete old research briefs
+    old_briefs_result = await session.execute(
+        select(ResearchBrief).where(ResearchBrief.course_id == course.id)
+    )
+    for brief in old_briefs_result.scalars().all():
+        await session.delete(brief)
+    await session.flush()
 
-        for section_data in outline.sections:
+    # Set status to researching for the new outline generation
+    course.status = "researching"
+    await session.flush()
+
+    try:
+        outline_with_briefs, ungrounded = await generate_outline(
+            course.topic, enhanced_instructions
+        )
+
+        course.ungrounded = ungrounded
+
+        for section_data in outline_with_briefs.sections:
             section = Section(
                 course_id=course.id,
                 position=section_data.position,
@@ -187,6 +230,27 @@ async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, sessi
                 summary=section_data.summary,
             )
             session.add(section)
+
+        # Save discovery brief if research succeeded
+        if not ungrounded:
+            discovery_brief = ResearchBrief(
+                course_id=course.id,
+                section_position=None,
+                questions=[],
+                source_policy={},
+                findings="Discovery research completed successfully (regenerate)",
+            )
+            session.add(discovery_brief)
+
+        # Save per-section research briefs
+        for brief_item in outline_with_briefs.research_briefs:
+            research_brief = ResearchBrief(
+                course_id=course.id,
+                section_position=brief_item.section_position,
+                questions=brief_item.questions,
+                source_policy=brief_item.source_policy,
+            )
+            session.add(research_brief)
 
         course.status = "outline_ready"
         await session.commit()
