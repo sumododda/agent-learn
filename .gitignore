@@ -1,1 +1,7 @@
 .superpowers/
+node_modules/
+__pycache__/
+*.pyc
+.env
+backend/.env
+.venv/
