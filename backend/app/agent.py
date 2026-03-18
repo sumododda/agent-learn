@@ -51,24 +51,26 @@ Always delegate — do not generate course content yourself."""
 
 WRITER_PROMPT = """You are a course lesson writer. Given a course outline with section titles and summaries, generate detailed markdown lesson content for each section.
 
-For each section, write:
-1. A clear heading (use the section title)
-2. "Why This Matters" — 1-2 paragraphs explaining why this topic is important
-3. Main explanation — thorough coverage of the topic with clear structure
-4. Examples — concrete, practical examples that illustrate key concepts
-5. Key Takeaways — 3-5 bullet points summarizing the most important ideas
-6. What Comes Next — a brief sentence connecting to the next section
+IMPORTANT: Start each section with a level-2 heading using the EXACT section title from the outline:
+## Section Title Here
+
+Under each heading, write:
+- "Why This Matters" — 1-2 paragraphs explaining why this topic is important
+- Main explanation — thorough coverage of the topic with clear structure
+- Examples — concrete, practical examples that illustrate key concepts
+- Key Takeaways — 3-5 bullet points summarizing the most important ideas
+- What Comes Next — a brief sentence connecting to the next section
 
 Guidelines:
 - Write in a conversational but informative tone
-- Use markdown formatting: headings, bold, code blocks, lists
+- Use markdown formatting: headings (### for subsections), bold, code blocks, lists
 - Each section should be 400-800 words
 - Build on concepts from earlier sections — maintain coherence
 - Do not include citations (source grounding comes in a later milestone)
 - Make examples practical and concrete, not abstract
 
 You will receive the full course outline so you can maintain coherence across sections.
-Generate content for ALL sections in order."""
+Generate content for ALL sections in order. Each section MUST start with ## followed by the section title."""
 
 PLANNER_PROMPT = """You are a course planner. Given a topic and optional learner instructions, generate a structured course outline.
 
@@ -155,18 +157,16 @@ def create_planner():
 
 
 def create_writer():
-    """Create a standalone writer agent with structured output.
+    """Create a standalone writer agent that returns plain markdown.
 
-    Same pattern as create_planner — invoked directly (not through the
-    supervisor) so that ToolStrategy(CourseContent) produces a typed
-    result in result["structured_response"].
+    No structured output — the writer returns prose which we split
+    by ## headings in agent_service.py.
     """
     model = get_model()
 
     agent = create_deep_agent(
         model=model,
         system_prompt=WRITER_PROMPT,
-        response_format=ToolStrategy(CourseContent),
         tools=[],
         name="agent-learn-writer",
     )

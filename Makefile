@@ -1,4 +1,4 @@
-.PHONY: dev-db dev-backend dev-frontend dev
+.PHONY: dev-db dev-backend dev-frontend dev migrate
 
 dev-db:
 	docker compose up -d db
@@ -9,6 +9,13 @@ dev-backend:
 dev-frontend:
 	cd frontend && npm run dev
 
+migrate:
+	cd backend && alembic upgrade head
+
 dev:
 	$(MAKE) dev-db
-	@echo "Run 'make dev-backend' and 'make dev-frontend' in separate terminals"
+	@sleep 2
+	$(MAKE) migrate
+	cd backend && uvicorn app.main:app --reload --port 8000 & \
+	cd frontend && npm run dev & \
+	wait
