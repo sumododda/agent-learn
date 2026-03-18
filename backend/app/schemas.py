@@ -8,6 +8,16 @@ class CourseCreate(BaseModel):
     instructions: str | None = None
 
 
+class SectionComment(BaseModel):
+    position: int
+    comment: str
+
+
+class RegenerateRequest(BaseModel):
+    overall_comment: str | None = None
+    section_comments: list[SectionComment] = []
+
+
 class SectionOutline(BaseModel):
     position: int
     title: str
