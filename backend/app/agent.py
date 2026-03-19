@@ -87,6 +87,22 @@ class VerificationResult(BaseModel):
     gaps: list[str]  # unanswered questions or weak areas
 
 
+# --- Structured output schemas for editor ---
+
+
+class BlackboardUpdates(BaseModel):
+    new_glossary_terms: dict  # {term: {definition, defined_in_section}}
+    new_concept_ownership: dict  # {concept: section_position}
+    topics_covered: list[str]
+    key_points_summary: str
+    new_sources: list[dict]  # [{url, title}]
+
+
+class EditorResult(BaseModel):
+    edited_content: str  # polished markdown
+    blackboard_updates: BlackboardUpdates
+
+
 # --- Structured output schemas for writer ---
 
 
@@ -108,28 +124,40 @@ When asked to generate lesson content, delegate to the writer subagent using the
 
 Always delegate — do not generate course content yourself."""
 
-WRITER_PROMPT = """You are a course lesson writer. Given a course outline with section titles and summaries, generate detailed markdown lesson content for each section.
+WRITER_PROMPT = """You are a course lesson writer. You will receive a single section to write, along with verified evidence cards and a blackboard representing shared course knowledge.
 
-IMPORTANT: Start each section with a level-2 heading using the EXACT section title from the outline:
+IMPORTANT: Start the section with a level-2 heading using the EXACT section title provided:
 ## Section Title Here
 
-Under each heading, write:
+Under the heading, write:
 - "Why This Matters" — 1-2 paragraphs explaining why this topic is important
 - Main explanation — thorough coverage of the topic with clear structure
 - Examples — concrete, practical examples that illustrate key concepts
 - Key Takeaways — 3-5 bullet points summarizing the most important ideas
 - What Comes Next — a brief sentence connecting to the next section
 
+EVIDENCE AND CITATIONS:
+- You will receive a numbered list of verified evidence cards. Use them as the basis for ALL factual claims.
+- Cite every factual claim with [N] markers (1-indexed, matching the card order provided).
+  Example: "Python was created by Guido van Rossum in 1991 [1]."
+- Do NOT fabricate claims without evidence card support.
+- If an evidence card has a caveat, mention it naturally in the text.
+
+BLACKBOARD AWARENESS:
+- You will receive a blackboard with glossary, concept ownership, and coverage map.
+- Glossary: Do NOT re-define terms already in the glossary. Use them directly and reference where they were introduced if helpful.
+- Concept ownership: Do NOT re-explain concepts owned by earlier sections. Instead, reference the prior section (e.g., "As we saw in Section 2, ...").
+- Coverage map: Build on topics already covered. Do NOT repeat content from earlier sections.
+- If the blackboard is empty (first section), you have full freedom to define terms and introduce concepts.
+
 Guidelines:
 - Write in a conversational but informative tone
 - Use markdown formatting: headings (### for subsections), bold, code blocks, lists
-- Each section should be 400-800 words
-- Build on concepts from earlier sections — maintain coherence
-- Do not include citations (source grounding comes in a later milestone)
+- The section should be 400-800 words
 - Make examples practical and concrete, not abstract
 
-You will receive the full course outline so you can maintain coherence across sections.
-Generate content for ALL sections in order. Each section MUST start with ## followed by the section title."""
+You will receive the full course outline for context so you can maintain coherence.
+Output ONLY the markdown content for the requested section. Do NOT output JSON or structured data."""
 
 PLANNER_PROMPT = """You are a course planner. Given a topic and optional learner instructions, generate a structured course outline with research briefs.
 
@@ -221,6 +249,28 @@ Guidelines:
 - Do NOT fabricate claims — only extract what is present in the search results
 
 Output a structured EvidenceCardSet containing all extracted evidence cards."""
+
+EDITOR_PROMPT = """You are a course lesson editor. You receive a draft section, the course blackboard, evidence cards, and the section position in the course.
+
+Your job is to polish the draft and generate blackboard updates.
+
+EDITING TASKS:
+1. **Terminology consistency**: Check that terms used in the draft match the blackboard glossary definitions. If a term is used differently, correct it. If a new term is introduced, note it in blackboard updates.
+2. **Transitions**: Smooth transitions referencing prior sections. If the blackboard shows prior content, add connecting phrases (e.g., "Building on the concepts from Section 2...").
+3. **Repetition removal**: If the coverage map shows a topic was already covered in a prior section, remove redundant explanations. Replace with brief references to the prior section.
+4. **Citation verification**: Verify that [N] citation numbers are present for factual claims. If a factual claim lacks a citation, add one if a matching evidence card exists, or flag it.
+5. **Quality polish**: Fix awkward phrasing, improve flow, ensure the section reads well as part of the larger course.
+
+BLACKBOARD UPDATES:
+After editing, generate updates for the blackboard:
+- new_glossary_terms: Any new terms defined in this section. Format: {term: {definition: "...", defined_in_section: N}}
+- new_concept_ownership: Concepts this section is the primary owner of. Format: {concept: section_position}
+- topics_covered: List of topics/subtopics covered in this section.
+- key_points_summary: A 1-2 sentence summary of the key points from this section.
+- new_sources: List of new sources cited. Format: [{url: "...", title: "..."}]
+
+Output a structured EditorResult with the edited content and blackboard updates."""
+
 
 VERIFIER_PROMPT = """You are an evidence verifier. Your job is to review evidence cards collected for a course section and judge their quality against the research brief's must-answer questions.
 
@@ -393,5 +443,24 @@ def create_verifier():
         response_format=ToolStrategy(VerificationResult),
         tools=[],
         name="agent-learn-verifier",
+    )
+    return agent
+
+
+def create_editor():
+    """Create an editor agent that polishes drafts and generates blackboard updates.
+
+    The editor receives a draft section, blackboard state, and evidence cards.
+    It returns an EditorResult with edited content and blackboard updates.
+    It has NO tools — pure LLM editing only.
+    """
+    model = get_model()
+
+    agent = create_deep_agent(
+        model=model,
+        system_prompt=EDITOR_PROMPT,
+        response_format=ToolStrategy(EditorResult),
+        tools=[],
+        name="agent-learn-editor",
     )
     return agent
