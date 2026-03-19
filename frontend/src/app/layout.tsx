@@ -3,8 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import {
   ClerkProvider,
-  SignedIn,
-  SignedOut,
+  Show,
   SignInButton,
   UserButton,
 } from '@clerk/nextjs';
@@ -29,16 +28,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </Link>
             </div>
             <div className="flex items-center gap-4">
-              <SignedOut>
+              <Show when="signed-out">
                 <SignInButton mode="modal">
                   <button className="text-sm text-gray-400 hover:text-white transition-colors">
                     Sign In
                   </button>
                 </SignInButton>
-              </SignedOut>
-              <SignedIn>
+              </Show>
+              <Show when="signed-in">
                 <UserButton afterSignOutUrl="/" />
-              </SignedIn>
+              </Show>
             </div>
           </header>
           <main className="max-w-4xl mx-auto px-6 py-8">
