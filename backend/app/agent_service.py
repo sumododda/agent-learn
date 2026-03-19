@@ -12,6 +12,7 @@ from app.agent import (
     create_writer,
     create_discovery_researcher,
     create_section_researcher,
+    create_verifier,
     CourseOutline,
     CourseOutlineWithBriefs,
     CourseContent,
@@ -19,6 +20,7 @@ from app.agent import (
     TopicBrief,
     EvidenceCardItem,
     EvidenceCardSet,
+    VerificationResult,
 )
 from app.config import settings
 from app.models import EvidenceCard, ResearchBrief
@@ -414,3 +416,144 @@ async def get_evidence_cards(
         )
     )
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Verifier agent + re-research
+# ---------------------------------------------------------------------------
+
+
+def _format_cards_for_verifier(cards: list[EvidenceCard]) -> str:
+    """Format evidence cards as a numbered list for the verifier agent.
+
+    Each card is formatted with its claim, source, passage, confidence,
+    and explanation so the verifier can assess quality.
+    """
+    lines = []
+    for i, card in enumerate(cards):
+        lines.append(
+            f"[Card {i}]\n"
+            f"  Claim: {card.claim}\n"
+            f"  Source URL: {card.source_url}\n"
+            f"  Source Title: {card.source_title}\n"
+            f"  Source Tier: {card.source_tier}\n"
+            f"  Passage: {card.passage}\n"
+            f"  Confidence: {card.confidence}\n"
+            f"  Caveat: {card.caveat or 'None'}\n"
+            f"  Explanation: {card.explanation}"
+        )
+    return "\n\n".join(lines)
+
+
+async def _update_card_verification(
+    cards: list[EvidenceCard], session: AsyncSession
+) -> None:
+    """Persist updated verified/verification_note fields for cards in DB."""
+    for card in cards:
+        await session.merge(card)
+    await session.commit()
+
+
+async def verify_evidence(
+    cards: list[EvidenceCard],
+    brief: ResearchBrief,
+    session: AsyncSession,
+) -> VerificationResult:
+    """Invoke the verifier agent to check evidence quality for a section.
+
+    1. Format cards and brief questions into a message
+    2. Invoke verifier agent (no tools — pure LLM judgment)
+    3. Update card verified status and verification_note in DB
+    4. Return VerificationResult
+    """
+    verifier = create_verifier()
+    message = (
+        f"Research brief questions:\n{json.dumps(brief.questions)}\n\n"
+        f"Evidence cards:\n{_format_cards_for_verifier(cards)}"
+    )
+
+    result = await _invoke_agent(verifier, message)
+
+    # Ensure we have a VerificationResult
+    if isinstance(result, dict):
+        result = VerificationResult(**result)
+
+    # Update card verified status in DB
+    for v in result.card_verifications:
+        if 0 <= v.card_index < len(cards):
+            cards[v.card_index].verified = v.verified
+            cards[v.card_index].verification_note = v.note
+
+    await _update_card_verification(cards, session)
+
+    logger.info(
+        "Verification complete: %d/%d cards verified, needs_more_research=%s",
+        sum(1 for v in result.card_verifications if v.verified),
+        len(result.card_verifications),
+        result.needs_more_research,
+    )
+
+    return result
+
+
+async def research_section_targeted(gaps: list[str]) -> list[EvidenceCardItem]:
+    """One retry with targeted queries for specific gaps.
+
+    For each gap, call AsyncTavilyClient.search with search_depth="advanced"
+    (2 credits per query) and max_results=3. Pass results to the section
+    researcher agent for evidence card extraction.
+    """
+    from tavily import AsyncTavilyClient
+
+    client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
+    all_results: list[dict] = []
+
+    for gap in gaps:
+        try:
+            response = await client.search(
+                query=gap,
+                search_depth="advanced",
+                max_results=3,
+            )
+            for r in response.get("results", []):
+                all_results.append({
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "content": r.get("content", ""),
+                    "score": r.get("score", 0),
+                })
+        except Exception as e:
+            logger.warning(
+                "Targeted search failed for gap '%s': %s", gap, e
+            )
+            continue
+
+    if not all_results:
+        logger.warning("All targeted searches failed — no new results")
+        return []
+
+    logger.info(
+        "Targeted re-research: %d results from %d gaps",
+        len(all_results),
+        len(gaps),
+    )
+
+    # Reuse section researcher for evidence card extraction
+    researcher = create_section_researcher()
+    message = (
+        f"Fill these specific gaps:\n{json.dumps(gaps)}\n\n"
+        f"Search results:\n{json.dumps(all_results, indent=2)}"
+    )
+
+    result = await _invoke_agent(researcher, message)
+
+    # Ensure we have an EvidenceCardSet
+    if isinstance(result, EvidenceCardSet):
+        return result.cards
+    elif isinstance(result, dict):
+        card_set = EvidenceCardSet(**result)
+        return card_set.cards
+    else:
+        raise ValueError(
+            f"Section researcher returned unexpected type: {type(result)}"
+        )

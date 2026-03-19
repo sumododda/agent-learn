@@ -72,6 +72,21 @@ class EvidenceCardSet(BaseModel):
     cards: list[EvidenceCardItem]
 
 
+# --- Structured output schemas for verifier ---
+
+
+class CardVerification(BaseModel):
+    card_index: int
+    verified: bool
+    note: str | None = None
+
+
+class VerificationResult(BaseModel):
+    card_verifications: list[CardVerification]
+    needs_more_research: bool
+    gaps: list[str]  # unanswered questions or weak areas
+
+
 # --- Structured output schemas for writer ---
 
 
@@ -207,6 +222,39 @@ Guidelines:
 
 Output a structured EvidenceCardSet containing all extracted evidence cards."""
 
+VERIFIER_PROMPT = """You are an evidence verifier. Your job is to review evidence cards collected for a course section and judge their quality against the research brief's must-answer questions.
+
+You will receive:
+- A list of must-answer questions from the research brief
+- A numbered list of evidence cards, each with: claim, source URL, source title, passage, confidence score, and explanation
+
+Your task:
+1. For each evidence card, determine whether it should be **verified** (accepted) or **rejected**:
+   - VERIFY a card if:
+     - The claim is specific and factual (not vague or speculative)
+     - The passage actually supports the claim
+     - The confidence score is reasonable given the source quality
+     - The source URL is plausible for the claimed content
+   - REJECT a card if:
+     - The claim is too vague or unsupported by the passage
+     - The confidence score is unjustifiably high given the source tier
+     - The passage contradicts the claim
+     - The claim is redundant with a higher-quality card covering the same point
+   - Provide a brief note explaining your verification decision
+
+2. Assess overall coverage:
+   - For each must-answer question, check whether at least one verified card provides supporting evidence
+   - If fewer than half of the must-answer questions have supporting evidence from verified cards, set `needs_more_research=True`
+   - List specific gaps: questions that remain unanswered or areas where the evidence is weak
+
+3. Check for contradictions:
+   - If two cards make contradictory claims, reject the less well-sourced one and note the contradiction
+
+Output a structured VerificationResult with:
+- card_verifications: one entry per card with card_index (0-based), verified boolean, and note
+- needs_more_research: True if coverage is insufficient (< half questions answered)
+- gaps: list of unanswered questions or weak areas that need more research"""
+
 
 # --- Planner subagent config (dict form, used by supervisor) ---
 
@@ -326,5 +374,24 @@ def create_section_researcher():
         response_format=ToolStrategy(EvidenceCardSet),
         tools=[],
         name="agent-learn-section-researcher",
+    )
+    return agent
+
+
+def create_verifier():
+    """Create a verifier agent that checks evidence quality.
+
+    The verifier reviews evidence cards against research brief questions
+    and produces a VerificationResult. It has NO tools — pure LLM
+    judgment only. It does not search or gather new evidence.
+    """
+    model = get_model()
+
+    agent = create_deep_agent(
+        model=model,
+        system_prompt=VERIFIER_PROMPT,
+        response_format=ToolStrategy(VerificationResult),
+        tools=[],
+        name="agent-learn-verifier",
     )
     return agent
