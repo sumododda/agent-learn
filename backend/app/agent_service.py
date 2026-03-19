@@ -277,32 +277,35 @@ def _split_markdown_sections(markdown: str, expected_count: int) -> list[Section
     return sections
 
 
-async def generate_lessons(course_id: str, session: AsyncSession) -> None:
+async def generate_lessons(course_id, session: AsyncSession) -> None:
     """Full M2 pipeline: research -> verify -> write -> edit for each section.
 
     Called as a background task. Updates course status and pipeline status
-    at each stage.
+    at each stage.  ``course_id`` may be a UUID or string – DB queries
+    receive it as-is, while the in-memory pipeline status dict always uses
+    ``str(course_id)``.
     """
+    pipeline_key = str(course_id)
     try:
         course = await get_course(course_id, session)
         briefs = await get_research_briefs(course_id, session)
 
         # 1. Parallel section research
         await update_course_status(course_id, "researching", session)
-        update_pipeline_status(str(course_id), None, "researching")
-        await research_all_sections(str(course_id), briefs, session)
+        update_pipeline_status(pipeline_key, None, "researching")
+        await research_all_sections(course_id, briefs, session)
 
         # 2. Sequential per section: verify -> write -> edit
-        blackboard = await create_blackboard(str(course_id), session)
+        blackboard = await create_blackboard(course_id, session)
 
         for section in sorted(course.sections, key=lambda s: s.position):
             cards = await get_evidence_cards(
-                str(course_id), section.position, session
+                course_id, section.position, session
             )
 
             # Verify
             update_pipeline_status(
-                str(course_id), section.position, "verifying"
+                pipeline_key, section.position, "verifying"
             )
             await update_course_status(course_id, "verifying", session)
             brief = next(
@@ -321,19 +324,19 @@ async def generate_lessons(course_id: str, session: AsyncSession) -> None:
                     )
                     if new_card_items:
                         await save_evidence_cards(
-                            str(course_id),
+                            course_id,
                             section.position,
                             new_card_items,
                             session,
                         )
                     cards = await get_evidence_cards(
-                        str(course_id), section.position, session
+                        course_id, section.position, session
                     )
                     await verify_evidence(cards, brief, session)
 
             # Write
             update_pipeline_status(
-                str(course_id), section.position, "writing"
+                pipeline_key, section.position, "writing"
             )
             await update_course_status(course_id, "writing", session)
             draft = await write_section(
@@ -342,7 +345,7 @@ async def generate_lessons(course_id: str, session: AsyncSession) -> None:
 
             # Edit
             update_pipeline_status(
-                str(course_id), section.position, "editing"
+                pipeline_key, section.position, "editing"
             )
             await update_course_status(course_id, "editing", session)
             editor_result = await edit_section(
@@ -371,7 +374,7 @@ async def generate_lessons(course_id: str, session: AsyncSession) -> None:
                 )
 
             update_pipeline_status(
-                str(course_id), section.position, "completed"
+                pipeline_key, section.position, "completed"
             )
 
         await update_course_status(course_id, "completed", session)
@@ -384,7 +387,7 @@ async def generate_lessons(course_id: str, session: AsyncSession) -> None:
             await update_course_status(course_id, "failed", session)
         except Exception:
             pass
-        update_pipeline_status(str(course_id), None, "failed")
+        update_pipeline_status(pipeline_key, None, "failed")
 
 
 # ---------------------------------------------------------------------------
