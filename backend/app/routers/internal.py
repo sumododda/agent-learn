@@ -7,6 +7,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import select
 
 from app.agent_service import (
     run_discover_and_plan,
@@ -17,12 +18,15 @@ from app.agent_service import (
 )
 from app.config import settings
 from app.database import SessionDep
+from app.models import Course
 from app.schemas import (
     DiscoverAndPlanResponse,
     EditSectionResponse,
     InternalCourseRequest,
     InternalSectionRequest,
     ResearchSectionResponse,
+    SetCourseStatusRequest,
+    SetCourseStatusResponse,
     VerifySectionResponse,
     WriteSectionResponse,
 )
@@ -222,3 +226,39 @@ async def edit_section_endpoint(body: InternalSectionRequest, session: SessionDe
         raise HTTPException(status_code=500, detail=str(e))
 
     return result
+
+
+@router.post(
+    "/internal/set-course-status",
+    response_model=SetCourseStatusResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
+async def set_course_status(body: SetCourseStatusRequest, session: SessionDep):
+    """Set the final status of a course.
+
+    Called by the Trigger.dev generate-course orchestrator to update the
+    course status at the end of the pipeline (completed, completed_partial,
+    or failed).
+    """
+    try:
+        course_id = uuid.UUID(body.course_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid course_id format")
+
+    VALID_STATUSES = {"generating", "completed", "completed_partial", "failed"}
+    if body.status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{body.status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
+        )
+
+    result = await session.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    course.status = body.status
+    await session.commit()
+
+    logger.info("Course %s status set to %s", body.course_id, body.status)
+    return SetCourseStatusResponse(course_id=body.course_id, status=body.status)

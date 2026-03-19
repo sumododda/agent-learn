@@ -87,6 +87,11 @@ export interface EditSectionResponse {
   blackboard_updates: BlackboardUpdates;
 }
 
+export interface SetCourseStatusResponse {
+  course_id: string;
+  status: string;
+}
+
 // ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
@@ -98,6 +103,11 @@ interface CourseIdPayload {
 interface SectionPayload {
   course_id: string;
   section_position: number;
+}
+
+interface SetCourseStatusPayload {
+  course_id: string;
+  status: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,5 +214,18 @@ export async function editSection(
   return post<SectionPayload, EditSectionResponse>(
     "/api/internal/edit-section",
     { course_id: courseId, section_position: sectionPosition },
+  );
+}
+
+/**
+ * Set the final status of a course (e.g., completed, completed_partial, failed).
+ */
+export async function setCourseStatus(
+  courseId: string,
+  status: string,
+): Promise<SetCourseStatusResponse> {
+  return post<SetCourseStatusPayload, SetCourseStatusResponse>(
+    "/api/internal/set-course-status",
+    { course_id: courseId, status },
   );
 }
