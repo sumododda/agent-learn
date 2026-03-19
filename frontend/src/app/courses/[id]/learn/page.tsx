@@ -3,11 +3,13 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
+import { useAuth } from '@clerk/nextjs';
 import { getCourse } from '@/lib/api';
 import { Course, Section } from '@/lib/types';
 
 export default function LearnPage() {
   const params = useParams();
+  const { getToken } = useAuth();
   const courseId = params.id as string;
 
   const [course, setCourse] = useState<Course | null>(null);
@@ -18,7 +20,8 @@ export default function LearnPage() {
   useEffect(() => {
     async function loadCourse() {
       try {
-        const data = await getCourse(courseId);
+        const token = await getToken();
+        const data = await getCourse(courseId, token);
         setCourse(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load course');
@@ -27,7 +30,7 @@ export default function LearnPage() {
       }
     }
     loadCourse();
-  }, [courseId]);
+  }, [courseId, getToken]);
 
   if (loading) return <div className="text-center text-gray-400 mt-20">Loading lessons...</div>;
   if (error) return <div className="text-center text-red-400 mt-20">{error}</div>;

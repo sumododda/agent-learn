@@ -17,6 +17,7 @@ class Course(Base):
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, default="outline_ready")
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     ungrounded: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

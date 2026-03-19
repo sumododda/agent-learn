@@ -10,6 +10,7 @@ from sqlalchemy import event
 from app.main import app
 from app.models import Base, Blackboard, EvidenceCard, ResearchBrief
 from app.database import get_session
+from app.auth import get_current_user
 from app.agent import (
     BlackboardUpdates,
     CardVerification,
@@ -50,6 +51,7 @@ async def setup_db():
             yield session
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
     yield
 
     async with engine.begin() as conn:
