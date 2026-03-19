@@ -1,18 +1,48 @@
 import logging
 import uuid
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.agent_service import generate_outline, generate_lessons
-from app.database import SessionDep
-from app.models import Course, Section, ResearchBrief
-from app.schemas import CourseCreate, CourseResponse, GenerateResponse, RegenerateRequest
+from app.agent_service import (
+    generate_lessons,
+    generate_outline,
+    get_blackboard,
+    get_pipeline_status,
+)
+from app.database import SessionDep, async_session
+from app.models import Course, EvidenceCard, Section, ResearchBrief
+from app.schemas import (
+    BlackboardResponse,
+    CourseCreate,
+    CourseResponse,
+    EvidenceCardResponse,
+    GenerateResponse,
+    PipelineStatus,
+    RegenerateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Background task wrapper for generate_lessons
+# ---------------------------------------------------------------------------
+
+
+async def _run_pipeline_background(course_id: str) -> None:
+    """Run the full pipeline in a background task with its own session."""
+    async with async_session() as session:
+        await generate_lessons(course_id, session)
+
+
+# ---------------------------------------------------------------------------
+# Course CRUD endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.post("/courses", response_model=CourseResponse)
@@ -85,7 +115,11 @@ async def create_course(body: CourseCreate, session: SessionDep):
 
 
 @router.post("/courses/{course_id}/generate", response_model=GenerateResponse)
-async def generate_course(course_id: uuid.UUID, session: SessionDep):
+async def generate_course(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    background_tasks: BackgroundTasks,
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
@@ -102,75 +136,18 @@ async def generate_course(course_id: uuid.UUID, session: SessionDep):
             detail=f"Course status is '{course.status}'; generation requires 'outline_ready'",
         )
 
-    # Transition to "generating" before invoking the agent
+    # Transition to "generating" before starting the background pipeline
     course.status = "generating"
     await session.commit()
 
-    try:
-        # Build section dicts with the full outline for the writer
-        section_dicts = [
-            {
-                "position": s.position,
-                "title": s.title,
-                "summary": s.summary,
-            }
-            for s in sorted(course.sections, key=lambda s: s.position)
-        ]
+    # Fire off the full M2 pipeline as a background task
+    background_tasks.add_task(_run_pipeline_background, str(course.id))
 
-        # Invoke the writer agent
-        content_result = await generate_lessons(
-            topic=course.topic,
-            instructions=course.instructions,
-            sections=section_dicts,
-        )
-
-        # Match generated content to sections by position
-        content_by_position = {
-            sc.position: sc.content for sc in content_result.sections
-        }
-
-        matched_count = 0
-        for section in course.sections:
-            if section.position in content_by_position:
-                section.content = content_by_position[section.position]
-                matched_count += 1
-
-        # Fail if the writer returned fewer sections than expected
-        if matched_count < len(course.sections):
-            logger.error(
-                "Writer returned %d sections, expected %d",
-                matched_count,
-                len(course.sections),
-            )
-            course.status = "failed"
-            await session.commit()
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"Writer generated {matched_count} sections but "
-                    f"{len(course.sections)} were expected"
-                ),
-            )
-
-        course.status = "completed"
-        await session.commit()
-
-    except HTTPException:
-        # Re-raise HTTPExceptions (like the matched_count check above)
-        raise
-    except Exception as e:
-        logger.error("Failed to generate lessons: %s", e)
-        course.status = "failed"
-        await session.commit()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to generate lessons: {str(e)}"
-        )
-
-    # Reload with sections
+    # Return immediately with current state
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
-        .where(Course.id == course.id)
+        .where(Course.id == course_id)
     )
     course = result.scalar_one()
     return course
@@ -293,3 +270,74 @@ async def get_course(course_id: uuid.UUID, session: SessionDep):
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     return course
+
+
+# ---------------------------------------------------------------------------
+# New M2 endpoints: evidence, blackboard, pipeline status
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/courses/{course_id}/evidence",
+    response_model=list[EvidenceCardResponse],
+)
+async def get_evidence(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    section: Optional[int] = Query(None, description="Filter by section position"),
+):
+    """Return evidence cards for a course, optionally filtered by section."""
+    # Verify course exists
+    course_result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    if not course_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    query = select(EvidenceCard).where(EvidenceCard.course_id == course_id)
+    if section is not None:
+        query = query.where(EvidenceCard.section_position == section)
+    query = query.order_by(
+        EvidenceCard.section_position, EvidenceCard.created_at
+    )
+
+    result = await session.execute(query)
+    return result.scalars().all()
+
+
+@router.get(
+    "/courses/{course_id}/blackboard",
+    response_model=BlackboardResponse | None,
+)
+async def get_course_blackboard(
+    course_id: uuid.UUID, session: SessionDep
+):
+    """Return the current blackboard state for a course."""
+    # Verify course exists
+    course_result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    if not course_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    bb = await get_blackboard(course_id, session)
+    if bb is None:
+        return None
+    return bb
+
+
+@router.get(
+    "/courses/{course_id}/pipeline-status",
+    response_model=PipelineStatus | None,
+)
+async def get_course_pipeline_status(course_id: uuid.UUID):
+    """Return the current pipeline progress from the in-memory dict."""
+    status = get_pipeline_status(str(course_id))
+    if status is None:
+        return None
+    return PipelineStatus(
+        course_id=str(course_id),
+        stage=status["stage"],
+        current_section=status.get("current_section"),
+        sections=status.get("sections", {}),
+    )

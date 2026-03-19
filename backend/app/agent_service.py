@@ -27,11 +27,81 @@ from app.agent import (
     EditorResult,
 )
 from app.config import settings
-from app.models import Blackboard, EvidenceCard, ResearchBrief, Section
+from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
 # json still used by generate_outline fallback
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Pipeline status tracking (in-memory, not persisted to DB)
+# ---------------------------------------------------------------------------
+
+_pipeline_status: dict[str, dict] = {}
+
+
+def update_pipeline_status(
+    course_id: str, section: int | None, stage: str
+) -> None:
+    """Update the in-memory pipeline status for a course."""
+    if course_id not in _pipeline_status:
+        _pipeline_status[course_id] = {
+            "stage": stage,
+            "current_section": section,
+            "sections": {},
+        }
+    _pipeline_status[course_id]["stage"] = stage
+    _pipeline_status[course_id]["current_section"] = section
+    if section is not None:
+        _pipeline_status[course_id]["sections"][section] = stage
+
+
+def get_pipeline_status(course_id: str) -> dict | None:
+    """Return current pipeline status for a course, or None."""
+    return _pipeline_status.get(course_id)
+
+
+# ---------------------------------------------------------------------------
+# Helper functions for the full pipeline
+# ---------------------------------------------------------------------------
+
+
+async def get_course(course_id, session: AsyncSession) -> Course:
+    """Fetch a course with sections eager-loaded."""
+    from sqlalchemy.orm import selectinload
+
+    result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.id == course_id)
+    )
+    course = result.scalar_one_or_none()
+    if course is None:
+        raise ValueError(f"Course {course_id} not found")
+    return course
+
+
+async def get_research_briefs(
+    course_id, session: AsyncSession
+) -> list[ResearchBrief]:
+    """Fetch all research briefs for a course."""
+    result = await session.execute(
+        select(ResearchBrief).where(ResearchBrief.course_id == course_id)
+    )
+    return list(result.scalars().all())
+
+
+async def update_course_status(
+    course_id, status: str, session: AsyncSession
+) -> None:
+    """Update course.status and commit."""
+    result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = result.scalar_one_or_none()
+    if course:
+        course.status = status
+        await session.commit()
 
 
 async def _invoke_agent(agent, message: str):
@@ -207,56 +277,114 @@ def _split_markdown_sections(markdown: str, expected_count: int) -> list[Section
     return sections
 
 
-async def generate_lessons(
-    topic: str,
-    instructions: str | None,
-    sections: Sequence[dict],
-) -> CourseContent:
-    """Invoke the writer agent to generate markdown lesson content.
+async def generate_lessons(course_id: str, session: AsyncSession) -> None:
+    """Full M2 pipeline: research -> verify -> write -> edit for each section.
 
-    The writer returns plain markdown with ## headings per section.
-    We split by headings and map to CourseContent.
+    Called as a background task. Updates course status and pipeline status
+    at each stage.
     """
-    writer = create_writer()
-
-    outline_text = "\n".join(
-        f"{s['position']}. {s['title']} — {s['summary']}" for s in sections
-    )
-
-    message = (
-        f"Generate lesson content for the following course.\n\n"
-        f"Topic: {topic}\n"
-    )
-    if instructions:
-        message += f"Learner instructions: {instructions}\n"
-    message += (
-        f"\nFull course outline:\n{outline_text}\n\n"
-        f"Write detailed markdown lesson content for ALL {len(sections)} sections, "
-        f"in order from section 1 to section {len(sections)}. "
-        f"Start each section with ## followed by the section title."
-    )
-
     try:
-        result = await writer.ainvoke(
-            {"messages": [{"role": "user", "content": message}]}
+        course = await get_course(course_id, session)
+        briefs = await get_research_briefs(course_id, session)
+
+        # 1. Parallel section research
+        await update_course_status(course_id, "researching", session)
+        update_pipeline_status(str(course_id), None, "researching")
+        await research_all_sections(str(course_id), briefs, session)
+
+        # 2. Sequential per section: verify -> write -> edit
+        blackboard = await create_blackboard(str(course_id), session)
+
+        for section in sorted(course.sections, key=lambda s: s.position):
+            cards = await get_evidence_cards(
+                str(course_id), section.position, session
+            )
+
+            # Verify
+            update_pipeline_status(
+                str(course_id), section.position, "verifying"
+            )
+            await update_course_status(course_id, "verifying", session)
+            brief = next(
+                (
+                    b
+                    for b in briefs
+                    if b.section_position == section.position
+                ),
+                None,
+            )
+            if brief and cards:
+                verification = await verify_evidence(cards, brief, session)
+                if verification.needs_more_research:
+                    new_card_items = await research_section_targeted(
+                        verification.gaps
+                    )
+                    if new_card_items:
+                        await save_evidence_cards(
+                            str(course_id),
+                            section.position,
+                            new_card_items,
+                            session,
+                        )
+                    cards = await get_evidence_cards(
+                        str(course_id), section.position, session
+                    )
+                    await verify_evidence(cards, brief, session)
+
+            # Write
+            update_pipeline_status(
+                str(course_id), section.position, "writing"
+            )
+            await update_course_status(course_id, "writing", session)
+            draft = await write_section(
+                cards, blackboard, section, list(course.sections), session
+            )
+
+            # Edit
+            update_pipeline_status(
+                str(course_id), section.position, "editing"
+            )
+            await update_course_status(course_id, "editing", session)
+            editor_result = await edit_section(
+                draft, blackboard, cards, section.position, session
+            )
+
+            # Persist
+            verified_cards = [c for c in cards if c.verified]
+            citations = extract_citations(
+                editor_result.edited_content, verified_cards
+            )
+            section.content = editor_result.edited_content
+            section.citations = citations
+            await session.commit()
+
+            # Update blackboard (failure here should not crash the pipeline)
+            try:
+                await update_blackboard(
+                    blackboard, editor_result.blackboard_updates, session
+                )
+            except Exception as e:
+                logger.warning(
+                    "Blackboard update failed for section %s: %s",
+                    section.position,
+                    e,
+                )
+
+            update_pipeline_status(
+                str(course_id), section.position, "completed"
+            )
+
+        await update_course_status(course_id, "completed", session)
+
+    except Exception as e:
+        logger.error(
+            "Pipeline failed for course %s: %s", course_id, e
         )
-    except AttributeError:
-        result = await asyncio.to_thread(
-            writer.invoke,
-            {"messages": [{"role": "user", "content": message}]},
-        )
-
-    # Extract markdown from the last message
-    last_message = result["messages"][-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
-
-    parsed = _split_markdown_sections(content, len(sections))
-
-    if not parsed:
-        raise ValueError(f"Writer returned no parseable sections. Output: {content[:500]}")
-
-    logger.info("Writer produced %d sections (expected %d)", len(parsed), len(sections))
-    return CourseContent(sections=parsed)
+        try:
+            await update_course_status(course_id, "failed", session)
+        except Exception:
+            pass
+        update_pipeline_status(str(course_id), None, "failed")
 
 
 # ---------------------------------------------------------------------------
