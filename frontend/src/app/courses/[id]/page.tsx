@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { getCourse, generateCourse, regenerateCourse } from '@/lib/api';
 import { Course } from '@/lib/types';
+import PipelineProgress from '@/components/PipelineProgress';
 
 export default function OutlineReviewPage() {
   const params = useParams();
@@ -15,6 +16,7 @@ export default function OutlineReviewPage() {
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPipeline, setShowPipeline] = useState(false);
 
   // Comments
   const [overallComment, setOverallComment] = useState('');
@@ -25,6 +27,11 @@ export default function OutlineReviewPage() {
       try {
         const data = await getCourse(courseId);
         setCourse(data);
+        // If the course is already in a generating state, show pipeline
+        if (['generating', 'researching', 'verifying', 'writing', 'editing'].includes(data.status)) {
+          setShowPipeline(true);
+          setGenerating(true);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load course');
       } finally {
@@ -37,12 +44,14 @@ export default function OutlineReviewPage() {
   async function handleApprove() {
     setGenerating(true);
     setError(null);
+    setShowPipeline(true);
     try {
       await generateCourse(courseId);
-      router.push(`/courses/${courseId}/learn`);
+      // PipelineProgress will handle the redirect when done
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate');
       setGenerating(false);
+      setShowPipeline(false);
     }
   }
 
@@ -81,9 +90,38 @@ export default function OutlineReviewPage() {
     return null;
   }
 
+  // Show pipeline progress when generating
+  if (showPipeline && course.sections.length > 0) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-1">{course.topic}</h1>
+        {course.ungrounded && (
+          <span className="inline-block px-2 py-1 text-xs font-medium bg-yellow-900 text-yellow-300 border border-yellow-700 rounded mb-4">
+            Ungrounded — generated without research verification
+          </span>
+        )}
+        <p className="text-gray-400 mb-6">{course.sections.length} sections</p>
+        <PipelineProgress
+          courseId={courseId}
+          sections={course.sections
+            .sort((a, b) => a.position - b.position)
+            .map((s) => ({ position: s.position, title: s.title }))}
+        />
+        {error && <p className="text-red-400 text-sm mt-4">{error}</p>}
+      </div>
+    );
+  }
+
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">{course.topic}</h1>
+      <div className="flex items-center gap-3 mb-1">
+        <h1 className="text-2xl font-bold">{course.topic}</h1>
+        {course.ungrounded && (
+          <span className="inline-block px-2 py-1 text-xs font-medium bg-yellow-900 text-yellow-300 border border-yellow-700 rounded">
+            Ungrounded
+          </span>
+        )}
+      </div>
       <p className="text-gray-400 mb-6">{course.sections.length} sections · Review your course outline</p>
 
       {/* Overall comment */}
