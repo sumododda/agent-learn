@@ -54,6 +54,24 @@ class TopicBrief(BaseModel):
     raw_search_results: list[dict]  # preserve for reference
 
 
+# --- Structured output schemas for section researcher ---
+
+
+class EvidenceCardItem(BaseModel):
+    claim: str
+    source_url: str
+    source_title: str
+    source_tier: int  # 1, 2, or 3
+    passage: str
+    confidence: float
+    caveat: str | None = None
+    explanation: str
+
+
+class EvidenceCardSet(BaseModel):
+    cards: list[EvidenceCardItem]
+
+
 # --- Structured output schemas for writer ---
 
 
@@ -150,6 +168,44 @@ Guidelines:
 - Be specific about authoritative sources — include names and URLs when available
 
 Output a structured TopicBrief with all fields populated based on the search results."""
+
+SECTION_RESEARCHER_PROMPT = """You are a section researcher. Your job is to analyze web search results and produce structured evidence cards — one per factual claim discovered.
+
+You will receive:
+- A research brief with must-answer questions for a specific course section
+- Raw search results from web searches (title, URL, content snippets)
+
+Your task:
+1. Read each search result carefully
+2. Extract every distinct factual claim relevant to the must-answer questions
+3. For each claim, produce an evidence card with:
+   - claim: a clear, concise statement of the factual claim
+   - source_url: the URL where this claim was found
+   - source_title: the title of the source page
+   - source_tier: assign a tier based on source quality:
+     - 1 = official documentation, academic papers, authoritative references
+     - 2 = reputable blogs, well-known tutorials, established tech publications
+     - 3 = forums, community repos, personal blogs, Stack Overflow answers
+   - passage: the exact passage from the source that supports this claim (quote directly)
+   - confidence: a float between 0.0 and 1.0 rating how confident you are in the claim:
+     - 0.9-1.0: directly stated in an official/authoritative source
+     - 0.7-0.89: clearly stated in a reputable source
+     - 0.5-0.69: inferred or from a less reliable source
+     - Below 0.5: speculative, contradicted, or poorly sourced
+   - caveat: any important caveat, limitation, or condition (null if none)
+   - explanation: brief explanation of why this claim matters for the section
+
+Guidelines:
+- Produce one card per distinct factual claim — do NOT merge multiple claims into one card
+- Prefer claims that directly answer the must-answer questions
+- Include the exact passage from the source — do not paraphrase
+- Be conservative with confidence scores — only rate highly when the source is authoritative and the claim is specific
+- If multiple sources support the same claim, pick the most authoritative one
+- Flag any claims that contradict other search results in the caveat field
+- Aim for 5-15 evidence cards depending on the richness of the search results
+- Do NOT fabricate claims — only extract what is present in the search results
+
+Output a structured EvidenceCardSet containing all extracted evidence cards."""
 
 
 # --- Planner subagent config (dict form, used by supervisor) ---
@@ -250,5 +306,25 @@ def create_discovery_researcher():
         response_format=ToolStrategy(TopicBrief),
         tools=[],
         name="agent-learn-discovery-researcher",
+    )
+    return agent
+
+
+def create_section_researcher():
+    """Create a section researcher agent that produces evidence cards.
+
+    The agent receives pre-fetched Tavily search results and a research
+    brief, then extracts structured evidence cards with source tiers
+    and confidence ratings. It does NOT call Tavily itself — the
+    service layer handles all search API calls.
+    """
+    model = get_model()
+
+    agent = create_deep_agent(
+        model=model,
+        system_prompt=SECTION_RESEARCHER_PROMPT,
+        response_format=ToolStrategy(EvidenceCardSet),
+        tools=[],
+        name="agent-learn-section-researcher",
     )
     return agent

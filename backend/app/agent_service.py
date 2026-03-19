@@ -1,19 +1,27 @@
 import asyncio
 import json
 import logging
+from datetime import date
 from typing import Sequence
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import (
     create_planner,
     create_writer,
     create_discovery_researcher,
+    create_section_researcher,
     CourseOutline,
     CourseOutlineWithBriefs,
     CourseContent,
     SectionContent,
     TopicBrief,
+    EvidenceCardItem,
+    EvidenceCardSet,
 )
 from app.config import settings
+from app.models import EvidenceCard, ResearchBrief
 
 # json still used by generate_outline fallback
 
@@ -243,3 +251,166 @@ async def generate_lessons(
 
     logger.info("Writer produced %d sections (expected %d)", len(parsed), len(sections))
     return CourseContent(sections=parsed)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Section researcher + evidence cards
+# ---------------------------------------------------------------------------
+
+
+async def research_section(brief: ResearchBrief) -> list[EvidenceCardItem]:
+    """Research a single section by searching each must-answer question via Tavily.
+
+    1. For each question in the brief, call AsyncTavilyClient.search
+    2. Aggregate all search results
+    3. Pass results + questions to the section researcher agent
+    4. Return the extracted evidence cards
+    """
+    from tavily import AsyncTavilyClient
+
+    client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
+    all_results: list[dict] = []
+
+    for question in brief.questions:
+        try:
+            response = await client.search(
+                query=question,
+                search_depth="basic",
+                max_results=5,
+            )
+            for r in response.get("results", []):
+                all_results.append({
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "content": r.get("content", ""),
+                    "score": r.get("score", 0),
+                })
+        except Exception as e:
+            logger.warning(
+                "Tavily search failed for question '%s' (section %s): %s",
+                question,
+                brief.section_position,
+                e,
+            )
+            continue
+
+    if not all_results:
+        raise RuntimeError(
+            f"All Tavily searches failed for section {brief.section_position}"
+        )
+
+    logger.info(
+        "Section %s: collected %d search results from %d questions",
+        brief.section_position,
+        len(all_results),
+        len(brief.questions),
+    )
+
+    # Pass to section researcher agent for evidence card extraction
+    researcher = create_section_researcher()
+    message = (
+        f"Research brief:\n"
+        f"Questions: {json.dumps(brief.questions)}\n\n"
+        f"Search results:\n{json.dumps(all_results, indent=2)}"
+    )
+
+    result = await _invoke_agent(researcher, message)
+
+    # Ensure we have an EvidenceCardSet
+    if isinstance(result, EvidenceCardSet):
+        return result.cards
+    elif isinstance(result, dict):
+        card_set = EvidenceCardSet(**result)
+        return card_set.cards
+    else:
+        raise ValueError(
+            f"Section researcher returned unexpected type: {type(result)}"
+        )
+
+
+async def research_all_sections(
+    course_id, briefs: list[ResearchBrief], session: AsyncSession
+) -> None:
+    """Run section research in parallel for all section-level briefs.
+
+    Filters to section-level briefs (section_position is not None),
+    runs asyncio.gather with return_exceptions=True, and saves
+    evidence cards for each successful result.
+    """
+    section_briefs = [b for b in briefs if b.section_position is not None]
+
+    if not section_briefs:
+        logger.warning("No section-level research briefs found for course %s", course_id)
+        return
+
+    logger.info(
+        "Starting parallel research for %d sections (course %s)",
+        len(section_briefs),
+        course_id,
+    )
+
+    results = await asyncio.gather(
+        *[research_section(brief) for brief in section_briefs],
+        return_exceptions=True,
+    )
+
+    for brief, result in zip(section_briefs, results):
+        if isinstance(result, Exception):
+            logger.error(
+                "Research failed for section %s (course %s): %s",
+                brief.section_position,
+                course_id,
+                result,
+            )
+            continue
+        await save_evidence_cards(
+            course_id, brief.section_position, result, session
+        )
+
+    logger.info("Parallel section research complete for course %s", course_id)
+
+
+async def save_evidence_cards(
+    course_id,
+    section_position: int,
+    cards: list[EvidenceCardItem],
+    session: AsyncSession,
+) -> None:
+    """Bulk insert EvidenceCard rows from a list of EvidenceCardItem."""
+    db_cards = [
+        EvidenceCard(
+            course_id=course_id,
+            section_position=section_position,
+            claim=card.claim,
+            source_url=card.source_url,
+            source_title=card.source_title,
+            source_tier=card.source_tier,
+            passage=card.passage,
+            retrieved_date=date.today(),
+            confidence=card.confidence,
+            caveat=card.caveat,
+            explanation=card.explanation,
+        )
+        for card in cards
+    ]
+    session.add_all(db_cards)
+    await session.commit()
+    logger.info(
+        "Saved %d evidence cards for section %s (course %s)",
+        len(db_cards),
+        section_position,
+        course_id,
+    )
+
+
+async def get_evidence_cards(
+    course_id, section_position: int, session: AsyncSession
+) -> list[EvidenceCard]:
+    """Query evidence cards for a specific section of a course."""
+    result = await session.execute(
+        select(EvidenceCard).where(
+            EvidenceCard.course_id == course_id,
+            EvidenceCard.section_position == section_position,
+        )
+    )
+    return list(result.scalars().all())
