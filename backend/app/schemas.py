@@ -212,3 +212,15 @@ class EditSectionResponse(BaseModel):
     """Response from POST /api/internal/edit-section."""
     edited_content: str
     blackboard_updates: BlackboardUpdatesInfo
+
+
+class SetCourseStatusRequest(BaseModel):
+    """Request body for POST /api/internal/set-course-status."""
+    course_id: str
+    status: str
+
+
+class SetCourseStatusResponse(BaseModel):
+    """Response from POST /api/internal/set-course-status."""
+    course_id: str
+    status: str
