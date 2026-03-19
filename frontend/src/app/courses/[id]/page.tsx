@@ -91,7 +91,9 @@ export default function OutlineReviewPage() {
   }
 
   // Show pipeline progress when generating
-  if (showPipeline && course.sections.length > 0) {
+  const sections = course.sections || [];
+
+  if (showPipeline && sections.length > 0) {
     return (
       <div>
         <h1 className="text-2xl font-bold mb-1">{course.topic}</h1>
@@ -100,10 +102,10 @@ export default function OutlineReviewPage() {
             Ungrounded — generated without research verification
           </span>
         )}
-        <p className="text-gray-400 mb-6">{course.sections.length} sections</p>
+        <p className="text-gray-400 mb-6">{sections.length} sections</p>
         <PipelineProgress
           courseId={courseId}
-          sections={course.sections
+          sections={sections
             .sort((a, b) => a.position - b.position)
             .map((s) => ({ position: s.position, title: s.title }))}
         />
@@ -122,7 +124,7 @@ export default function OutlineReviewPage() {
           </span>
         )}
       </div>
-      <p className="text-gray-400 mb-6">{course.sections.length} sections · Review your course outline</p>
+      <p className="text-gray-400 mb-6">{sections.length} sections · Review your course outline</p>
 
       {/* Overall comment */}
       <div className="mb-6">
@@ -138,7 +140,7 @@ export default function OutlineReviewPage() {
 
       {/* Sections with per-section comments */}
       <div className="space-y-4 mb-8">
-        {course.sections
+        {sections
           .sort((a, b) => a.position - b.position)
           .map((section) => (
             <div key={section.id} className="border-l-2 border-gray-700 pl-4 py-2">
