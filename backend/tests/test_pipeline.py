@@ -539,15 +539,24 @@ async def test_partial_failure_write_error(
 
         await generate_lessons(course.id, pipeline_session)
 
-    # The pipeline caught the error and set status to "failed"
-    await pipeline_session.refresh(course)
-    assert course.status == "failed"
+    # The pipeline continues past the failed section and completes
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    result = await pipeline_session.execute(
+        select(Course).options(selectinload(Course.sections)).where(Course.id == course.id)
+    )
+    refreshed = result.scalar_one()
+    assert refreshed.status == "completed"
 
-    # Pipeline status should also reflect failure
+    # Section 2 should have no content (write failed), others should have content
+    for s in sorted(refreshed.sections, key=lambda s: s.position):
+        if s.position == 2:
+            assert s.content is None
+        else:
+            assert s.content is not None
+
     from app.agent_service import _pipeline_status
     course_id_str = str(course.id)
-    assert _pipeline_status.get(course_id_str, {}).get("stage") == "failed"
-
     _pipeline_status.pop(course_id_str, None)
 
 

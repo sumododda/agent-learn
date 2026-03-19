@@ -334,49 +334,82 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
                     )
                     await verify_evidence(cards, brief, session)
 
-            # Write
-            update_pipeline_status(
-                pipeline_key, section.position, "writing"
-            )
-            await update_course_status(course_id, "writing", session)
-            draft = await write_section(
-                cards, blackboard, section, list(course.sections), session
-            )
-
-            # Edit
-            update_pipeline_status(
-                pipeline_key, section.position, "editing"
-            )
-            await update_course_status(course_id, "editing", session)
-            editor_result = await edit_section(
-                draft, blackboard, cards, section.position, session
-            )
-
-            # Persist
-            verified_cards = [c for c in cards if c.verified]
-            citations = extract_citations(
-                editor_result.edited_content, verified_cards
-            )
-            section.content = editor_result.edited_content
-            section.citations = citations
-            await session.commit()
-
-            # Update blackboard (failure here should not crash the pipeline)
+            # Write → Edit → Persist (wrapped per-section so one failure doesn't stop others)
             try:
-                await update_blackboard(
-                    blackboard, editor_result.blackboard_updates, session
+                update_pipeline_status(
+                    pipeline_key, section.position, "writing"
+                )
+                await update_course_status(course_id, "writing", session)
+                draft = await write_section(
+                    cards, blackboard, section, list(course.sections), session
+                )
+
+                if not draft or not draft.strip():
+                    logger.error(
+                        "Writer returned empty content for section %s",
+                        section.position,
+                    )
+                    update_pipeline_status(
+                        pipeline_key, section.position, "failed"
+                    )
+                    continue
+
+                # Edit
+                update_pipeline_status(
+                    pipeline_key, section.position, "editing"
+                )
+                await update_course_status(course_id, "editing", session)
+                editor_result = await edit_section(
+                    draft, blackboard, cards, section.position, session
+                )
+
+                # Persist
+                verified_cards = [c for c in cards if c.verified]
+                final_content = editor_result.edited_content if editor_result.edited_content.strip() else draft
+                citations = extract_citations(final_content, verified_cards)
+                section.content = final_content
+                section.citations = citations
+                await session.commit()
+
+                # Update blackboard (failure here should not crash the pipeline)
+                try:
+                    await update_blackboard(
+                        blackboard, editor_result.blackboard_updates, session
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Blackboard update failed for section %s: %s",
+                        section.position,
+                        e,
+                    )
+
+                update_pipeline_status(
+                    pipeline_key, section.position, "completed"
                 )
             except Exception as e:
-                logger.warning(
-                    "Blackboard update failed for section %s: %s",
+                logger.error(
+                    "Write/edit failed for section %s: %s",
                     section.position,
                     e,
                 )
+                update_pipeline_status(
+                    pipeline_key, section.position, "failed"
+                )
+                continue
 
-            update_pipeline_status(
-                pipeline_key, section.position, "completed"
+        # Check if all sections have content
+        result = await session.execute(
+            select(Section).where(Section.course_id == course_id)
+        )
+        all_sections = result.scalars().all()
+        all_have_content = all(s.content for s in all_sections)
+        if not all_have_content:
+            failed_positions = [s.position for s in all_sections if not s.content]
+            logger.warning(
+                "Course %s finished with missing content in sections: %s",
+                course_id,
+                failed_positions,
             )
-
         await update_course_status(course_id, "completed", session)
 
     except Exception as e:
