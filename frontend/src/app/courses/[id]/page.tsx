@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import { useAuth } from '@clerk/nextjs';
 import { getCourse, generateCourse, regenerateCourse } from '@/lib/api';
 import { Course } from '@/lib/types';
 import PipelineProgress from '@/components/PipelineProgress';
@@ -9,6 +10,7 @@ import PipelineProgress from '@/components/PipelineProgress';
 export default function OutlineReviewPage() {
   const params = useParams();
   const router = useRouter();
+  const { getToken } = useAuth();
   const courseId = params.id as string;
 
   const [course, setCourse] = useState<Course | null>(null);
@@ -27,7 +29,8 @@ export default function OutlineReviewPage() {
   useEffect(() => {
     async function loadCourse() {
       try {
-        const data = await getCourse(courseId);
+        const token = await getToken();
+        const data = await getCourse(courseId, token);
         setCourse(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load course');
@@ -36,13 +39,14 @@ export default function OutlineReviewPage() {
       }
     }
     loadCourse();
-  }, [courseId]);
+  }, [courseId, getToken]);
 
   async function handleApprove() {
     setGenerating(true);
     setError(null);
     try {
-      const result = await generateCourse(courseId);
+      const token = await getToken();
+      const result = await generateCourse(courseId, token);
       if (result.run_id) {
         setRunId(result.run_id);
       } else {
@@ -63,6 +67,7 @@ export default function OutlineReviewPage() {
     setRegenerating(true);
     setError(null);
     try {
+      const token = await getToken();
       const comments = Object.entries(sectionComments)
         .filter(([, comment]) => comment.trim())
         .map(([position, comment]) => ({ position: Number(position), comment }));
@@ -70,7 +75,8 @@ export default function OutlineReviewPage() {
       const updated = await regenerateCourse(
         courseId,
         overallComment.trim() || undefined,
-        comments.length > 0 ? comments : undefined
+        comments.length > 0 ? comments : undefined,
+        token
       );
       setCourse(updated);
       setOverallComment('');

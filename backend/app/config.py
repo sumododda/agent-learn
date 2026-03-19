@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     INTERNAL_API_TOKEN: str = ""
     TRIGGER_SECRET_KEY: str = ""
     TRIGGER_API_URL: str = "https://api.trigger.dev"
+    CLERK_JWKS_URL: str = ""
+    CLERK_ISSUER: str = ""
 
     model_config = {"env_file": ".env"}
 

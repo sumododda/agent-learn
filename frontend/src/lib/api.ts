@@ -2,10 +2,18 @@ import { Course, GenerateResponse } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export async function createCourse(topic: string, instructions?: string): Promise<Course> {
+function authHeaders(token?: string | null): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+export async function createCourse(topic: string, instructions?: string, token?: string | null): Promise<Course> {
   const res = await fetch(`${API_BASE}/api/courses`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(token),
     body: JSON.stringify({ topic, instructions: instructions || null }),
   });
   if (!res.ok) {
@@ -15,9 +23,10 @@ export async function createCourse(topic: string, instructions?: string): Promis
   return res.json();
 }
 
-export async function generateCourse(id: string): Promise<GenerateResponse> {
+export async function generateCourse(id: string, token?: string | null): Promise<GenerateResponse> {
   const res = await fetch(`${API_BASE}/api/courses/${id}/generate`, {
     method: 'POST',
+    headers: authHeaders(token),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Failed to generate course' }));
@@ -29,11 +38,12 @@ export async function generateCourse(id: string): Promise<GenerateResponse> {
 export async function regenerateCourse(
   id: string,
   overallComment?: string,
-  sectionComments?: { position: number; comment: string }[]
+  sectionComments?: { position: number; comment: string }[],
+  token?: string | null
 ): Promise<Course> {
   const res = await fetch(`${API_BASE}/api/courses/${id}/regenerate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(token),
     body: JSON.stringify({
       overall_comment: overallComment || null,
       section_comments: sectionComments?.filter(sc => sc.comment.trim()) || [],
@@ -46,9 +56,14 @@ export async function regenerateCourse(
   return res.json();
 }
 
-export async function listCourses(): Promise<Course[]> {
+export async function listCourses(token?: string | null): Promise<Course[]> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API_BASE}/api/courses`, {
     cache: 'no-store',
+    headers,
   });
   if (!res.ok) {
     throw new Error('Failed to load courses');
@@ -56,9 +71,14 @@ export async function listCourses(): Promise<Course[]> {
   return res.json();
 }
 
-export async function getCourse(id: string): Promise<Course> {
+export async function getCourse(id: string, token?: string | null): Promise<Course> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API_BASE}/api/courses/${id}`, {
     cache: 'no-store',
+    headers,
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Course not found' }));

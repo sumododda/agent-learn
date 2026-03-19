@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useAuth } from '@clerk/nextjs';
 import { listCourses } from '@/lib/api';
 import { Course } from '@/lib/types';
 
 export default function LibraryPage() {
+  const { getToken } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +15,8 @@ export default function LibraryPage() {
   useEffect(() => {
     async function load() {
       try {
-        const data = await listCourses();
+        const token = await getToken();
+        const data = await listCourses(token);
         setCourses(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load courses');
@@ -22,7 +25,7 @@ export default function LibraryPage() {
       }
     }
     load();
-  }, []);
+  }, [getToken]);
 
   if (loading) return <div className="text-center text-gray-400 mt-20">Loading your courses...</div>;
   if (error) return <div className="text-center text-red-400 mt-20">{error}</div>;

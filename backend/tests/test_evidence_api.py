@@ -23,6 +23,7 @@ from sqlalchemy import event as sa_event
 from app.main import app
 from app.models import Base, Blackboard, Course, EvidenceCard, Section
 from app.database import get_session
+from app.auth import get_current_user
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,7 @@ async def evidence_db():
             yield session
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
     yield session_factory
 
     async with engine.begin() as conn:

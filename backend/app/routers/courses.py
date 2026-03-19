@@ -3,7 +3,7 @@ import uuid
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -11,6 +11,7 @@ from app.agent_service import (
     generate_outline,
     get_blackboard,
 )
+from app.auth import get_current_user
 from app.config import settings
 from app.database import SessionDep
 from app.models import Course, EvidenceCard, Section, ResearchBrief
@@ -34,9 +35,13 @@ router = APIRouter()
 
 
 @router.post("/courses", response_model=CourseResponse)
-async def create_course(body: CourseCreate, session: SessionDep):
+async def create_course(
+    body: CourseCreate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     # Create course row first with "researching" status
-    course = Course(topic=body.topic, instructions=body.instructions, status="researching")
+    course = Course(topic=body.topic, instructions=body.instructions, status="researching", user_id=user_id)
     session.add(course)
     await session.flush()
 
@@ -106,6 +111,7 @@ async def create_course(body: CourseCreate, session: SessionDep):
 async def generate_course(
     course_id: uuid.UUID,
     session: SessionDep,
+    user_id: str = Depends(get_current_user),
 ):
     result = await session.execute(
         select(Course)
@@ -115,6 +121,8 @@ async def generate_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Status guard: only allow generation when outline is ready
     if course.status != "outline_ready":
@@ -169,7 +177,12 @@ async def generate_course(
 
 
 @router.post("/courses/{course_id}/regenerate", response_model=CourseResponse)
-async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, session: SessionDep):
+async def regenerate_course(
+    course_id: uuid.UUID,
+    body: RegenerateRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
@@ -178,6 +191,8 @@ async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, sessi
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Build enhanced instructions from comments
     feedback_parts = []
@@ -265,17 +280,25 @@ async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, sessi
 
 
 @router.get("/courses", response_model=list[CourseResponse])
-async def list_courses(session: SessionDep):
+async def list_courses(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
+        .where(Course.user_id == user_id)
         .order_by(Course.created_at.desc())
     )
     return result.scalars().all()
 
 
 @router.get("/courses/{course_id}", response_model=CourseResponse)
-async def get_course(course_id: uuid.UUID, session: SessionDep):
+async def get_course(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
@@ -284,6 +307,8 @@ async def get_course(course_id: uuid.UUID, session: SessionDep):
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
     return course
 
 
@@ -299,15 +324,19 @@ async def get_course(course_id: uuid.UUID, session: SessionDep):
 async def get_evidence(
     course_id: uuid.UUID,
     session: SessionDep,
+    user_id: str = Depends(get_current_user),
     section: Optional[int] = Query(None, description="Filter by section position"),
 ):
     """Return evidence cards for a course, optionally filtered by section."""
-    # Verify course exists
+    # Verify course exists and user owns it
     course_result = await session.execute(
         select(Course).where(Course.id == course_id)
     )
-    if not course_result.scalar_one_or_none():
+    course = course_result.scalar_one_or_none()
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     query = select(EvidenceCard).where(EvidenceCard.course_id == course_id)
     if section is not None:
@@ -325,15 +354,20 @@ async def get_evidence(
     response_model=BlackboardResponse | None,
 )
 async def get_course_blackboard(
-    course_id: uuid.UUID, session: SessionDep
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
 ):
     """Return the current blackboard state for a course."""
-    # Verify course exists
+    # Verify course exists and user owns it
     course_result = await session.execute(
         select(Course).where(Course.id == course_id)
     )
-    if not course_result.scalar_one_or_none():
+    course = course_result.scalar_one_or_none()
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     bb = await get_blackboard(course_id, session)
     if bb is None:
