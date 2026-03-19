@@ -1,163 +1,176 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { getPipelineStatus } from '@/lib/api';
-import { PipelineStatus } from '@/lib/types';
+import { useEffect, useRef } from 'react';
+import { useRealtimeRun } from '@trigger.dev/react-hooks';
+import { PipelineMetadata } from '@/lib/types';
 
-const POLL_INTERVAL_MS = 3000;
+const STAGE_LABELS: Record<string, string> = {
+  researching: 'Researching',
+  verifying: 'Verifying',
+  writing: 'Writing',
+  editing: 'Editing',
+  completed: 'Completed',
+  failed: 'Failed',
+};
 
-const STAGE_ORDER = ['researching', 'verifying', 'writing', 'editing', 'completed'];
-
-interface PipelineProgressProps {
-  courseId: string;
-  sections: { position: number; title: string }[];
+function stageBadgeColor(stage: string): string {
+  switch (stage) {
+    case 'completed':
+      return 'text-green-400';
+    case 'failed':
+      return 'text-red-400';
+    case 'writing':
+    case 'editing':
+      return 'text-purple-400';
+    case 'researching':
+    case 'verifying':
+      return 'text-blue-400';
+    default:
+      return 'text-gray-400';
+  }
 }
 
-function StageIndicator({ stage }: { stage: string }) {
-  if (stage === 'completed') {
+interface PipelineProgressProps {
+  runId: string;
+  accessToken: string;
+  sectionTitles: Record<number, string>;
+  onComplete?: () => void;
+}
+
+export default function PipelineProgress({
+  runId,
+  accessToken,
+  sectionTitles,
+  onComplete,
+}: PipelineProgressProps) {
+  const { run, error, isLoading } = useRealtimeRun(runId, {
+    accessToken,
+    enabled: !!runId,
+  });
+
+  const pipeline = run?.metadata?.pipeline as PipelineMetadata | undefined;
+  const runStatus = run?.status;
+
+  // Notify parent when the run completes (via effect to avoid calling during render)
+  const completeCalled = useRef(false);
+  useEffect(() => {
+    if (runStatus === 'COMPLETED' && onComplete && !completeCalled.current) {
+      completeCalled.current = true;
+      onComplete();
+    }
+  }, [runStatus, onComplete]);
+
+  if (isLoading) {
     return (
-      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs" title="Completed">
-        &#10003;
-      </span>
+      <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
+        <p className="text-gray-400 text-sm">Connecting to pipeline...</p>
+      </div>
     );
   }
 
-  const spinnerColor: Record<string, string> = {
-    researching: 'border-blue-400',
-    verifying: 'border-yellow-400',
-    writing: 'border-purple-400',
-    editing: 'border-cyan-400',
-  };
+  if (error) {
+    return (
+      <div className="mt-6 p-4 bg-gray-900 border border-red-800 rounded-lg">
+        <p className="text-red-400 text-sm">
+          Failed to connect to pipeline: {error.message}
+        </p>
+      </div>
+    );
+  }
 
-  const color = spinnerColor[stage] || 'border-gray-400';
+  if (!pipeline) {
+    return (
+      <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
+        <p className="text-gray-400 text-sm">Waiting for pipeline to start...</p>
+      </div>
+    );
+  }
 
-  return (
-    <span
-      className={`inline-block w-5 h-5 rounded-full border-2 border-t-transparent animate-spin ${color}`}
-      title={stage}
-    />
-  );
-}
+  const overallStage = pipeline.stage;
+  const currentSection = pipeline.current_section;
+  const sections = pipeline.sections || {};
 
-function StageLabel({ stage }: { stage: string }) {
-  const labels: Record<string, { text: string; color: string }> = {
-    researching: { text: 'Researching', color: 'text-blue-400' },
-    verifying: { text: 'Verifying', color: 'text-yellow-400' },
-    writing: { text: 'Writing', color: 'text-purple-400' },
-    editing: { text: 'Editing', color: 'text-cyan-400' },
-    completed: { text: 'Completed', color: 'text-green-400' },
-  };
+  const totalSections = Object.keys(sectionTitles).length;
+  const completedSections = Object.values(sections).filter(
+    (s) => s === 'completed'
+  ).length;
 
-  const label = labels[stage] || { text: stage, color: 'text-gray-400' };
-
-  return <span className={`text-xs font-medium ${label.color}`}>{label.text}</span>;
-}
-
-export default function PipelineProgress({ courseId, sections }: PipelineProgressProps) {
-  const router = useRouter();
-  const [status, setStatus] = useState<PipelineStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [polling, setPolling] = useState(true);
-
-  const poll = useCallback(async () => {
-    try {
-      const data = await getPipelineStatus(courseId);
-      setStatus(data);
-
-      const allCompleted = sections.every(
-        (s) => data.sections[s.position] === 'completed'
-      );
-
-      if (allCompleted) {
-        setPolling(false);
-        router.push(`/courses/${courseId}/learn`);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load status');
-      setPolling(false);
-    }
-  }, [courseId, sections, router]);
-
-  useEffect(() => {
-    if (!polling) return;
-
-    poll();
-    const interval = setInterval(poll, POLL_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, [polling, poll]);
-
-  const completedCount = status
-    ? sections.filter((s) => status.sections[s.position] === 'completed').length
-    : 0;
-  const progressPercent = sections.length > 0 ? Math.round((completedCount / sections.length) * 100) : 0;
+  const isRunFailed = runStatus === 'FAILED';
+  const isRunComplete = runStatus === 'COMPLETED';
 
   return (
-    <div className="space-y-6">
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold text-white">Generating Lessons</h2>
-          <span className="text-sm text-gray-400">
-            {completedCount} / {sections.length} sections
+    <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
+      {/* Overall status */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <span className="text-gray-500 text-xs uppercase tracking-wider">
+            Pipeline
+          </span>
+          <span
+            className={`ml-2 text-sm font-medium ${
+              isRunFailed ? 'text-red-400' : isRunComplete ? 'text-green-400' : 'text-purple-400'
+            }`}
+          >
+            {isRunFailed
+              ? 'Failed'
+              : isRunComplete
+              ? 'Complete'
+              : STAGE_LABELS[overallStage] || overallStage}
           </span>
         </div>
-        <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-purple-600 rounded-full transition-all duration-500"
-            style={{ width: `${progressPercent}%` }}
-          />
-        </div>
+        <span className="text-gray-500 text-sm">
+          {completedSections} / {totalSections} sections
+        </span>
       </div>
 
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {/* Progress bar */}
+      <div className="w-full bg-gray-800 rounded-full h-2 mb-4">
+        <div
+          className={`h-2 rounded-full transition-all duration-500 ${
+            isRunFailed ? 'bg-red-500' : isRunComplete ? 'bg-green-500' : 'bg-purple-500'
+          }`}
+          style={{
+            width: `${totalSections > 0 ? (completedSections / totalSections) * 100 : 0}%`,
+          }}
+        />
+      </div>
 
-      <div className="space-y-2">
-        {sections.map((section) => {
-          const sectionStage = status?.sections[section.position] || 'pending';
-          const isActive = sectionStage !== 'pending' && sectionStage !== 'completed';
-          const isCompleted = sectionStage === 'completed';
+      {/* Per-section status */}
+      <div className="space-y-1">
+        {Object.entries(sectionTitles)
+          .sort(([a], [b]) => Number(a) - Number(b))
+          .map(([posStr, title]) => {
+            const pos = Number(posStr);
+            const sectionStage = sections[pos] || 'pending';
+            const isActive = currentSection === pos;
 
-          return (
-            <div
-              key={section.position}
-              className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
-                isActive
-                  ? 'bg-gray-800 border-gray-600'
-                  : isCompleted
-                  ? 'bg-gray-900 border-green-800'
-                  : 'bg-gray-900 border-gray-800'
-              }`}
-            >
-              <div className="flex-shrink-0 w-6 text-center">
-                {sectionStage === 'pending' ? (
-                  <span className="inline-block w-5 h-5 rounded-full border-2 border-gray-700" />
-                ) : (
-                  <StageIndicator stage={sectionStage} />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className={`text-sm ${isCompleted ? 'text-green-300' : isActive ? 'text-white' : 'text-gray-500'}`}>
-                  {section.position}. {section.title}
+            return (
+              <div
+                key={pos}
+                className={`flex items-center justify-between px-3 py-1.5 rounded text-sm ${
+                  isActive ? 'bg-gray-800' : ''
+                }`}
+              >
+                <span
+                  className={
+                    sectionStage === 'completed'
+                      ? 'text-green-400'
+                      : isActive
+                      ? 'text-white'
+                      : 'text-gray-500'
+                  }
+                >
+                  {pos}. {title}
+                </span>
+                <span className={`text-xs ${stageBadgeColor(sectionStage)}`}>
+                  {sectionStage === 'pending'
+                    ? ''
+                    : STAGE_LABELS[sectionStage] || sectionStage}
                 </span>
               </div>
-              <div className="flex-shrink-0">
-                {sectionStage !== 'pending' && <StageLabel stage={sectionStage} />}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
-
-      {status && (
-        <div className="text-center text-gray-500 text-xs">
-          {polling
-            ? 'Updating every 3 seconds...'
-            : error
-            ? 'Polling stopped due to error.'
-            : 'All sections completed.'}
-        </div>
-      )}
     </div>
   );
 }

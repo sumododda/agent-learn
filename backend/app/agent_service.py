@@ -34,7 +34,16 @@ from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pipeline status tracking (in-memory, not persisted to DB)
+# Pipeline status tracking (legacy — kept for backward compat with tests)
+# ---------------------------------------------------------------------------
+# Real-time progress is now delivered via Trigger.dev metadata (set from
+# the generate-course task) and consumed by the frontend using the
+# @trigger.dev/react-hooks useRealtimeRun hook.
+#
+# _pipeline_status, update_pipeline_status, and get_pipeline_status are
+# retained so that generate_lessons() (still used by internal API & tests)
+# continues to work. The dict is populated during generate_lessons() runs
+# but is no longer served to the frontend via any polling endpoint.
 # ---------------------------------------------------------------------------
 
 _pipeline_status: dict[str, dict] = {}
@@ -43,7 +52,7 @@ _pipeline_status: dict[str, dict] = {}
 def update_pipeline_status(
     course_id: str, section: int | None, stage: str
 ) -> None:
-    """Update the in-memory pipeline status for a course."""
+    """Update the in-memory pipeline status for a course (legacy)."""
     if course_id not in _pipeline_status:
         _pipeline_status[course_id] = {
             "stage": stage,
@@ -57,7 +66,7 @@ def update_pipeline_status(
 
 
 def get_pipeline_status(course_id: str) -> dict | None:
-    """Return current pipeline status for a course, or None."""
+    """Return current pipeline status for a course, or None (legacy)."""
     return _pipeline_status.get(course_id)
 
 
@@ -1021,3 +1030,411 @@ def extract_citations(
                 "source_title": card.source_title,
             })
     return citations
+
+
+# ---------------------------------------------------------------------------
+# Standalone per-stage functions for internal API endpoints
+# ---------------------------------------------------------------------------
+# Each function is self-contained: reads from DB, does LLM/search work,
+# writes results to DB, and returns a serializable dict.
+# These are called by the internal router endpoints (Phase 2, Milestone 3).
+# ---------------------------------------------------------------------------
+
+
+async def run_discover_and_plan(
+    course_id, session: AsyncSession
+) -> dict:
+    """Run discovery research + planning for a course.
+
+    Reads the course from DB, runs discovery research via Tavily,
+    runs the planner agent, creates sections + research briefs in DB,
+    and returns them.
+
+    Returns:
+        {
+            "sections": [{position, title, summary, id}, ...],
+            "research_briefs": [{id, section_position, questions, source_policy}, ...],
+            "ungrounded": bool,
+        }
+    """
+    from sqlalchemy.orm import selectinload
+
+    # Fetch course
+    result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.id == course_id)
+    )
+    course = result.scalar_one_or_none()
+    if course is None:
+        raise ValueError(f"Course {course_id} not found")
+
+    # Run discovery research + planner
+    outline_with_briefs, ungrounded = await generate_outline(
+        course.topic, course.instructions
+    )
+
+    # Set ungrounded flag
+    course.ungrounded = ungrounded
+
+    # Delete existing sections (in case of re-run)
+    for section in list(course.sections):
+        await session.delete(section)
+    await session.flush()
+
+    # Delete existing research briefs
+    old_briefs_result = await session.execute(
+        select(ResearchBrief).where(ResearchBrief.course_id == course_id)
+    )
+    for brief in old_briefs_result.scalars().all():
+        await session.delete(brief)
+    await session.flush()
+
+    # Create section rows
+    new_sections = []
+    for section_data in outline_with_briefs.sections:
+        section = Section(
+            course_id=course.id,
+            position=section_data.position,
+            title=section_data.title,
+            summary=section_data.summary,
+        )
+        session.add(section)
+        new_sections.append(section)
+
+    # Save discovery brief if research succeeded
+    if not ungrounded:
+        discovery_brief = ResearchBrief(
+            course_id=course.id,
+            section_position=None,
+            questions=[],
+            source_policy={},
+            findings="Discovery research completed successfully",
+        )
+        session.add(discovery_brief)
+
+    # Save per-section research briefs
+    new_briefs = []
+    for brief_item in outline_with_briefs.research_briefs:
+        research_brief = ResearchBrief(
+            course_id=course.id,
+            section_position=brief_item.section_position,
+            questions=brief_item.questions,
+            source_policy=brief_item.source_policy,
+        )
+        session.add(research_brief)
+        new_briefs.append(research_brief)
+
+    course.status = "outline_ready"
+    await session.commit()
+
+    # Refresh to get IDs
+    for s in new_sections:
+        await session.refresh(s)
+    for b in new_briefs:
+        await session.refresh(b)
+
+    return {
+        "sections": [
+            {
+                "id": str(s.id),
+                "position": s.position,
+                "title": s.title,
+                "summary": s.summary,
+            }
+            for s in new_sections
+        ],
+        "research_briefs": [
+            {
+                "id": str(b.id),
+                "section_position": b.section_position,
+                "questions": b.questions,
+                "source_policy": b.source_policy,
+            }
+            for b in new_briefs
+        ],
+        "ungrounded": ungrounded,
+    }
+
+
+async def run_research_section(
+    course_id, section_position: int, session: AsyncSession
+) -> dict:
+    """Run section researcher for one section.
+
+    Reads the research brief from DB, runs the researcher agent
+    (Tavily search + evidence card extraction), saves evidence cards
+    to DB, and returns them.
+
+    Returns:
+        {
+            "evidence_cards": [{id, claim, source_url, ...}, ...],
+        }
+    """
+    # Fetch research brief for this section
+    result = await session.execute(
+        select(ResearchBrief).where(
+            ResearchBrief.course_id == course_id,
+            ResearchBrief.section_position == section_position,
+        )
+    )
+    brief = result.scalar_one_or_none()
+    if brief is None:
+        raise ValueError(
+            f"No research brief found for course {course_id}, "
+            f"section {section_position}"
+        )
+
+    # Run section researcher (Tavily search + agent)
+    card_items = await research_section(brief)
+
+    # Save evidence cards to DB
+    await save_evidence_cards(course_id, section_position, card_items, session)
+
+    # Fetch saved cards to return with IDs
+    saved_cards = await get_evidence_cards(course_id, section_position, session)
+
+    return {
+        "evidence_cards": [
+            {
+                "id": str(card.id),
+                "section_position": card.section_position,
+                "claim": card.claim,
+                "source_url": card.source_url,
+                "source_title": card.source_title,
+                "source_tier": card.source_tier,
+                "passage": card.passage,
+                "retrieved_date": str(card.retrieved_date),
+                "confidence": card.confidence,
+                "caveat": card.caveat,
+                "explanation": card.explanation,
+                "verified": card.verified,
+            }
+            for card in saved_cards
+        ],
+    }
+
+
+async def run_verify_section(
+    course_id, section_position: int, session: AsyncSession
+) -> dict:
+    """Run verifier for one section.
+
+    Reads evidence cards and research brief from DB, runs the verifier
+    agent, updates verification status in DB, and optionally runs
+    targeted re-research if needed.
+
+    Returns:
+        {
+            "verification_result": {
+                "cards_verified": int,
+                "cards_total": int,
+                "needs_more_research": bool,
+                "gaps": [str, ...],
+            },
+        }
+    """
+    # Fetch evidence cards
+    cards = await get_evidence_cards(course_id, section_position, session)
+    if not cards:
+        raise ValueError(
+            f"No evidence cards found for course {course_id}, "
+            f"section {section_position}"
+        )
+
+    # Fetch research brief
+    result = await session.execute(
+        select(ResearchBrief).where(
+            ResearchBrief.course_id == course_id,
+            ResearchBrief.section_position == section_position,
+        )
+    )
+    brief = result.scalar_one_or_none()
+    if brief is None:
+        raise ValueError(
+            f"No research brief found for course {course_id}, "
+            f"section {section_position}"
+        )
+
+    # Run verifier
+    verification = await verify_evidence(cards, brief, session)
+
+    # If verifier says we need more research, do targeted re-research
+    if verification.needs_more_research:
+        new_card_items = await research_section_targeted(verification.gaps)
+        if new_card_items:
+            await save_evidence_cards(
+                course_id, section_position, new_card_items, session
+            )
+        # Re-fetch and re-verify
+        cards = await get_evidence_cards(course_id, section_position, session)
+        verification = await verify_evidence(cards, brief, session)
+
+    verified_count = sum(
+        1 for v in verification.card_verifications if v.verified
+    )
+
+    return {
+        "verification_result": {
+            "cards_verified": verified_count,
+            "cards_total": len(verification.card_verifications),
+            "needs_more_research": verification.needs_more_research,
+            "gaps": verification.gaps,
+        },
+    }
+
+
+async def run_write_section(
+    course_id, section_position: int, session: AsyncSession
+) -> dict:
+    """Run writer for one section.
+
+    Reads evidence cards, blackboard, and section info from DB,
+    runs the writer agent, saves content + citations to the section,
+    and returns them.
+
+    Returns:
+        {
+            "content": str,
+            "citations": [{number, claim, source_url, source_title}, ...],
+        }
+    """
+    from sqlalchemy.orm import selectinload
+
+    # Fetch course with sections for outline context
+    course_result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.id == course_id)
+    )
+    course = course_result.scalar_one_or_none()
+    if course is None:
+        raise ValueError(f"Course {course_id} not found")
+
+    # Find the target section
+    section = next(
+        (s for s in course.sections if s.position == section_position),
+        None,
+    )
+    if section is None:
+        raise ValueError(
+            f"Section {section_position} not found in course {course_id}"
+        )
+
+    # Fetch evidence cards
+    cards = await get_evidence_cards(course_id, section_position, session)
+
+    # Fetch or create blackboard
+    blackboard = await get_blackboard(course_id, session)
+    if blackboard is None:
+        blackboard = await create_blackboard(course_id, session)
+
+    # Run writer
+    draft = await write_section(
+        cards, blackboard, section, list(course.sections), session
+    )
+
+    # Extract citations from draft
+    verified_cards = [c for c in cards if c.verified]
+    citations = extract_citations(draft, verified_cards)
+
+    # Persist content + citations to the section
+    section.content = draft
+    section.citations = citations
+    await session.commit()
+
+    return {
+        "content": draft,
+        "citations": citations,
+    }
+
+
+async def run_edit_section(
+    course_id, section_position: int, session: AsyncSession
+) -> dict:
+    """Run editor for one section.
+
+    Reads draft content, blackboard, and evidence cards from DB,
+    runs the editor agent, updates content + blackboard, and returns
+    the result.
+
+    Returns:
+        {
+            "edited_content": str,
+            "blackboard_updates": {
+                "new_glossary_terms": dict,
+                "new_concept_ownership": dict,
+                "topics_covered": [str, ...],
+                "key_points_summary": str,
+                "new_sources": [dict, ...],
+            },
+        }
+    """
+    from sqlalchemy.orm import selectinload
+
+    # Fetch course with sections
+    course_result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.id == course_id)
+    )
+    course = course_result.scalar_one_or_none()
+    if course is None:
+        raise ValueError(f"Course {course_id} not found")
+
+    # Find the target section
+    section = next(
+        (s for s in course.sections if s.position == section_position),
+        None,
+    )
+    if section is None:
+        raise ValueError(
+            f"Section {section_position} not found in course {course_id}"
+        )
+
+    if not section.content:
+        raise ValueError(
+            f"Section {section_position} has no draft content to edit"
+        )
+
+    # Fetch evidence cards
+    cards = await get_evidence_cards(course_id, section_position, session)
+
+    # Fetch blackboard
+    blackboard = await get_blackboard(course_id, session)
+
+    # Run editor
+    editor_result = await edit_section(
+        section.content, blackboard, cards, section_position, session
+    )
+
+    # Update section content with edited version
+    verified_cards = [c for c in cards if c.verified]
+    citations = extract_citations(editor_result.edited_content, verified_cards)
+    section.content = editor_result.edited_content
+    section.citations = citations
+    await session.commit()
+
+    # Update blackboard
+    if blackboard:
+        try:
+            await update_blackboard(
+                blackboard, editor_result.blackboard_updates, session
+            )
+        except Exception as e:
+            logger.warning(
+                "Blackboard update failed for section %s: %s",
+                section_position,
+                e,
+            )
+
+    return {
+        "edited_content": editor_result.edited_content,
+        "blackboard_updates": {
+            "new_glossary_terms": editor_result.blackboard_updates.new_glossary_terms,
+            "new_concept_ownership": editor_result.blackboard_updates.new_concept_ownership,
+            "topics_covered": editor_result.blackboard_updates.topics_covered,
+            "key_points_summary": editor_result.blackboard_updates.key_points_summary,
+            "new_sources": editor_result.blackboard_updates.new_sources,
+        },
+    }

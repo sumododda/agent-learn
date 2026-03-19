@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import courses
+from app.routers import courses, internal
 
 app = FastAPI(title="agent-learn")
 
@@ -13,6 +13,7 @@ app.add_middleware(
 )
 
 app.include_router(courses.router, prefix="/api")
+app.include_router(internal.router, prefix="/api")
 
 
 @app.get("/api/health")

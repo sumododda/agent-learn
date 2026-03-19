@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .env
 backend/.env
+trigger/.env
 .venv/
 .mypy_cache/
 .pytest_cache/

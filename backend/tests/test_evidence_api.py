@@ -1,11 +1,13 @@
-"""Tests for Phase 8: Evidence, Blackboard, and Pipeline-Status API endpoints.
+"""Tests for Phase 8: Evidence and Blackboard API endpoints.
 
 Tests cover:
 - GET /api/courses/{id}/evidence — returns evidence cards, section filter
 - GET /api/courses/{id}/blackboard — returns blackboard state
-- GET /api/courses/{id}/pipeline-status — returns pipeline status from in-memory dict
 - Evidence card insertion and retrieval via API
 - Blackboard creation and retrieval via API
+
+Note: Pipeline-status endpoint tests were removed in Phase 4 (Milestone 3).
+Real-time progress is now delivered via Trigger.dev metadata.
 """
 
 import uuid
@@ -21,6 +23,7 @@ from sqlalchemy import event as sa_event
 from app.main import app
 from app.models import Base, Blackboard, Course, EvidenceCard, Section
 from app.database import get_session
+from app.auth import get_current_user
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +52,7 @@ async def evidence_db():
             yield session
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
     yield session_factory
 
     async with engine.begin() as conn:
@@ -317,66 +321,10 @@ async def test_get_blackboard_nonexistent_course(evidence_db, api_client):
 
 
 # ---------------------------------------------------------------------------
-# Tests: GET /api/courses/{id}/pipeline-status
+# Pipeline-status endpoint tests removed (Phase 4, Milestone 3)
+# Real-time progress is now delivered via Trigger.dev metadata and the
+# @trigger.dev/react-hooks useRealtimeRun hook.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_get_pipeline_status_none(evidence_db, api_client):
-    """GET /pipeline-status returns null when no pipeline is running."""
-    fake_id = "00000000-0000-0000-0000-000000000000"
-    response = await api_client.get(
-        f"/api/courses/{fake_id}/pipeline-status"
-    )
-    assert response.status_code == 200
-    assert response.json() is None
-
-
-@pytest.mark.anyio
-async def test_get_pipeline_status_active(evidence_db, api_client):
-    """GET /pipeline-status returns status when pipeline is active."""
-    from app.agent_service import update_pipeline_status, _pipeline_status
-
-    course_id = "00000000-0000-0000-0000-000000000099"
-    update_pipeline_status(course_id, 2, "writing")
-
-    response = await api_client.get(
-        f"/api/courses/{course_id}/pipeline-status"
-    )
-    assert response.status_code == 200
-    data = response.json()
-
-    assert data["stage"] == "writing"
-    assert data["current_section"] == 2
-    assert data["sections"]["2"] == "writing"
-    assert data["course_id"] == course_id
-
-    # Clean up
-    _pipeline_status.pop(course_id, None)
-
-
-@pytest.mark.anyio
-async def test_get_pipeline_status_multiple_sections(evidence_db, api_client):
-    """GET /pipeline-status tracks multiple sections."""
-    from app.agent_service import update_pipeline_status, _pipeline_status
-
-    course_id = "00000000-0000-0000-0000-000000000098"
-    update_pipeline_status(course_id, 1, "completed")
-    update_pipeline_status(course_id, 2, "writing")
-    update_pipeline_status(course_id, 3, "verifying")
-
-    response = await api_client.get(
-        f"/api/courses/{course_id}/pipeline-status"
-    )
-    data = response.json()
-
-    assert data["sections"]["1"] == "completed"
-    assert data["sections"]["2"] == "writing"
-    assert data["sections"]["3"] == "verifying"
-    assert data["current_section"] == 3  # last updated section
-    assert data["stage"] == "verifying"  # last updated stage
-
-    _pipeline_status.pop(course_id, None)
 
 
 # ---------------------------------------------------------------------------

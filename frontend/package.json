@@ -9,7 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@clerk/nextjs": "^6.12.0",
     "@tailwindcss/typography": "^0.5.19",
+    "@trigger.dev/react-hooks": "^3.3.14",
     "next": "16.1.7",
     "react": "19.2.3",
     "react-dom": "19.2.3",
