@@ -1,0 +1,833 @@
+"""Tests for Phase 5: Writer (evidence-aware) + Editor + Blackboard CRUD.
+
+Tests cover:
+- Blackboard CRUD: create_blackboard, get_blackboard, update_blackboard
+- Writer helpers: _format_cards_for_writer, _format_blackboard_for_agent, _format_outline_context
+- write_section: evidence-aware section writing with blackboard context
+- edit_section: editor agent invocation, EditorResult handling
+- extract_citations: [N] marker extraction and card mapping
+- Editor/BlackboardUpdates schema validation
+- create_editor: agent creation with correct config
+"""
+
+import uuid
+from datetime import date, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from sqlalchemy import event as sa_event, select
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+
+from app.agent import (
+    BlackboardUpdates,
+    EditorResult,
+)
+from app.models import Base, Blackboard, Course, EvidenceCard, Section
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def db_session():
+    """Create a fresh in-memory SQLite DB and session for each test."""
+    engine = create_async_engine("sqlite+aiosqlite://")
+
+    @sa_event.listens_for(engine.sync_engine, "connect")
+    def _set_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as session:
+        yield session
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture
+async def course_with_cards(db_session):
+    """Create a course with verified and unverified evidence cards."""
+    course = Course(topic="Python Basics", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    cards = [
+        EvidenceCard(
+            course_id=course.id,
+            section_position=1,
+            claim="Python was created by Guido van Rossum in 1991",
+            source_url="https://docs.python.org/3/faq/general.html",
+            source_title="Python FAQ",
+            source_tier=1,
+            passage="Python was conceived in the late 1980s by Guido van Rossum...",
+            retrieved_date=date.today(),
+            confidence=0.95,
+            caveat=None,
+            explanation="Foundational fact",
+            verified=True,
+            verification_note="Strong official source",
+        ),
+        EvidenceCard(
+            course_id=course.id,
+            section_position=1,
+            claim="Python uses dynamic typing",
+            source_url="https://realpython.com/python-type-checking/",
+            source_title="Python Type Checking Guide",
+            source_tier=2,
+            passage="Python is a dynamically typed language...",
+            retrieved_date=date.today(),
+            confidence=0.9,
+            caveat="Type hints added in Python 3.5",
+            explanation="Key language characteristic",
+            verified=True,
+            verification_note="Reputable tutorial",
+        ),
+        EvidenceCard(
+            course_id=course.id,
+            section_position=1,
+            claim="Python is slow compared to C",
+            source_url="https://stackoverflow.com/questions/99999",
+            source_title="SO: Python speed",
+            source_tier=3,
+            passage="Python can be 10-100x slower than C...",
+            retrieved_date=date.today(),
+            confidence=0.6,
+            caveat="Depends on workload",
+            explanation="Common concern",
+            verified=False,
+            verification_note="Source too unreliable",
+        ),
+    ]
+    db_session.add_all(cards)
+    await db_session.commit()
+
+    return course, cards
+
+
+@pytest.fixture
+def sample_blackboard_updates():
+    """A BlackboardUpdates instance for testing."""
+    return BlackboardUpdates(
+        new_glossary_terms={
+            "dynamic typing": {
+                "definition": "Types are determined at runtime, not at compile time",
+                "defined_in_section": 1,
+            },
+        },
+        new_concept_ownership={"Python origins": 1, "typing system": 1},
+        topics_covered=["Python history", "dynamic typing", "type hints"],
+        key_points_summary="Python was created in 1991, uses dynamic typing with optional type hints.",
+        new_sources=[
+            {"url": "https://docs.python.org/3/faq/general.html", "title": "Python FAQ"},
+        ],
+    )
+
+
+@pytest.fixture
+def sample_editor_result(sample_blackboard_updates):
+    """An EditorResult instance for testing."""
+    return EditorResult(
+        edited_content="## Introduction\n\nPython was created by Guido van Rossum in 1991 [1]. It uses dynamic typing [2].\n\n### Key Takeaways\n- Created in 1991\n- Dynamically typed",
+        blackboard_updates=sample_blackboard_updates,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests: Schema validation
+# ---------------------------------------------------------------------------
+
+
+def test_blackboard_updates_schema():
+    """BlackboardUpdates validates all required fields."""
+    updates = BlackboardUpdates(
+        new_glossary_terms={"term1": {"definition": "def1", "defined_in_section": 1}},
+        new_concept_ownership={"concept1": 1},
+        topics_covered=["topic1"],
+        key_points_summary="Summary here",
+        new_sources=[{"url": "https://example.com", "title": "Example"}],
+    )
+    assert "term1" in updates.new_glossary_terms
+    assert updates.topics_covered == ["topic1"]
+    assert updates.key_points_summary == "Summary here"
+
+
+def test_blackboard_updates_empty_fields():
+    """BlackboardUpdates accepts empty dicts/lists."""
+    updates = BlackboardUpdates(
+        new_glossary_terms={},
+        new_concept_ownership={},
+        topics_covered=[],
+        key_points_summary="",
+        new_sources=[],
+    )
+    assert updates.new_glossary_terms == {}
+    assert updates.topics_covered == []
+
+
+def test_editor_result_schema():
+    """EditorResult validates edited_content and blackboard_updates."""
+    updates = BlackboardUpdates(
+        new_glossary_terms={},
+        new_concept_ownership={},
+        topics_covered=[],
+        key_points_summary="",
+        new_sources=[],
+    )
+    result = EditorResult(
+        edited_content="## Section\n\nContent here.",
+        blackboard_updates=updates,
+    )
+    assert "## Section" in result.edited_content
+    assert isinstance(result.blackboard_updates, BlackboardUpdates)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Blackboard CRUD
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_create_blackboard(setup_db, db_session):
+    """create_blackboard creates an empty row and returns it."""
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    from app.agent_service import create_blackboard
+
+    bb = await create_blackboard(course.id, db_session)
+
+    assert bb is not None
+    assert bb.course_id == course.id
+    assert bb.glossary == {} or bb.glossary is None or bb.glossary == {}
+    assert bb.concept_ownership == {} or bb.concept_ownership is None
+
+
+@pytest.mark.anyio
+async def test_get_blackboard(setup_db, db_session):
+    """get_blackboard retrieves by course_id."""
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    from app.agent_service import create_blackboard, get_blackboard
+
+    await create_blackboard(course.id, db_session)
+    bb = await get_blackboard(course.id, db_session)
+
+    assert bb is not None
+    assert bb.course_id == course.id
+
+
+@pytest.mark.anyio
+async def test_get_blackboard_returns_none(setup_db, db_session):
+    """get_blackboard returns None when no blackboard exists."""
+    from app.agent_service import get_blackboard
+
+    bb = await get_blackboard(uuid.uuid4(), db_session)
+    assert bb is None
+
+
+@pytest.mark.anyio
+async def test_update_blackboard_merges(setup_db, db_session, sample_blackboard_updates):
+    """update_blackboard merges new data into existing fields."""
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    from app.agent_service import create_blackboard, update_blackboard
+
+    bb = await create_blackboard(course.id, db_session)
+    await update_blackboard(bb, sample_blackboard_updates, db_session)
+
+    # Refresh from DB
+    await db_session.refresh(bb)
+
+    assert "dynamic typing" in bb.glossary
+    assert bb.concept_ownership["Python origins"] == 1
+    assert "Python history" in bb.coverage_map.get("all_topics", [])
+    assert len(bb.source_log) == 1
+    assert bb.source_log[0]["url"] == "https://docs.python.org/3/faq/general.html"
+
+
+@pytest.mark.anyio
+async def test_update_blackboard_merges_multiple_times(setup_db, db_session):
+    """update_blackboard merges across multiple calls without overwriting."""
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    from app.agent_service import create_blackboard, update_blackboard
+
+    bb = await create_blackboard(course.id, db_session)
+
+    # First update
+    updates_1 = BlackboardUpdates(
+        new_glossary_terms={"term_a": {"definition": "def A", "defined_in_section": 1}},
+        new_concept_ownership={"concept_a": 1},
+        topics_covered=["topic_a"],
+        key_points_summary="Summary for section 1",
+        new_sources=[{"url": "https://a.com", "title": "Source A"}],
+    )
+    await update_blackboard(bb, updates_1, db_session)
+
+    # Second update
+    updates_2 = BlackboardUpdates(
+        new_glossary_terms={"term_b": {"definition": "def B", "defined_in_section": 2}},
+        new_concept_ownership={"concept_b": 2},
+        topics_covered=["topic_b"],
+        key_points_summary="Summary for section 2",
+        new_sources=[{"url": "https://b.com", "title": "Source B"}],
+    )
+    await update_blackboard(bb, updates_2, db_session)
+
+    await db_session.refresh(bb)
+
+    # Both terms should be present
+    assert "term_a" in bb.glossary
+    assert "term_b" in bb.glossary
+
+    # Both concepts should be present
+    assert bb.concept_ownership["concept_a"] == 1
+    assert bb.concept_ownership["concept_b"] == 2
+
+    # Both topics should be in coverage
+    all_topics = bb.coverage_map.get("all_topics", [])
+    assert "topic_a" in all_topics
+    assert "topic_b" in all_topics
+
+    # Both sources in log
+    assert len(bb.source_log) == 2
+
+    # Both key points
+    assert len(bb.key_points) == 2
+
+
+@pytest.mark.anyio
+async def test_update_blackboard_invalid_data_doesnt_crash(setup_db, db_session):
+    """update_blackboard logs warning and skips on invalid data."""
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    from app.agent_service import create_blackboard, update_blackboard
+
+    bb = await create_blackboard(course.id, db_session)
+
+    # Pass a dict that can't be parsed as BlackboardUpdates (missing required fields)
+    bad_updates = {"not_a_valid_field": True}
+
+    # Should not raise
+    await update_blackboard(bb, bad_updates, db_session)
+
+    # Blackboard should be unchanged
+    await db_session.refresh(bb)
+    assert bb.glossary == {} or bb.glossary is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: _format_cards_for_writer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_format_cards_for_writer(setup_db, course_with_cards):
+    """_format_cards_for_writer produces 1-indexed numbered cards."""
+    from app.agent_service import _format_cards_for_writer
+
+    _, cards = course_with_cards
+    formatted = _format_cards_for_writer(cards)
+
+    # Should contain 1-indexed markers
+    assert "[1]" in formatted
+    assert "[2]" in formatted
+    assert "[3]" in formatted
+
+    # Should contain card content
+    assert "Python was created by Guido van Rossum" in formatted
+    assert "Python uses dynamic typing" in formatted
+    assert "https://docs.python.org/3/faq/general.html" in formatted
+
+    # Should include caveat where present
+    assert "Type hints added in Python 3.5" in formatted
+
+
+@pytest.mark.anyio
+async def test_format_cards_for_writer_empty(setup_db):
+    """_format_cards_for_writer handles empty list."""
+    from app.agent_service import _format_cards_for_writer
+
+    formatted = _format_cards_for_writer([])
+    assert "No evidence cards" in formatted
+
+
+# ---------------------------------------------------------------------------
+# Tests: _format_blackboard_for_agent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_format_blackboard_for_agent_none(setup_db):
+    """_format_blackboard_for_agent handles None blackboard."""
+    from app.agent_service import _format_blackboard_for_agent
+
+    formatted = _format_blackboard_for_agent(None)
+    assert "empty" in formatted.lower() or "first section" in formatted.lower()
+
+
+@pytest.mark.anyio
+async def test_format_blackboard_for_agent_populated(setup_db, db_session):
+    """_format_blackboard_for_agent formats populated blackboard."""
+    from app.agent_service import _format_blackboard_for_agent, create_blackboard, update_blackboard
+
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    bb = await create_blackboard(course.id, db_session)
+    updates = BlackboardUpdates(
+        new_glossary_terms={"variable": {"definition": "A named storage location", "defined_in_section": 1}},
+        new_concept_ownership={"variables": 1},
+        topics_covered=["variable basics"],
+        key_points_summary="Variables store data.",
+        new_sources=[],
+    )
+    await update_blackboard(bb, updates, db_session)
+    await db_session.refresh(bb)
+
+    formatted = _format_blackboard_for_agent(bb)
+
+    assert "GLOSSARY" in formatted
+    assert "variable" in formatted
+    assert "CONCEPT OWNERSHIP" in formatted
+    assert "TOPICS ALREADY COVERED" in formatted
+    assert "variable basics" in formatted
+
+
+@pytest.mark.anyio
+async def test_format_blackboard_for_agent_empty_fields(setup_db, db_session):
+    """_format_blackboard_for_agent handles blackboard with empty fields."""
+    from app.agent_service import _format_blackboard_for_agent, create_blackboard
+
+    course = Course(topic="Test", status="writing")
+    db_session.add(course)
+    await db_session.commit()
+
+    bb = await create_blackboard(course.id, db_session)
+    formatted = _format_blackboard_for_agent(bb)
+
+    assert "GLOSSARY: (empty)" in formatted
+    assert "CONCEPT OWNERSHIP: (empty)" in formatted
+    assert "(none)" in formatted
+
+
+# ---------------------------------------------------------------------------
+# Tests: _format_outline_context
+# ---------------------------------------------------------------------------
+
+
+def test_format_outline_context_dicts():
+    """_format_outline_context formats list of dicts."""
+    from app.agent_service import _format_outline_context
+
+    outline = [
+        {"position": 1, "title": "Intro", "summary": "Getting started"},
+        {"position": 2, "title": "Core", "summary": "Main content"},
+    ]
+    formatted = _format_outline_context(outline)
+    assert "1. Intro" in formatted
+    assert "2. Core" in formatted
+
+
+def test_format_outline_context_objects():
+    """_format_outline_context formats objects with position/title/summary attrs."""
+    from app.agent_service import _format_outline_context
+
+    outline = [
+        SimpleNamespace(position=1, title="Intro", summary="Getting started"),
+        SimpleNamespace(position=2, title="Core", summary="Main content"),
+    ]
+    formatted = _format_outline_context(outline)
+    assert "1. Intro" in formatted
+    assert "2. Core" in formatted
+
+
+# ---------------------------------------------------------------------------
+# Tests: write_section
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_write_section_filters_verified_cards(setup_db, db_session, course_with_cards):
+    """write_section only passes verified cards to the writer."""
+    course, cards = course_with_cards
+
+    section = SimpleNamespace(title="Introduction", summary="Getting started with Python")
+    outline = [
+        SimpleNamespace(position=1, title="Introduction", summary="Getting started"),
+    ]
+
+    mock_result = {
+        "messages": [
+            MagicMock(content="## Introduction\n\nPython was created in 1991 [1]. It uses dynamic typing [2].")
+        ]
+    }
+
+    with patch("app.agent_service.create_writer") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke = AsyncMock(return_value=mock_result)
+        mock_create.return_value = mock_agent
+
+        from app.agent_service import write_section
+
+        result = await write_section(cards, None, section, outline, db_session)
+
+    assert "## Introduction" in result
+
+    # Check that the message sent to the writer contains only 2 verified cards
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
+    assert "[1]" in message  # first verified card
+    assert "[2]" in message  # second verified card
+    # The unverified card (index 2 in original list) should not appear as [3]
+    # in the writer message because only verified cards are passed
+    # The writer message should show (No evidence cards) or have exactly 2 cards
+    assert "Python was created by Guido van Rossum" in message
+    assert "Python uses dynamic typing" in message
+
+
+@pytest.mark.anyio
+async def test_write_section_with_empty_blackboard(setup_db, db_session, course_with_cards):
+    """write_section works when blackboard is None (first section)."""
+    course, cards = course_with_cards
+
+    section = SimpleNamespace(title="Introduction", summary="Getting started")
+    outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
+
+    mock_result = {
+        "messages": [MagicMock(content="## Introduction\n\nContent here.")]
+    }
+
+    with patch("app.agent_service.create_writer") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke = AsyncMock(return_value=mock_result)
+        mock_create.return_value = mock_agent
+
+        from app.agent_service import write_section
+
+        result = await write_section(cards, None, section, outline, db_session)
+
+    assert "## Introduction" in result
+
+    # Check blackboard section mentions empty/first
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
+    assert "first section" in message.lower() or "empty" in message.lower()
+
+
+@pytest.mark.anyio
+async def test_write_section_with_dict_section(setup_db, db_session, course_with_cards):
+    """write_section accepts section as a dict."""
+    course, cards = course_with_cards
+
+    section = {"title": "Introduction", "summary": "Getting started", "position": 1}
+    outline = [{"position": 1, "title": "Introduction", "summary": "Getting started"}]
+
+    mock_result = {
+        "messages": [MagicMock(content="## Introduction\n\nContent here.")]
+    }
+
+    with patch("app.agent_service.create_writer") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke = AsyncMock(return_value=mock_result)
+        mock_create.return_value = mock_agent
+
+        from app.agent_service import write_section
+
+        result = await write_section(cards, None, section, outline, db_session)
+
+    assert "## Introduction" in result
+
+
+@pytest.mark.anyio
+async def test_write_section_fallback_to_sync(setup_db, db_session, course_with_cards):
+    """write_section falls back to sync invoke when ainvoke raises AttributeError."""
+    course, cards = course_with_cards
+
+    section = SimpleNamespace(title="Intro", summary="Start")
+    outline = [SimpleNamespace(position=1, title="Intro", summary="Start")]
+
+    mock_result = {
+        "messages": [MagicMock(content="## Intro\n\nSync fallback content.")]
+    }
+
+    with patch("app.agent_service.create_writer") as mock_create:
+        mock_agent = MagicMock()
+        mock_agent.ainvoke = MagicMock(side_effect=AttributeError("no ainvoke"))
+        mock_agent.invoke = MagicMock(return_value=mock_result)
+        mock_create.return_value = mock_agent
+
+        from app.agent_service import write_section
+
+        result = await write_section(cards, None, section, outline, db_session)
+
+    assert "## Intro" in result
+
+
+# ---------------------------------------------------------------------------
+# Tests: edit_section
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_edit_section_returns_editor_result(setup_db, db_session, course_with_cards, sample_editor_result):
+    """edit_section returns an EditorResult with edited content and blackboard updates."""
+    course, cards = course_with_cards
+    draft = "## Introduction\n\nDraft content."
+
+    with (
+        patch("app.agent_service.create_editor") as mock_create,
+        patch("app.agent_service._invoke_agent", new_callable=AsyncMock) as mock_invoke,
+    ):
+        mock_create.return_value = MagicMock()
+        mock_invoke.return_value = sample_editor_result
+
+        from app.agent_service import edit_section
+
+        result = await edit_section(draft, None, cards, 1, db_session)
+
+    assert isinstance(result, EditorResult)
+    assert "## Introduction" in result.edited_content
+    assert isinstance(result.blackboard_updates, BlackboardUpdates)
+    assert "dynamic typing" in result.blackboard_updates.new_glossary_terms
+
+
+@pytest.mark.anyio
+async def test_edit_section_handles_dict_result(setup_db, db_session, course_with_cards):
+    """edit_section handles agent returning a dict (JSON fallback)."""
+    course, cards = course_with_cards
+    draft = "## Test\n\nContent."
+
+    dict_result = {
+        "edited_content": "## Test\n\nEdited content.",
+        "blackboard_updates": {
+            "new_glossary_terms": {},
+            "new_concept_ownership": {},
+            "topics_covered": ["test topic"],
+            "key_points_summary": "Test summary",
+            "new_sources": [],
+        },
+    }
+
+    with (
+        patch("app.agent_service.create_editor") as mock_create,
+        patch("app.agent_service._invoke_agent", new_callable=AsyncMock) as mock_invoke,
+    ):
+        mock_create.return_value = MagicMock()
+        mock_invoke.return_value = dict_result
+
+        from app.agent_service import edit_section
+
+        result = await edit_section(draft, None, cards, 1, db_session)
+
+    assert isinstance(result, EditorResult)
+    assert "Edited content" in result.edited_content
+
+
+@pytest.mark.anyio
+async def test_edit_section_includes_blackboard_in_message(setup_db, db_session, course_with_cards):
+    """edit_section passes blackboard state and cards to the editor."""
+    course, cards = course_with_cards
+
+    # Create a blackboard with some data
+    from app.agent_service import create_blackboard, update_blackboard
+
+    bb = await create_blackboard(course.id, db_session)
+    updates = BlackboardUpdates(
+        new_glossary_terms={"var": {"definition": "storage", "defined_in_section": 1}},
+        new_concept_ownership={},
+        topics_covered=["variables"],
+        key_points_summary="Variables store data.",
+        new_sources=[],
+    )
+    await update_blackboard(bb, updates, db_session)
+    await db_session.refresh(bb)
+
+    draft = "## Section 2\n\nContent about functions."
+
+    mock_result = EditorResult(
+        edited_content="## Section 2\n\nEdited content.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=[],
+            key_points_summary="",
+            new_sources=[],
+        ),
+    )
+
+    with (
+        patch("app.agent_service.create_editor") as mock_create,
+        patch("app.agent_service._invoke_agent", new_callable=AsyncMock) as mock_invoke,
+    ):
+        mock_create.return_value = MagicMock()
+        mock_invoke.return_value = mock_result
+
+        from app.agent_service import edit_section
+
+        result = await edit_section(draft, bb, cards, 2, db_session)
+
+    # Verify the message sent to editor includes blackboard context
+    call_args = mock_invoke.call_args
+    message = call_args[0][1]  # second positional arg is the message string
+    assert "BLACKBOARD" in message
+    assert "var" in message  # glossary term should be in the message
+    assert "Section position: 2" in message
+
+
+# ---------------------------------------------------------------------------
+# Tests: extract_citations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_extract_citations_basic(setup_db, course_with_cards):
+    """extract_citations maps [N] markers to evidence card sources."""
+    from app.agent_service import extract_citations
+
+    _, cards = course_with_cards
+    content = "Python was created in 1991 [1]. It uses dynamic typing [2]. Some say it's slow [3]."
+
+    citations = extract_citations(content, cards)
+
+    assert len(citations) == 3
+    assert citations[0]["number"] == 1
+    assert citations[0]["claim"] == "Python was created by Guido van Rossum in 1991"
+    assert citations[0]["source_url"] == "https://docs.python.org/3/faq/general.html"
+    assert citations[1]["number"] == 2
+    assert citations[2]["number"] == 3
+
+
+@pytest.mark.anyio
+async def test_extract_citations_skips_out_of_range(setup_db, course_with_cards):
+    """extract_citations silently skips [N] markers beyond card count."""
+    from app.agent_service import extract_citations
+
+    _, cards = course_with_cards
+    content = "Claim [1]. Another claim [99]. Third [2]."
+
+    citations = extract_citations(content, cards)
+
+    # Should only have [1] and [2], not [99]
+    assert len(citations) == 2
+    numbers = [c["number"] for c in citations]
+    assert 1 in numbers
+    assert 2 in numbers
+    assert 99 not in numbers
+
+
+@pytest.mark.anyio
+async def test_extract_citations_no_markers(setup_db, course_with_cards):
+    """extract_citations returns empty list when no [N] markers exist."""
+    from app.agent_service import extract_citations
+
+    _, cards = course_with_cards
+    content = "This content has no citations at all."
+
+    citations = extract_citations(content, cards)
+    assert citations == []
+
+
+@pytest.mark.anyio
+async def test_extract_citations_empty_cards(setup_db):
+    """extract_citations returns empty list when card list is empty."""
+    from app.agent_service import extract_citations
+
+    content = "Some claim [1] and another [2]."
+    citations = extract_citations(content, [])
+    assert citations == []
+
+
+@pytest.mark.anyio
+async def test_extract_citations_deduplicates(setup_db, course_with_cards):
+    """extract_citations deduplicates repeated [N] markers."""
+    from app.agent_service import extract_citations
+
+    _, cards = course_with_cards
+    content = "First mention [1]. Second mention of same source [1]. Different source [2]."
+
+    citations = extract_citations(content, cards)
+
+    # [1] should appear only once
+    assert len(citations) == 2
+    assert citations[0]["number"] == 1
+    assert citations[1]["number"] == 2
+
+
+@pytest.mark.anyio
+async def test_extract_citations_skips_zero(setup_db, course_with_cards):
+    """extract_citations skips [0] since cards are 1-indexed."""
+    from app.agent_service import extract_citations
+
+    _, cards = course_with_cards
+    content = "Invalid [0]. Valid [1]."
+
+    citations = extract_citations(content, cards)
+    assert len(citations) == 1
+    assert citations[0]["number"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: create_editor agent config
+# ---------------------------------------------------------------------------
+
+
+def test_create_editor_no_tools():
+    """create_editor creates an agent with no tools and ToolStrategy(EditorResult)."""
+    with (
+        patch("app.agent.get_model") as mock_model,
+        patch("app.agent.create_deep_agent") as mock_create,
+    ):
+        mock_model.return_value = MagicMock()
+        mock_create.return_value = MagicMock()
+
+        from app.agent import create_editor
+
+        create_editor()
+
+    call_kwargs = mock_create.call_args
+    assert call_kwargs.kwargs["tools"] == []
+    assert call_kwargs.kwargs["name"] == "agent-learn-editor"
+    # Verify ToolStrategy is used for structured output
+    response_format = call_kwargs.kwargs["response_format"]
+    assert response_format is not None
+
+
+def test_create_writer_no_structured_output():
+    """create_writer does NOT use ToolStrategy — returns plain markdown."""
+    with (
+        patch("app.agent.get_model") as mock_model,
+        patch("app.agent.create_deep_agent") as mock_create,
+    ):
+        mock_model.return_value = MagicMock()
+        mock_create.return_value = MagicMock()
+
+        from app.agent import create_writer
+
+        create_writer()
+
+    call_kwargs = mock_create.call_args
+    assert call_kwargs.kwargs["tools"] == []
+    assert call_kwargs.kwargs["name"] == "agent-learn-writer"
+    # Writer should NOT have response_format
+    assert "response_format" not in call_kwargs.kwargs

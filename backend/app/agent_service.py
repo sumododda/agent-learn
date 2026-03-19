@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import date
 from typing import Sequence
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent import (
     create_planner,
     create_writer,
+    create_editor,
     create_discovery_researcher,
     create_section_researcher,
     create_verifier,
@@ -21,9 +23,11 @@ from app.agent import (
     EvidenceCardItem,
     EvidenceCardSet,
     VerificationResult,
+    BlackboardUpdates,
+    EditorResult,
 )
 from app.config import settings
-from app.models import EvidenceCard, ResearchBrief
+from app.models import Blackboard, EvidenceCard, ResearchBrief, Section
 
 # json still used by generate_outline fallback
 
@@ -557,3 +561,299 @@ async def research_section_targeted(gaps: list[str]) -> list[EvidenceCardItem]:
         raise ValueError(
             f"Section researcher returned unexpected type: {type(result)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Blackboard CRUD
+# ---------------------------------------------------------------------------
+
+
+async def create_blackboard(course_id, session: AsyncSession) -> Blackboard:
+    """Create an empty Blackboard row for a course and return it."""
+    bb = Blackboard(course_id=course_id)
+    session.add(bb)
+    await session.commit()
+    await session.refresh(bb)
+    logger.info("Created blackboard for course %s", course_id)
+    return bb
+
+
+async def get_blackboard(course_id, session: AsyncSession) -> Blackboard | None:
+    """Query Blackboard by course_id. Returns None if not found."""
+    result = await session.execute(
+        select(Blackboard).where(Blackboard.course_id == course_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_blackboard(
+    blackboard: Blackboard, updates: BlackboardUpdates, session: AsyncSession
+) -> None:
+    """Merge BlackboardUpdates into existing Blackboard JSON fields.
+
+    Uses dict.update() for glossary and concept_ownership so prior
+    sections' data is preserved.  If validation fails, logs a warning
+    and skips — never crashes the pipeline.
+    """
+    try:
+        # Validate updates is the right type
+        if isinstance(updates, dict):
+            updates = BlackboardUpdates(**updates)
+
+        # Merge glossary
+        glossary = dict(blackboard.glossary or {})
+        glossary.update(updates.new_glossary_terms or {})
+        blackboard.glossary = glossary
+
+        # Merge concept ownership
+        ownership = dict(blackboard.concept_ownership or {})
+        ownership.update(updates.new_concept_ownership or {})
+        blackboard.concept_ownership = ownership
+
+        # Merge coverage map — topics_covered keyed by a running list
+        coverage = dict(blackboard.coverage_map or {})
+        if updates.topics_covered:
+            # Always copy the list to avoid SQLAlchemy JSON tracking issues
+            existing_topics = list(coverage.get("all_topics", []))
+            existing_topics.extend(updates.topics_covered)
+            coverage["all_topics"] = existing_topics
+        blackboard.coverage_map = coverage
+
+        # Merge key points
+        key_points = dict(blackboard.key_points or {})
+        if updates.key_points_summary:
+            # Store under a generic key; pipeline can pass section_position
+            # but BlackboardUpdates doesn't carry it — just append
+            count = len(key_points)
+            key_points[str(count)] = updates.key_points_summary
+        blackboard.key_points = key_points
+
+        # Append new sources to source log
+        source_log = list(blackboard.source_log or [])
+        source_log.extend(updates.new_sources or [])
+        blackboard.source_log = source_log
+
+        await session.commit()
+        logger.info("Blackboard updated for course %s", blackboard.course_id)
+
+    except Exception as e:
+        logger.warning(
+            "Blackboard update failed (skipping, not crashing): %s", e
+        )
+        await session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Writer service (evidence-aware)
+# ---------------------------------------------------------------------------
+
+
+def _format_cards_for_writer(cards: list[EvidenceCard]) -> str:
+    """Format evidence cards as a numbered list for the writer.
+
+    Cards are 1-indexed to match the [N] citation markers the writer uses.
+    """
+    if not cards:
+        return "(No evidence cards available for this section.)"
+    lines = []
+    for i, card in enumerate(cards, start=1):
+        caveat_str = f"\n  Caveat: {card.caveat}" if card.caveat else ""
+        lines.append(
+            f"[{i}] {card.claim}\n"
+            f"  Source: {card.source_title} ({card.source_url})\n"
+            f"  Passage: {card.passage}\n"
+            f"  Confidence: {card.confidence}\n"
+            f"  Tier: {card.source_tier}"
+            f"{caveat_str}"
+        )
+    return "\n\n".join(lines)
+
+
+def _format_blackboard_for_agent(blackboard: Blackboard | None) -> str:
+    """Format blackboard state as a human-readable string for writer/editor."""
+    if blackboard is None:
+        return "(Blackboard is empty — this is the first section.)"
+
+    parts = []
+
+    glossary = blackboard.glossary or {}
+    if glossary:
+        terms = []
+        for term, info in glossary.items():
+            if isinstance(info, dict):
+                defn = info.get("definition", "")
+                sec = info.get("defined_in_section", "?")
+                terms.append(f"  - {term}: {defn} (defined in section {sec})")
+            else:
+                terms.append(f"  - {term}: {info}")
+        parts.append("GLOSSARY:\n" + "\n".join(terms))
+    else:
+        parts.append("GLOSSARY: (empty)")
+
+    ownership = blackboard.concept_ownership or {}
+    if ownership:
+        items = [f"  - {concept}: section {pos}" for concept, pos in ownership.items()]
+        parts.append("CONCEPT OWNERSHIP:\n" + "\n".join(items))
+    else:
+        parts.append("CONCEPT OWNERSHIP: (empty)")
+
+    coverage = blackboard.coverage_map or {}
+    all_topics = coverage.get("all_topics", [])
+    if all_topics:
+        parts.append("TOPICS ALREADY COVERED:\n  - " + "\n  - ".join(all_topics))
+    else:
+        parts.append("TOPICS ALREADY COVERED: (none)")
+
+    key_points = blackboard.key_points or {}
+    if key_points:
+        items = [f"  - {v}" for v in key_points.values()]
+        parts.append("KEY POINTS FROM PRIOR SECTIONS:\n" + "\n".join(items))
+
+    return "\n\n".join(parts)
+
+
+def _format_outline_context(outline: Sequence) -> str:
+    """Format the full outline as a numbered list for context."""
+    lines = []
+    for s in outline:
+        if isinstance(s, dict):
+            lines.append(f"{s['position']}. {s['title']} — {s['summary']}")
+        else:
+            # Section ORM object or similar
+            lines.append(f"{s.position}. {s.title} — {s.summary}")
+    return "\n".join(lines)
+
+
+async def write_section(
+    cards: list[EvidenceCard],
+    blackboard: Blackboard | None,
+    section,
+    outline: Sequence,
+    session: AsyncSession,
+) -> str:
+    """Invoke the writer agent to generate a single section with evidence.
+
+    1. Filter to verified cards only
+    2. Build message with section info, outline context, evidence cards, blackboard
+    3. Invoke writer (plain markdown output, NOT structured)
+    4. Return draft markdown string
+    """
+    writer = create_writer()
+
+    # Filter to verified cards only
+    verified_cards = [c for c in cards if c.verified]
+
+    # Build the section info
+    if isinstance(section, dict):
+        sec_title = section["title"]
+        sec_summary = section["summary"]
+    else:
+        sec_title = section.title
+        sec_summary = section.summary
+
+    # Build the message
+    outline_text = _format_outline_context(outline)
+    cards_text = _format_cards_for_writer(verified_cards)
+    blackboard_text = _format_blackboard_for_agent(blackboard)
+
+    message = (
+        f"Write the lesson content for this section:\n\n"
+        f"Section title: {sec_title}\n"
+        f"Section summary: {sec_summary}\n\n"
+        f"--- FULL COURSE OUTLINE (for context) ---\n{outline_text}\n\n"
+        f"--- VERIFIED EVIDENCE CARDS ---\n{cards_text}\n\n"
+        f"--- BLACKBOARD (shared course knowledge) ---\n{blackboard_text}\n\n"
+        f"Write the section now. Start with ## {sec_title}"
+    )
+
+    # Invoke writer — returns plain markdown, NOT structured output
+    try:
+        result = await writer.ainvoke(
+            {"messages": [{"role": "user", "content": message}]}
+        )
+    except AttributeError:
+        result = await asyncio.to_thread(
+            writer.invoke,
+            {"messages": [{"role": "user", "content": message}]},
+        )
+
+    # Extract markdown from the last message
+    last_message = result["messages"][-1]
+    content = (
+        last_message.content
+        if hasattr(last_message, "content")
+        else str(last_message)
+    )
+
+    logger.info("Writer produced draft for section '%s'", sec_title)
+    return content
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Editor service
+# ---------------------------------------------------------------------------
+
+
+async def edit_section(
+    draft: str,
+    blackboard: Blackboard | None,
+    cards: list[EvidenceCard],
+    section_position: int,
+    session: AsyncSession,
+) -> EditorResult:
+    """Invoke the editor agent to polish a draft and generate blackboard updates.
+
+    1. Build message with draft, blackboard state, evidence cards, section position
+    2. Invoke editor (structured output via ToolStrategy)
+    3. Return EditorResult
+    """
+    editor = create_editor()
+
+    cards_text = _format_cards_for_writer(cards)
+    blackboard_text = _format_blackboard_for_agent(blackboard)
+
+    message = (
+        f"Edit the following draft for section {section_position}.\n\n"
+        f"--- DRAFT ---\n{draft}\n\n"
+        f"--- BLACKBOARD (shared course knowledge) ---\n{blackboard_text}\n\n"
+        f"--- EVIDENCE CARDS ---\n{cards_text}\n\n"
+        f"Section position: {section_position}\n\n"
+        f"Polish the draft, check citations, and generate blackboard updates."
+    )
+
+    result = await _invoke_agent(editor, message)
+
+    # Ensure we have an EditorResult
+    if isinstance(result, EditorResult):
+        return result
+    elif isinstance(result, dict):
+        return EditorResult(**result)
+    else:
+        raise ValueError(f"Editor returned unexpected type: {type(result)}")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Citation extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_citations(
+    content: str, cards: list[EvidenceCard]
+) -> list[dict]:
+    """Map [N] markers in content to evidence card source info.
+
+    Returns a list of citation dicts: {number, claim, source_url, source_title}.
+    Cards are 1-indexed. Out-of-range markers are silently skipped.
+    """
+    citation_numbers = set(int(n) for n in re.findall(r"\[(\d+)\]", content))
+    citations = []
+    for n in sorted(citation_numbers):
+        if 1 <= n <= len(cards):
+            card = cards[n - 1]  # 1-indexed
+            citations.append({
+                "number": n,
+                "claim": card.claim,
+                "source_url": card.source_url,
+                "source_title": card.source_title,
+            })
+    return citations
