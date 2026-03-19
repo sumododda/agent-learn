@@ -84,7 +84,7 @@ export default function LibraryPage() {
                       )}
                     </div>
                     <div className="text-gray-500 text-sm">
-                      {course.sections.length} sections
+                      {(course.sections || []).length} sections
                     </div>
                   </div>
                   <span className={`text-sm ${status.color}`}>{status.text}</span>

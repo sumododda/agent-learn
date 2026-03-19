@@ -75,7 +75,7 @@ export default function LearnPage() {
   if (error) return <div className="text-center text-red-400 mt-20">{error}</div>;
   if (!course) return <div className="text-center text-gray-400 mt-20">Course not found</div>;
 
-  const sections = course.sections.sort((a: Section, b: Section) => a.position - b.position);
+  const sections = (course.sections || []).sort((a: Section, b: Section) => a.position - b.position);
   const sectionsWithContent = sections.filter((s) => s.content);
   const currentSection = sections[currentIndex];
 
