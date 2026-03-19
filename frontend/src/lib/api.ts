@@ -1,4 +1,4 @@
-import { Course } from './types';
+import { Course, GenerateResponse } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -15,7 +15,7 @@ export async function createCourse(topic: string, instructions?: string): Promis
   return res.json();
 }
 
-export async function generateCourse(id: string): Promise<Course> {
+export async function generateCourse(id: string): Promise<GenerateResponse> {
   const res = await fetch(`${API_BASE}/api/courses/${id}/generate`, {
     method: 'POST',
   });

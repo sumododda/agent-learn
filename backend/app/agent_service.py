@@ -34,7 +34,16 @@ from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pipeline status tracking (in-memory, not persisted to DB)
+# Pipeline status tracking (legacy — kept for backward compat with tests)
+# ---------------------------------------------------------------------------
+# Real-time progress is now delivered via Trigger.dev metadata (set from
+# the generate-course task) and consumed by the frontend using the
+# @trigger.dev/react-hooks useRealtimeRun hook.
+#
+# _pipeline_status, update_pipeline_status, and get_pipeline_status are
+# retained so that generate_lessons() (still used by internal API & tests)
+# continues to work. The dict is populated during generate_lessons() runs
+# but is no longer served to the frontend via any polling endpoint.
 # ---------------------------------------------------------------------------
 
 _pipeline_status: dict[str, dict] = {}
@@ -43,7 +52,7 @@ _pipeline_status: dict[str, dict] = {}
 def update_pipeline_status(
     course_id: str, section: int | None, stage: str
 ) -> None:
-    """Update the in-memory pipeline status for a course."""
+    """Update the in-memory pipeline status for a course (legacy)."""
     if course_id not in _pipeline_status:
         _pipeline_status[course_id] = {
             "stage": stage,
@@ -57,7 +66,7 @@ def update_pipeline_status(
 
 
 def get_pipeline_status(course_id: str) -> dict | None:
-    """Return current pipeline status for a course, or None."""
+    """Return current pipeline status for a course, or None (legacy)."""
     return _pipeline_status.get(course_id)
 
 

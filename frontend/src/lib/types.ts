@@ -13,3 +13,16 @@ export interface Course {
   status: string;
   sections: Section[];
 }
+
+export interface GenerateResponse {
+  id: string;
+  status: string;
+  sections: Section[];
+  run_id: string | null;
+}
+
+export interface PipelineMetadata {
+  stage: string;
+  current_section: number | null;
+  sections: Record<number, string>;
+}

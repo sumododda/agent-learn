@@ -60,6 +60,7 @@ class GenerateResponse(BaseModel):
     id: UUID
     status: str
     sections: list[SectionFull]
+    run_id: str | None = None
 
 
 class EvidenceCardResponse(BaseModel):
