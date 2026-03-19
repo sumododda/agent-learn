@@ -109,7 +109,7 @@ New stateless endpoints that Trigger.dev tasks call. Each reads from DB, does LL
 |---|---|---|---|
 | `POST /api/internal/discover-and-plan` | `{course_id}` | `{sections, research_briefs}` | `run_discovery_research()` + `run_planner()` |
 | `POST /api/internal/research-section` | `{course_id, section_position}` | `{evidence_cards[]}` | `research_section()` |
-| `POST /api/internal/verify-section` | `{course_id, section_position}` | `{verification_result}` | `verify_section()` |
+| `POST /api/internal/verify-section` | `{course_id, section_position}` | `{verification_result}` | `verify_evidence()` |
 | `POST /api/internal/write-section` | `{course_id, section_position}` | `{content, citations}` | `write_section()` |
 | `POST /api/internal/edit-section` | `{course_id, section_position}` | `{edited_content, blackboard_updates}` | `edit_section()` |
 
@@ -119,7 +119,7 @@ Internal endpoints are protected by a shared secret header (`X-Internal-Token`).
 
 ### Changes to `agent_service.py`
 
-- Break `generate_course_content()` into individual stage functions
+- Break `generate_lessons()` into individual stage functions
 - Remove the orchestration loop (moves to Trigger.dev)
 - Remove `_pipeline_status` in-memory dict (replaced by Trigger.dev metadata)
 - Each function: read from DB → do work → write to DB → return response
@@ -266,7 +266,8 @@ Unique constraint on `(user_id, course_id)`.
 
 - When a section task exhausts retries: mark that section as `failed` in DB, parent continues with remaining sections
 - Course status becomes `completed_partial` if any sections failed, `failed` if `discoverAndPlan` fails
-- Frontend shows failed sections with a "Retry" button that re-triggers just that section's sub-pipeline
+- Frontend shows failed sections with a "Retry" button
+- `POST /api/courses/{id}/sections/{position}/retry` triggers a Trigger.dev `retrySection` task that runs verify → write → edit for just that section (reuses existing research if available, re-researches if not)
 - Verification re-research retry stays — that's domain logic (verifier says "not enough evidence"), not infrastructure retry
 
 ### New Course Statuses
