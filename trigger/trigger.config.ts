@@ -1,7 +1,7 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
 
 export default defineConfig({
-  project: "agent-learn",
+  project: "proj_ybhtnefuzlrfiyjgafzj",
   dirs: ["./src/tasks"],
   maxDuration: 300, // 5 minutes max per task run
   retries: {
