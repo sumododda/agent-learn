@@ -36,6 +36,9 @@ class Course(Base):
     blackboard: Mapped["Blackboard | None"] = relationship(
         back_populates="course", uselist=False
     )
+    chat_messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="course"
+    )
 
 
 class Section(Base):
@@ -132,3 +135,18 @@ class LearnerProgress(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_user_course_progress"),)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)  # "user" or "assistant"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)  # null for user messages
+    section_context: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    course: Mapped["Course"] = relationship(back_populates="chat_messages")
