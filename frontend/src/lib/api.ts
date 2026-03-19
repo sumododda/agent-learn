@@ -1,4 +1,4 @@
-import { Course, CourseWithProgress, GenerateResponse, ProgressData } from './types';
+import { ChatMessage, ChatModel, Course, CourseWithProgress, EvidenceCard, GenerateResponse, ProgressData } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -136,4 +136,56 @@ export async function listMyCoursesWithProgress(token?: string | null): Promise<
     throw new Error('Failed to load courses');
   }
   return res.json();
+}
+
+export async function getEvidence(
+  courseId: string,
+  sectionPosition: number,
+  token?: string | null
+): Promise<EvidenceCard[]> {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(
+    `${API_BASE}/api/courses/${courseId}/evidence?section_position=${sectionPosition}`,
+    { headers, cache: 'no-store' }
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getChatModels(): Promise<ChatModel[]> {
+  const res = await fetch(`${API_BASE}/api/chat/models`);
+  if (!res.ok) {
+    return [];
+  }
+  return res.json();
+}
+
+export async function getChatHistory(
+  courseId: string,
+  token?: string | null,
+  before?: string
+): Promise<ChatMessage[]> {
+  const params = new URLSearchParams();
+  if (before) params.set('before', before);
+  const url = `${API_BASE}/api/courses/${courseId}/chat${params.toString() ? '?' + params.toString() : ''}`;
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(url, { headers, cache: 'no-store' });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sendChatMessage(
+  courseId: string,
+  message: string,
+  model: string,
+  sectionContext: number,
+  token?: string | null
+): Promise<Response> {
+  return fetch(`${API_BASE}/api/courses/${courseId}/chat`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ message, model, section_context: sectionContext }),
+  });
 }

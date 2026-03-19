@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
+import MermaidBlock from '@/components/MermaidBlock';
+import ChatDrawer from '@/components/ChatDrawer';
 import { useAuth } from '@clerk/nextjs';
 import { getCourse, getProgress, updateProgress } from '@/lib/api';
 import { Course, Section } from '@/lib/types';
@@ -144,7 +146,18 @@ export default function LearnPage() {
         <p className="text-gray-500 text-sm mb-6">Section {currentSection.position} of {sections.length}</p>
 
         <div className="prose prose-invert prose-purple max-w-none">
-          <ReactMarkdown>{currentSection.content || 'Content not yet generated.'}</ReactMarkdown>
+          <ReactMarkdown
+            components={{
+              code({ className, children }) {
+                if (/language-mermaid/.test(className || '')) {
+                  return <MermaidBlock definition={String(children).replace(/\n$/, '')} />;
+                }
+                return <code className={className}>{children}</code>;
+              },
+            }}
+          >
+            {currentSection.content || 'Content not yet generated.'}
+          </ReactMarkdown>
         </div>
 
         {/* Prev/Next navigation */}
@@ -171,6 +184,12 @@ export default function LearnPage() {
           </button>
         </div>
       </article>
+
+      <ChatDrawer
+        courseId={courseId}
+        currentSectionPosition={sections[currentIndex].position}
+        currentSectionTitle={sections[currentIndex].title}
+      />
     </div>
   );
 }
