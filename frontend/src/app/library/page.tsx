@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@clerk/nextjs';
-import { listCourses } from '@/lib/api';
-import { Course } from '@/lib/types';
+import { listMyCoursesWithProgress } from '@/lib/api';
+import { CourseWithProgress } from '@/lib/types';
 
 export default function LibraryPage() {
   const { getToken } = useAuth();
-  const [courses, setCourses] = useState<Course[]>([]);
+  const [courses, setCourses] = useState<CourseWithProgress[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,7 +16,7 @@ export default function LibraryPage() {
     async function load() {
       try {
         const token = await getToken();
-        const data = await listCourses(token);
+        const data = await listMyCoursesWithProgress(token);
         setCourses(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load courses');
@@ -66,6 +66,11 @@ export default function LibraryPage() {
 
             const status = statusLabel[course.status] || { text: course.status, color: 'text-gray-400' };
 
+            const totalSections = course.sections.length;
+            const completedCount = course.progress?.completed_sections?.length || 0;
+            const hasProgress = course.progress !== null && course.progress !== undefined;
+            const progressPct = totalSections > 0 ? Math.round((completedCount / totalSections) * 100) : 0;
+
             return (
               <Link
                 key={course.id}
@@ -73,13 +78,27 @@ export default function LibraryPage() {
                 className="block p-4 bg-gray-900 border border-gray-800 rounded-lg hover:border-gray-600 transition-colors"
               >
                 <div className="flex items-center justify-between">
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <div className="text-white font-medium">{course.topic}</div>
                     <div className="text-gray-500 text-sm">
-                      {course.sections.length} sections
+                      {totalSections} sections
+                      {hasProgress && (
+                        <span className="ml-2 text-gray-400">
+                          &middot; {completedCount}/{totalSections} completed
+                        </span>
+                      )}
                     </div>
+                    {/* Progress bar */}
+                    {hasProgress && totalSections > 0 && (
+                      <div className="mt-2 w-full bg-gray-800 rounded-full h-1.5">
+                        <div
+                          className="bg-purple-500 h-1.5 rounded-full transition-all"
+                          style={{ width: `${progressPct}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
-                  <span className={`text-sm ${status.color}`}>{status.text}</span>
+                  <span className={`text-sm ml-4 flex-shrink-0 ${status.color}`}>{status.text}</span>
                 </div>
               </Link>
             );

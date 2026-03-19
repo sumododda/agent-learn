@@ -225,3 +225,36 @@ class SetCourseStatusResponse(BaseModel):
     """Response from POST /api/internal/set-course-status."""
     course_id: str
     status: str
+
+
+# ---------------------------------------------------------------------------
+# Learner progress schemas (Phase 6, Milestone 3)
+# ---------------------------------------------------------------------------
+
+
+class ProgressUpdateRequest(BaseModel):
+    """Request body for POST /api/courses/{id}/progress."""
+    current_section: int | None = None
+    completed_section: int | None = None
+
+
+class ProgressResponse(BaseModel):
+    """Progress data returned from progress endpoints."""
+    model_config = {"from_attributes": True}
+
+    current_section: int
+    completed_sections: list[int]
+    last_accessed_at: datetime
+
+
+class CourseWithProgressResponse(BaseModel):
+    """Course with optional progress info for the library page."""
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    topic: str
+    instructions: str | None
+    status: str
+    ungrounded: bool = False
+    sections: list[SectionFull]
+    progress: ProgressResponse | None = None
