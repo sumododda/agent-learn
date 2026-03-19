@@ -2,17 +2,17 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+import httpx
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.agent_service import (
-    generate_lessons,
     generate_outline,
     get_blackboard,
-    get_pipeline_status,
 )
-from app.database import SessionDep, async_session
+from app.config import settings
+from app.database import SessionDep
 from app.models import Course, EvidenceCard, Section, ResearchBrief
 from app.schemas import (
     BlackboardResponse,
@@ -20,24 +20,12 @@ from app.schemas import (
     CourseResponse,
     EvidenceCardResponse,
     GenerateResponse,
-    PipelineStatus,
     RegenerateRequest,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-# ---------------------------------------------------------------------------
-# Background task wrapper for generate_lessons
-# ---------------------------------------------------------------------------
-
-
-async def _run_pipeline_background(course_id: str) -> None:
-    """Run the full pipeline in a background task with its own session."""
-    async with async_session() as session:
-        await generate_lessons(course_id, session)
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +106,6 @@ async def create_course(body: CourseCreate, session: SessionDep):
 async def generate_course(
     course_id: uuid.UUID,
     session: SessionDep,
-    background_tasks: BackgroundTasks,
 ):
     result = await session.execute(
         select(Course)
@@ -136,21 +123,49 @@ async def generate_course(
             detail=f"Course status is '{course.status}'; generation requires 'outline_ready'",
         )
 
-    # Transition to "generating" before starting the background pipeline
+    # Transition to "generating" before triggering the pipeline
     course.status = "generating"
     await session.commit()
 
-    # Fire off the full M2 pipeline as a background task
-    background_tasks.add_task(_run_pipeline_background, str(course.id))
+    # Trigger the generate-course task via Trigger.dev REST API
+    run_id: str | None = None
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{settings.TRIGGER_API_URL}/api/v1/tasks/generate-course/trigger",
+                headers={
+                    "Authorization": f"Bearer {settings.TRIGGER_SECRET_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"payload": {"courseId": str(course_id)}},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            run_id = data["id"]
+    except Exception as e:
+        logger.error("Failed to trigger Trigger.dev task: %s", e)
+        # Revert status so the user can retry
+        course.status = "outline_ready"
+        await session.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to trigger generation pipeline: {str(e)}",
+        )
 
-    # Return immediately with current state
+    # Reload course with sections and return with run_id
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
         .where(Course.id == course_id)
     )
     course = result.scalar_one()
-    return course
+    return GenerateResponse(
+        id=course.id,
+        status=course.status,
+        sections=course.sections,
+        run_id=run_id,
+    )
 
 
 @router.post("/courses/{course_id}/regenerate", response_model=CourseResponse)
@@ -273,7 +288,7 @@ async def get_course(course_id: uuid.UUID, session: SessionDep):
 
 
 # ---------------------------------------------------------------------------
-# New M2 endpoints: evidence, blackboard, pipeline status
+# New M2 endpoints: evidence, blackboard
 # ---------------------------------------------------------------------------
 
 
@@ -326,18 +341,3 @@ async def get_course_blackboard(
     return bb
 
 
-@router.get(
-    "/courses/{course_id}/pipeline-status",
-    response_model=PipelineStatus | None,
-)
-async def get_course_pipeline_status(course_id: uuid.UUID):
-    """Return the current pipeline progress from the in-memory dict."""
-    status = get_pipeline_status(str(course_id))
-    if status is None:
-        return None
-    return PipelineStatus(
-        course_id=str(course_id),
-        stage=status["stage"],
-        current_section=status.get("current_section"),
-        sections=status.get("sections", {}),
-    )

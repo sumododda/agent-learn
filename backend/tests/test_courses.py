@@ -1,5 +1,18 @@
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
+
+
+def _mock_trigger_httpx_client():
+    """Create a mock httpx.AsyncClient that simulates a Trigger.dev trigger response."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"id": "run_test_123"}
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
 
 
 @pytest.mark.anyio
@@ -50,22 +63,22 @@ async def test_create_and_get_course(client, mock_outline_with_briefs):
 
 
 @pytest.mark.anyio
-async def test_generate_course_returns_immediately(client, mock_outline_with_briefs):
-    """POST /generate now fires a background task and returns immediately with 'generating' status."""
+async def test_generate_course_triggers_and_returns_run_id(client, mock_outline_with_briefs):
+    """POST /generate triggers Trigger.dev task and returns run_id with 'generating' status."""
     mock_return = (mock_outline_with_briefs, False)
     with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
 
-    # Mock the background task runner so it doesn't actually run the pipeline
-    with patch("app.routers.courses._run_pipeline_background", new_callable=AsyncMock):
+    # Mock the httpx call to Trigger.dev REST API
+    with patch("httpx.AsyncClient", return_value=_mock_trigger_httpx_client()):
         gen_response = await client.post(f"/api/courses/{course_id}/generate")
 
     assert gen_response.status_code == 200
     data = gen_response.json()
-    # The endpoint returns immediately with "generating" status
     assert data["status"] == "generating"
+    assert data["run_id"] == "run_test_123"
 
 
 @pytest.mark.anyio
@@ -78,7 +91,7 @@ async def test_generate_course_requires_outline_ready(client, mock_outline_with_
     course_id = create_response.json()["id"]
 
     # First generate call transitions to "generating"
-    with patch("app.routers.courses._run_pipeline_background", new_callable=AsyncMock):
+    with patch("httpx.AsyncClient", return_value=_mock_trigger_httpx_client()):
         await client.post(f"/api/courses/{course_id}/generate")
 
     # Second call should fail because status is now "generating"
@@ -109,7 +122,7 @@ async def test_regenerate_course(client, mock_outline_with_briefs):
 
 
 # ---------------------------------------------------------------------------
-# New M2 endpoint tests: evidence, blackboard, pipeline-status
+# New M2 endpoint tests: evidence, blackboard
 # ---------------------------------------------------------------------------
 
 
@@ -157,31 +170,6 @@ async def test_get_blackboard_not_found(client):
     assert response.status_code == 404
 
 
-@pytest.mark.anyio
-async def test_get_pipeline_status_none(client):
-    """GET /pipeline-status returns null when no pipeline is running."""
-    response = await client.get(
-        "/api/courses/00000000-0000-0000-0000-000000000000/pipeline-status"
-    )
-    assert response.status_code == 200
-    assert response.json() is None
-
-
-@pytest.mark.anyio
-async def test_get_pipeline_status_with_data(client):
-    """GET /pipeline-status returns status when pipeline is active."""
-    from app.agent_service import update_pipeline_status
-
-    course_id = "00000000-0000-0000-0000-000000000001"
-    update_pipeline_status(course_id, 2, "writing")
-
-    response = await client.get(f"/api/courses/{course_id}/pipeline-status")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["stage"] == "writing"
-    assert data["current_section"] == 2
-    assert data["sections"]["2"] == "writing"
-
-    # Clean up module-level dict
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(course_id, None)
+# Pipeline-status endpoint was removed in Phase 4 (Milestone 3).
+# Real-time progress is now delivered via Trigger.dev metadata and the
+# @trigger.dev/react-hooks useRealtimeRun hook.
