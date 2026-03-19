@@ -9,6 +9,8 @@ langchain-openai
 pydantic-settings
 python-dotenv
 httpx
+PyJWT
+cryptography
 pytest
 pytest-asyncio
 aiosqlite

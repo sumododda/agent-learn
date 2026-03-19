@@ -1,26 +1,30 @@
 import logging
 import uuid
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.agent_service import (
-    generate_lessons,
     generate_outline,
     get_blackboard,
-    get_pipeline_status,
 )
-from app.database import SessionDep, async_session
-from app.models import Course, EvidenceCard, Section, ResearchBrief
+from app.auth import get_current_user
+from app.config import settings
+from app.database import SessionDep
+from app.models import Course, EvidenceCard, LearnerProgress, Section, ResearchBrief
 from app.schemas import (
     BlackboardResponse,
     CourseCreate,
     CourseResponse,
+    CourseWithProgressResponse,
     EvidenceCardResponse,
     GenerateResponse,
-    PipelineStatus,
+    ProgressResponse,
+    ProgressUpdateRequest,
     RegenerateRequest,
 )
 
@@ -30,25 +34,18 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Background task wrapper for generate_lessons
-# ---------------------------------------------------------------------------
-
-
-async def _run_pipeline_background(course_id: str) -> None:
-    """Run the full pipeline in a background task with its own session."""
-    async with async_session() as session:
-        await generate_lessons(course_id, session)
-
-
-# ---------------------------------------------------------------------------
 # Course CRUD endpoints
 # ---------------------------------------------------------------------------
 
 
 @router.post("/courses", response_model=CourseResponse)
-async def create_course(body: CourseCreate, session: SessionDep):
+async def create_course(
+    body: CourseCreate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     # Create course row first with "researching" status
-    course = Course(topic=body.topic, instructions=body.instructions, status="researching")
+    course = Course(topic=body.topic, instructions=body.instructions, status="researching", user_id=user_id)
     session.add(course)
     await session.flush()
 
@@ -118,7 +115,7 @@ async def create_course(body: CourseCreate, session: SessionDep):
 async def generate_course(
     course_id: uuid.UUID,
     session: SessionDep,
-    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user),
 ):
     result = await session.execute(
         select(Course)
@@ -128,6 +125,8 @@ async def generate_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Status guard: only allow generation when outline is ready
     if course.status != "outline_ready":
@@ -136,25 +135,58 @@ async def generate_course(
             detail=f"Course status is '{course.status}'; generation requires 'outline_ready'",
         )
 
-    # Transition to "generating" before starting the background pipeline
+    # Transition to "generating" before triggering the pipeline
     course.status = "generating"
     await session.commit()
 
-    # Fire off the full M2 pipeline as a background task
-    background_tasks.add_task(_run_pipeline_background, str(course.id))
+    # Trigger the generate-course task via Trigger.dev REST API
+    run_id: str | None = None
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{settings.TRIGGER_API_URL}/api/v1/tasks/generate-course/trigger",
+                headers={
+                    "Authorization": f"Bearer {settings.TRIGGER_SECRET_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"payload": {"courseId": str(course_id)}},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            run_id = data["id"]
+    except Exception as e:
+        logger.error("Failed to trigger Trigger.dev task: %s", e)
+        # Revert status so the user can retry
+        course.status = "outline_ready"
+        await session.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to trigger generation pipeline: {str(e)}",
+        )
 
-    # Return immediately with current state
+    # Reload course with sections and return with run_id
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
         .where(Course.id == course_id)
     )
     course = result.scalar_one()
-    return course
+    return GenerateResponse(
+        id=course.id,
+        status=course.status,
+        sections=course.sections,
+        run_id=run_id,
+    )
 
 
 @router.post("/courses/{course_id}/regenerate", response_model=CourseResponse)
-async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, session: SessionDep):
+async def regenerate_course(
+    course_id: uuid.UUID,
+    body: RegenerateRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
@@ -163,6 +195,8 @@ async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, sessi
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Build enhanced instructions from comments
     feedback_parts = []
@@ -250,17 +284,25 @@ async def regenerate_course(course_id: uuid.UUID, body: RegenerateRequest, sessi
 
 
 @router.get("/courses", response_model=list[CourseResponse])
-async def list_courses(session: SessionDep):
+async def list_courses(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
+        .where(Course.user_id == user_id)
         .order_by(Course.created_at.desc())
     )
     return result.scalars().all()
 
 
 @router.get("/courses/{course_id}", response_model=CourseResponse)
-async def get_course(course_id: uuid.UUID, session: SessionDep):
+async def get_course(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
@@ -269,11 +311,13 @@ async def get_course(course_id: uuid.UUID, session: SessionDep):
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
     return course
 
 
 # ---------------------------------------------------------------------------
-# New M2 endpoints: evidence, blackboard, pipeline status
+# New M2 endpoints: evidence, blackboard
 # ---------------------------------------------------------------------------
 
 
@@ -284,15 +328,19 @@ async def get_course(course_id: uuid.UUID, session: SessionDep):
 async def get_evidence(
     course_id: uuid.UUID,
     session: SessionDep,
+    user_id: str = Depends(get_current_user),
     section: Optional[int] = Query(None, description="Filter by section position"),
 ):
     """Return evidence cards for a course, optionally filtered by section."""
-    # Verify course exists
+    # Verify course exists and user owns it
     course_result = await session.execute(
         select(Course).where(Course.id == course_id)
     )
-    if not course_result.scalar_one_or_none():
+    course = course_result.scalar_one_or_none()
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     query = select(EvidenceCard).where(EvidenceCard.course_id == course_id)
     if section is not None:
@@ -310,15 +358,20 @@ async def get_evidence(
     response_model=BlackboardResponse | None,
 )
 async def get_course_blackboard(
-    course_id: uuid.UUID, session: SessionDep
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
 ):
     """Return the current blackboard state for a course."""
-    # Verify course exists
+    # Verify course exists and user owns it
     course_result = await session.execute(
         select(Course).where(Course.id == course_id)
     )
-    if not course_result.scalar_one_or_none():
+    course = course_result.scalar_one_or_none()
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     bb = await get_blackboard(course_id, session)
     if bb is None:
@@ -326,18 +379,135 @@ async def get_course_blackboard(
     return bb
 
 
-@router.get(
-    "/courses/{course_id}/pipeline-status",
-    response_model=PipelineStatus | None,
-)
-async def get_course_pipeline_status(course_id: uuid.UUID):
-    """Return the current pipeline progress from the in-memory dict."""
-    status = get_pipeline_status(str(course_id))
-    if status is None:
-        return None
-    return PipelineStatus(
-        course_id=str(course_id),
-        stage=status["stage"],
-        current_section=status.get("current_section"),
-        sections=status.get("sections", {}),
+# ---------------------------------------------------------------------------
+# Learner progress endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/courses/{course_id}/progress", response_model=ProgressResponse | None)
+async def get_progress(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """Get the current user's progress for a course. Returns null if no progress exists."""
+    result = await session.execute(
+        select(LearnerProgress).where(
+            LearnerProgress.user_id == user_id,
+            LearnerProgress.course_id == course_id,
+        )
     )
+    progress = result.scalar_one_or_none()
+    if progress is None:
+        return None
+    return progress
+
+
+@router.post("/courses/{course_id}/progress", response_model=ProgressResponse)
+async def update_progress(
+    course_id: uuid.UUID,
+    body: ProgressUpdateRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """Upsert learner progress for a course.
+
+    - current_section: set the current reading position
+    - completed_section: add a section position to the completed list
+    Always updates last_accessed_at.
+    """
+    # Verify course exists and user owns it
+    course_result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = course_result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
+
+    # Fetch existing progress or create new
+    result = await session.execute(
+        select(LearnerProgress).where(
+            LearnerProgress.user_id == user_id,
+            LearnerProgress.course_id == course_id,
+        )
+    )
+    progress = result.scalar_one_or_none()
+
+    if progress is None:
+        progress = LearnerProgress(
+            user_id=user_id,
+            course_id=course_id,
+            current_section=body.current_section if body.current_section is not None else 0,
+            completed_sections=[],
+        )
+        session.add(progress)
+    else:
+        if body.current_section is not None:
+            progress.current_section = body.current_section
+
+    # Append completed_section if provided and not already present
+    if body.completed_section is not None:
+        existing = list(progress.completed_sections or [])
+        if body.completed_section not in existing:
+            existing.append(body.completed_section)
+            progress.completed_sections = existing
+
+    # Force last_accessed_at update
+    progress.last_accessed_at = datetime.now()
+
+    await session.commit()
+    await session.refresh(progress)
+    return progress
+
+
+@router.get("/me/courses", response_model=list[CourseWithProgressResponse])
+async def list_my_courses_with_progress(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """List the current user's courses with progress data, sorted by last accessed."""
+    # Get all courses for the user
+    courses_result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.user_id == user_id)
+    )
+    courses = courses_result.scalars().all()
+
+    # Get all progress records for the user
+    progress_result = await session.execute(
+        select(LearnerProgress).where(LearnerProgress.user_id == user_id)
+    )
+    progress_map = {
+        p.course_id: p for p in progress_result.scalars().all()
+    }
+
+    # Build response with progress info, paired with sort key
+    items: list[tuple[datetime, CourseWithProgressResponse]] = []
+    for course in courses:
+        progress = progress_map.get(course.id)
+        progress_resp = ProgressResponse(
+            current_section=progress.current_section,
+            completed_sections=progress.completed_sections or [],
+            last_accessed_at=progress.last_accessed_at,
+        ) if progress else None
+
+        course_data = CourseWithProgressResponse(
+            id=course.id,
+            topic=course.topic,
+            instructions=course.instructions,
+            status=course.status,
+            ungrounded=course.ungrounded,
+            sections=course.sections,
+            progress=progress_resp,
+        )
+        # Sort key: last_accessed_at from progress, falling back to course created_at
+        sort_key = progress.last_accessed_at if progress else course.created_at
+        items.append((sort_key, course_data))
+
+    items.sort(key=lambda pair: pair[0], reverse=True)
+    return [item[1] for item in items]
+
+

@@ -2,11 +2,13 @@
 
 import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@clerk/nextjs';
 import { createCourse } from '@/lib/api';
 
 function HomePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { getToken } = useAuth();
   const initialTopic = searchParams.get('topic') || '';
 
   const [topic, setTopic] = useState(initialTopic);
@@ -22,7 +24,8 @@ function HomePageInner() {
     setError(null);
 
     try {
-      const course = await createCourse(topic.trim(), instructions.trim() || undefined);
+      const token = await getToken();
+      const course = await createCourse(topic.trim(), instructions.trim() || undefined, token);
       router.push(`/courses/${course.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');

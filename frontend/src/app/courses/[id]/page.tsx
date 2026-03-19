@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import { useAuth } from '@clerk/nextjs';
 import { getCourse, generateCourse, regenerateCourse } from '@/lib/api';
 import { Course } from '@/lib/types';
 import PipelineProgress from '@/components/PipelineProgress';
@@ -9,6 +10,7 @@ import PipelineProgress from '@/components/PipelineProgress';
 export default function OutlineReviewPage() {
   const params = useParams();
   const router = useRouter();
+  const { getToken } = useAuth();
   const courseId = params.id as string;
 
   const [course, setCourse] = useState<Course | null>(null);
@@ -16,7 +18,9 @@ export default function OutlineReviewPage() {
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showPipeline, setShowPipeline] = useState(false);
+
+  // Trigger.dev run tracking
+  const [runId, setRunId] = useState<string | null>(null);
 
   // Comments
   const [overallComment, setOverallComment] = useState('');
@@ -25,13 +29,9 @@ export default function OutlineReviewPage() {
   useEffect(() => {
     async function loadCourse() {
       try {
-        const data = await getCourse(courseId);
+        const token = await getToken();
+        const data = await getCourse(courseId, token);
         setCourse(data);
-        // If the course is already in a generating state, show pipeline
-        if (['generating', 'researching', 'verifying', 'writing', 'editing'].includes(data.status)) {
-          setShowPipeline(true);
-          setGenerating(true);
-        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load course');
       } finally {
@@ -39,26 +39,35 @@ export default function OutlineReviewPage() {
       }
     }
     loadCourse();
-  }, [courseId]);
+  }, [courseId, getToken]);
 
   async function handleApprove() {
     setGenerating(true);
     setError(null);
-    setShowPipeline(true);
     try {
-      await generateCourse(courseId);
-      // PipelineProgress will handle the redirect when done
+      const token = await getToken();
+      const result = await generateCourse(courseId, token);
+      if (result.run_id) {
+        setRunId(result.run_id);
+      } else {
+        // Fallback: no run_id means pipeline may have been triggered differently
+        router.push(`/courses/${courseId}/learn`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate');
       setGenerating(false);
-      setShowPipeline(false);
     }
   }
+
+  const handlePipelineComplete = useCallback(() => {
+    router.push(`/courses/${courseId}/learn`);
+  }, [router, courseId]);
 
   async function handleRegenerate() {
     setRegenerating(true);
     setError(null);
     try {
+      const token = await getToken();
       const comments = Object.entries(sectionComments)
         .filter(([, comment]) => comment.trim())
         .map(([position, comment]) => ({ position: Number(position), comment }));
@@ -66,7 +75,8 @@ export default function OutlineReviewPage() {
       const updated = await regenerateCourse(
         courseId,
         overallComment.trim() || undefined,
-        comments.length > 0 ? comments : undefined
+        comments.length > 0 ? comments : undefined,
+        token
       );
       setCourse(updated);
       setOverallComment('');
@@ -90,94 +100,87 @@ export default function OutlineReviewPage() {
     return null;
   }
 
-  // Show pipeline progress when generating
-  const sections = course.sections || [];
-
-  if (showPipeline && sections.length > 0) {
-    return (
-      <div>
-        <h1 className="text-2xl font-bold mb-1">{course.topic}</h1>
-        {course.ungrounded && (
-          <span className="inline-block px-2 py-1 text-xs font-medium bg-yellow-900 text-yellow-300 border border-yellow-700 rounded mb-4">
-            Ungrounded — generated without research verification
-          </span>
-        )}
-        <p className="text-gray-400 mb-6">{sections.length} sections</p>
-        <PipelineProgress
-          courseId={courseId}
-          sections={sections
-            .sort((a, b) => a.position - b.position)
-            .map((s) => ({ position: s.position, title: s.title }))}
-        />
-        {error && <p className="text-red-400 text-sm mt-4">{error}</p>}
-      </div>
-    );
+  // Build section titles map for the progress component
+  const sectionTitles: Record<number, string> = {};
+  for (const section of course.sections) {
+    sectionTitles[section.position] = section.title;
   }
+
+  // Access token from env for Trigger.dev React hooks
+  const triggerPublicApiKey = process.env.NEXT_PUBLIC_TRIGGER_PUBLIC_API_KEY || '';
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-1">
-        <h1 className="text-2xl font-bold">{course.topic}</h1>
-        {course.ungrounded && (
-          <span className="inline-block px-2 py-1 text-xs font-medium bg-yellow-900 text-yellow-300 border border-yellow-700 rounded">
-            Ungrounded
-          </span>
-        )}
-      </div>
-      <p className="text-gray-400 mb-6">{sections.length} sections · Review your course outline</p>
+      <h1 className="text-2xl font-bold mb-1">{course.topic}</h1>
+      <p className="text-gray-400 mb-6">{course.sections.length} sections · Review your course outline</p>
 
-      {/* Overall comment */}
-      <div className="mb-6">
-        <textarea
-          value={overallComment}
-          onChange={(e) => setOverallComment(e.target.value)}
-          placeholder="Overall feedback on the outline... (optional)"
-          rows={2}
-          disabled={busy}
-          className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none text-sm"
+      {/* Show pipeline progress when generating */}
+      {runId && triggerPublicApiKey && (
+        <PipelineProgress
+          runId={runId}
+          accessToken={triggerPublicApiKey}
+          sectionTitles={sectionTitles}
+          onComplete={handlePipelineComplete}
         />
-      </div>
+      )}
 
-      {/* Sections with per-section comments */}
-      <div className="space-y-4 mb-8">
-        {sections
-          .sort((a, b) => a.position - b.position)
-          .map((section) => (
-            <div key={section.id} className="border-l-2 border-gray-700 pl-4 py-2">
-              <div className="text-white font-medium">{section.position}. {section.title}</div>
-              <div className="text-gray-400 text-sm mb-2">{section.summary}</div>
-              <input
-                type="text"
-                value={sectionComments[section.position] || ''}
-                onChange={(e) =>
-                  setSectionComments((prev) => ({ ...prev, [section.position]: e.target.value }))
-                }
-                placeholder="Comment on this section..."
-                disabled={busy}
-                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-purple-500"
-              />
-            </div>
-          ))}
-      </div>
+      {/* Only show outline review UI when not yet generating */}
+      {!runId && (
+        <>
+          {/* Overall comment */}
+          <div className="mb-6">
+            <textarea
+              value={overallComment}
+              onChange={(e) => setOverallComment(e.target.value)}
+              placeholder="Overall feedback on the outline... (optional)"
+              rows={2}
+              disabled={busy}
+              className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none text-sm"
+            />
+          </div>
 
-      {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
+          {/* Sections with per-section comments */}
+          <div className="space-y-4 mb-8">
+            {course.sections
+              .sort((a, b) => a.position - b.position)
+              .map((section) => (
+                <div key={section.id} className="border-l-2 border-gray-700 pl-4 py-2">
+                  <div className="text-white font-medium">{section.position}. {section.title}</div>
+                  <div className="text-gray-400 text-sm mb-2">{section.summary}</div>
+                  <input
+                    type="text"
+                    value={sectionComments[section.position] || ''}
+                    onChange={(e) =>
+                      setSectionComments((prev) => ({ ...prev, [section.position]: e.target.value }))
+                    }
+                    placeholder="Comment on this section..."
+                    disabled={busy}
+                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+              ))}
+          </div>
 
-      <div className="flex gap-3">
-        <button
-          onClick={handleApprove}
-          disabled={busy}
-          className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
-        >
-          {generating ? 'Generating lessons...' : 'Approve & Generate'}
-        </button>
-        <button
-          onClick={handleRegenerate}
-          disabled={busy}
-          className="px-6 py-3 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-gray-300 transition-colors disabled:opacity-50"
-        >
-          {regenerating ? 'Regenerating...' : hasComments ? 'Regenerate with Feedback' : 'Regenerate'}
-        </button>
-      </div>
+          {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
+
+          <div className="flex gap-3">
+            <button
+              onClick={handleApprove}
+              disabled={busy}
+              className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
+            >
+              {generating ? 'Generating lessons...' : 'Approve & Generate'}
+            </button>
+            <button
+              onClick={handleRegenerate}
+              disabled={busy}
+              className="px-6 py-3 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-gray-300 transition-colors disabled:opacity-50"
+            >
+              {regenerating ? 'Regenerating...' : hasComments ? 'Regenerate with Feedback' : 'Regenerate'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, JSON, Text, Integer, func
+from sqlalchemy import ForeignKey, JSON, Text, Integer, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
@@ -17,6 +17,7 @@ class Course(Base):
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, default="outline_ready")
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     ungrounded: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -117,3 +118,17 @@ class Blackboard(Base):
     )
 
     course: Mapped["Course"] = relationship(back_populates="blackboard")
+
+
+class LearnerProgress(Base):
+    __tablename__ = "learner_progress"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), nullable=False)
+    current_section: Mapped[int] = mapped_column(Integer, default=0)
+    completed_sections: Mapped[list] = mapped_column(JSON, default=list)
+    last_accessed_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_user_course_progress"),)
