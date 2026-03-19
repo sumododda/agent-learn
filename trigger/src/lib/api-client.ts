@@ -9,52 +9,82 @@ const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? "http://localhost:8000"
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN ?? "";
 
 // ---------------------------------------------------------------------------
-// Response types
+// Response types (match Python Pydantic schemas in backend/app/schemas.py)
 // ---------------------------------------------------------------------------
 
-export interface SectionOutline {
+export interface SectionInfo {
+  id: string;
   position: number;
   title: string;
   summary: string;
 }
 
-export interface ResearchBriefItem {
-  query: string;
-  findings: string;
+export interface ResearchBriefInfo {
+  id: string;
+  section_position: number | null;
+  questions: string[];
+  source_policy: Record<string, unknown>;
 }
 
 export interface DiscoverAndPlanResponse {
-  sections: SectionOutline[];
-  research_briefs: ResearchBriefItem[];
+  sections: SectionInfo[];
+  research_briefs: ResearchBriefInfo[];
+  ungrounded: boolean;
 }
 
 export interface EvidenceCard {
+  id: string;
+  section_position: number;
   claim: string;
   source_url: string;
   source_title: string;
-  relevance_score: number;
-  excerpt: string;
+  source_tier: number;
+  passage: string;
+  retrieved_date: string;
+  confidence: number;
+  caveat: string | null;
+  explanation: string;
+  verified: boolean;
 }
 
 export interface ResearchSectionResponse {
   evidence_cards: EvidenceCard[];
 }
 
+export interface VerificationResult {
+  cards_verified: number;
+  cards_total: number;
+  needs_more_research: boolean;
+  gaps: string[];
+}
+
 export interface VerifySectionResponse {
-  verification_result: {
-    passed: boolean;
-    issues: string[];
-  };
+  verification_result: VerificationResult;
+}
+
+export interface Citation {
+  number: number;
+  claim: string;
+  source_url: string;
+  source_title: string;
 }
 
 export interface WriteSectionResponse {
   content: string;
-  citations: string[];
+  citations: Citation[];
+}
+
+export interface BlackboardUpdates {
+  new_glossary_terms: Record<string, unknown>;
+  new_concept_ownership: Record<string, unknown>;
+  topics_covered: string[];
+  key_points_summary: string;
+  new_sources: Record<string, string>[];
 }
 
 export interface EditSectionResponse {
   edited_content: string;
-  blackboard_updates: Record<string, unknown>;
+  blackboard_updates: BlackboardUpdates;
 }
 
 // ---------------------------------------------------------------------------
