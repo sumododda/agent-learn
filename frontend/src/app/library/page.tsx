@@ -57,6 +57,10 @@ export default function LibraryPage() {
             const statusLabel: Record<string, { text: string; color: string }> = {
               outline_ready: { text: 'Outline Ready', color: 'text-yellow-400' },
               generating: { text: 'Generating...', color: 'text-blue-400' },
+              researching: { text: 'Researching...', color: 'text-blue-400' },
+              verifying: { text: 'Verifying...', color: 'text-yellow-400' },
+              writing: { text: 'Writing...', color: 'text-purple-400' },
+              editing: { text: 'Editing...', color: 'text-cyan-400' },
               completed: { text: 'Completed', color: 'text-green-400' },
               failed: { text: 'Failed', color: 'text-red-400' },
             };
@@ -71,7 +75,14 @@ export default function LibraryPage() {
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-white font-medium">{course.topic}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-medium">{course.topic}</span>
+                      {course.ungrounded && (
+                        <span className="inline-block px-1.5 py-0.5 text-xs font-medium bg-yellow-900 text-yellow-300 border border-yellow-700 rounded">
+                          Ungrounded
+                        </span>
+                      )}
+                    </div>
                     <div className="text-gray-500 text-sm">
                       {course.sections.length} sections
                     </div>
