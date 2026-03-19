@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+alembic
+deepagents
+langchain
+langchain-openai
+pydantic-settings
+python-dotenv
+httpx
+pytest
+pytest-asyncio
+aiosqlite
+anyio
