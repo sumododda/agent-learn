@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -14,13 +15,16 @@ from app.agent_service import (
 from app.auth import get_current_user
 from app.config import settings
 from app.database import SessionDep
-from app.models import Course, EvidenceCard, Section, ResearchBrief
+from app.models import Course, EvidenceCard, LearnerProgress, Section, ResearchBrief
 from app.schemas import (
     BlackboardResponse,
     CourseCreate,
     CourseResponse,
+    CourseWithProgressResponse,
     EvidenceCardResponse,
     GenerateResponse,
+    ProgressResponse,
+    ProgressUpdateRequest,
     RegenerateRequest,
 )
 
@@ -373,5 +377,137 @@ async def get_course_blackboard(
     if bb is None:
         return None
     return bb
+
+
+# ---------------------------------------------------------------------------
+# Learner progress endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/courses/{course_id}/progress", response_model=ProgressResponse | None)
+async def get_progress(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """Get the current user's progress for a course. Returns null if no progress exists."""
+    result = await session.execute(
+        select(LearnerProgress).where(
+            LearnerProgress.user_id == user_id,
+            LearnerProgress.course_id == course_id,
+        )
+    )
+    progress = result.scalar_one_or_none()
+    if progress is None:
+        return None
+    return progress
+
+
+@router.post("/courses/{course_id}/progress", response_model=ProgressResponse)
+async def update_progress(
+    course_id: uuid.UUID,
+    body: ProgressUpdateRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """Upsert learner progress for a course.
+
+    - current_section: set the current reading position
+    - completed_section: add a section position to the completed list
+    Always updates last_accessed_at.
+    """
+    # Verify course exists and user owns it
+    course_result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = course_result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id and course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
+
+    # Fetch existing progress or create new
+    result = await session.execute(
+        select(LearnerProgress).where(
+            LearnerProgress.user_id == user_id,
+            LearnerProgress.course_id == course_id,
+        )
+    )
+    progress = result.scalar_one_or_none()
+
+    if progress is None:
+        progress = LearnerProgress(
+            user_id=user_id,
+            course_id=course_id,
+            current_section=body.current_section if body.current_section is not None else 0,
+            completed_sections=[],
+        )
+        session.add(progress)
+    else:
+        if body.current_section is not None:
+            progress.current_section = body.current_section
+
+    # Append completed_section if provided and not already present
+    if body.completed_section is not None:
+        existing = list(progress.completed_sections or [])
+        if body.completed_section not in existing:
+            existing.append(body.completed_section)
+            progress.completed_sections = existing
+
+    # Force last_accessed_at update
+    progress.last_accessed_at = datetime.now()
+
+    await session.commit()
+    await session.refresh(progress)
+    return progress
+
+
+@router.get("/me/courses", response_model=list[CourseWithProgressResponse])
+async def list_my_courses_with_progress(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """List the current user's courses with progress data, sorted by last accessed."""
+    # Get all courses for the user
+    courses_result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.user_id == user_id)
+    )
+    courses = courses_result.scalars().all()
+
+    # Get all progress records for the user
+    progress_result = await session.execute(
+        select(LearnerProgress).where(LearnerProgress.user_id == user_id)
+    )
+    progress_map = {
+        p.course_id: p for p in progress_result.scalars().all()
+    }
+
+    # Build response with progress info, paired with sort key
+    items: list[tuple[datetime, CourseWithProgressResponse]] = []
+    for course in courses:
+        progress = progress_map.get(course.id)
+        progress_resp = ProgressResponse(
+            current_section=progress.current_section,
+            completed_sections=progress.completed_sections or [],
+            last_accessed_at=progress.last_accessed_at,
+        ) if progress else None
+
+        course_data = CourseWithProgressResponse(
+            id=course.id,
+            topic=course.topic,
+            instructions=course.instructions,
+            status=course.status,
+            ungrounded=course.ungrounded,
+            sections=course.sections,
+            progress=progress_resp,
+        )
+        # Sort key: last_accessed_at from progress, falling back to course created_at
+        sort_key = progress.last_accessed_at if progress else course.created_at
+        items.append((sort_key, course_data))
+
+    items.sort(key=lambda pair: pair[0], reverse=True)
+    return [item[1] for item in items]
 
 

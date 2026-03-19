@@ -1,4 +1,4 @@
-import { Course, GenerateResponse } from './types';
+import { Course, CourseWithProgress, GenerateResponse, ProgressData } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -83,6 +83,57 @@ export async function getCourse(id: string, token?: string | null): Promise<Cour
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Course not found' }));
     throw new Error(error.detail || 'Course not found');
+  }
+  return res.json();
+}
+
+export async function getProgress(courseId: string, token?: string | null): Promise<ProgressData | null> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_BASE}/api/courses/${courseId}/progress`, {
+    cache: 'no-store',
+    headers,
+  });
+  if (!res.ok) {
+    return null;
+  }
+  const text = await res.text();
+  if (!text || text === 'null') {
+    return null;
+  }
+  return JSON.parse(text);
+}
+
+export async function updateProgress(
+  courseId: string,
+  data: { current_section?: number; completed_section?: number },
+  token?: string | null
+): Promise<ProgressData> {
+  const res = await fetch(`${API_BASE}/api/courses/${courseId}/progress`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Failed to update progress' }));
+    throw new Error(error.detail || 'Failed to update progress');
+  }
+  return res.json();
+}
+
+export async function listMyCoursesWithProgress(token?: string | null): Promise<CourseWithProgress[]> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_BASE}/api/me/courses`, {
+    cache: 'no-store',
+    headers,
+  });
+  if (!res.ok) {
+    throw new Error('Failed to load courses');
   }
   return res.json();
 }
