@@ -11,6 +11,7 @@ interface AuthContextValue {
   logout: () => void;
   isSignedIn: boolean;
   isLoaded: boolean;
+  providerKeysLoaded: number;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,6 +37,7 @@ function isTokenExpired(token: string): boolean {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [providerKeysLoaded, setProviderKeysLoaded] = useState(0);
 
   useEffect(() => {
     const stored = localStorage.getItem('token');
@@ -67,9 +69,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const err = await res.json().catch(() => ({ detail: 'Login failed' }));
       throw new Error(err.detail || 'Login failed');
     }
-    const data: { token: string; user_id: string } = await res.json();
+    const data: { token: string; user_id: string; provider_keys_loaded?: number } = await res.json();
     localStorage.setItem('token', data.token);
     setToken(data.token);
+    if (typeof data.provider_keys_loaded === 'number') {
+      setProviderKeysLoaded(data.provider_keys_loaded);
+    }
   }, []);
 
   const register = useCallback(async (email: string, password: string): Promise<void> => {
@@ -95,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isSignedIn = token !== null && !isTokenExpired(token);
 
   return (
-    <AuthContext.Provider value={{ getToken, login, register, logout, isSignedIn, isLoaded }}>
+    <AuthContext.Provider value={{ getToken, login, register, logout, isSignedIn, isLoaded, providerKeysLoaded }}>
       {children}
     </AuthContext.Provider>
   );

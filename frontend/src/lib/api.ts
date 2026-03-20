@@ -1,4 +1,4 @@
-import { ChatMessage, ChatModel, Course, CourseWithProgress, EvidenceCard, GenerateResponse, ProgressData } from './types';
+import { ChatMessage, ChatModel, Course, CourseWithProgress, EvidenceCard, GenerateResponse, ProgressData, ProviderConfig, ProviderDefinition } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -188,4 +188,88 @@ export async function sendChatMessage(
     headers: authHeaders(token),
     body: JSON.stringify({ message, model, section_context: sectionContext }),
   });
+}
+
+export async function getProviderRegistry(token: string | null): Promise<Record<string, ProviderDefinition>> {
+  const res = await fetch(`${API_BASE}/api/providers/registry`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) return {};
+  return res.json();
+}
+
+export async function getProviders(token: string | null): Promise<ProviderConfig[]> {
+  const res = await fetch(`${API_BASE}/api/providers`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function saveProvider(
+  data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string>; password: string },
+  token: string | null
+): Promise<ProviderConfig> {
+  const res = await fetch(`${API_BASE}/api/providers`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Save failed' }));
+    throw new Error(err.detail || 'Save failed');
+  }
+  return res.json();
+}
+
+export async function updateProvider(
+  provider: string,
+  data: { credentials?: Record<string, string>; extra_fields?: Record<string, string>; password?: string },
+  token: string | null
+): Promise<ProviderConfig> {
+  const res = await fetch(`${API_BASE}/api/providers/${provider}`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Update failed' }));
+    throw new Error(err.detail || 'Update failed');
+  }
+  return res.json();
+}
+
+export async function deleteProvider(provider: string, token: string | null): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/providers/${provider}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Delete failed');
+}
+
+export async function testProvider(
+  provider: string,
+  data: { credentials: Record<string, string>; extra_fields: Record<string, string> },
+  token: string | null
+): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/api/providers/${provider}/test`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Test failed' }));
+    throw new Error(err.detail || 'Test failed');
+  }
+  return res.json();
+}
+
+export async function setDefaultProvider(provider: string, token: string | null): Promise<ProviderConfig> {
+  const res = await fetch(`${API_BASE}/api/providers/default`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify({ provider }),
+  });
+  if (!res.ok) throw new Error('Set default failed');
+  return res.json();
 }

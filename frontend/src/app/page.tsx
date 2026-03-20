@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { createCourse } from '@/lib/api';
+import { createCourse, getProviders } from '@/lib/api';
 
 const STYLE_OPTIONS = [
   { id: 'practical', label: 'Hands-on & Practical', instruction: 'Focus on practical examples and real-world applications.' },
@@ -20,7 +21,7 @@ const ENGLISH_LEVELS = [
 function HomePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { getToken } = useAuth();
+  const { getToken, isSignedIn, isLoaded } = useAuth();
   const initialTopic = searchParams.get('topic') || '';
 
   const [topic, setTopic] = useState(initialTopic);
@@ -29,6 +30,17 @@ function HomePageInner() {
   const [extraInstructions, setExtraInstructions] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasProvider, setHasProvider] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) {
+      setHasProvider(null);
+      return;
+    }
+    getToken().then((token) =>
+      getProviders(token).then((providers) => setHasProvider(providers.length > 0))
+    );
+  }, [isLoaded, isSignedIn, getToken]);
 
   function toggleStyle(id: string) {
     setSelectedStyles(prev => {
@@ -75,6 +87,23 @@ function HomePageInner() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (isLoaded && isSignedIn && hasProvider === false) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh]">
+        <h1 className="text-3xl font-bold mb-2">Welcome to agent-learn</h1>
+        <p className="text-gray-400 mb-6">
+          Before creating courses, you need to configure at least one AI provider.
+        </p>
+        <Link
+          href="/settings"
+          className="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg font-medium transition-colors"
+        >
+          Configure Providers
+        </Link>
+      </div>
+    );
   }
 
   return (
