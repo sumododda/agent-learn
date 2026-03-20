@@ -37,15 +37,9 @@ export default function ChatDrawer({
     async function loadModels() {
       const fetched = await getChatModels();
       setModels(fetched);
-      const defaultModel =
-        process.env.NEXT_PUBLIC_CHAT_DEFAULT_MODEL || 'anthropic/claude-sonnet-4';
-      // If the default model exists in the list, use it; otherwise use first available
-      if (fetched.some((m) => m.id === defaultModel)) {
-        setSelectedModel(defaultModel);
-      } else if (fetched.length > 0) {
+      // Use the first available model from the backend
+      if (fetched.length > 0) {
         setSelectedModel(fetched[0].id);
-      } else {
-        setSelectedModel(defaultModel);
       }
     }
     loadModels();
