@@ -34,43 +34,6 @@ from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pipeline status tracking (legacy — kept for backward compat with tests)
-# ---------------------------------------------------------------------------
-# Real-time progress is now delivered via Trigger.dev metadata (set from
-# the generate-course task) and consumed by the frontend using the
-# @trigger.dev/react-hooks useRealtimeRun hook.
-#
-# _pipeline_status, update_pipeline_status, and get_pipeline_status are
-# retained so that generate_lessons() (still used by internal API & tests)
-# continues to work. The dict is populated during generate_lessons() runs
-# but is no longer served to the frontend via any polling endpoint.
-# ---------------------------------------------------------------------------
-
-_pipeline_status: dict[str, dict] = {}
-
-
-def update_pipeline_status(
-    course_id: str, section: int | None, stage: str
-) -> None:
-    """Update the in-memory pipeline status for a course (legacy)."""
-    if course_id not in _pipeline_status:
-        _pipeline_status[course_id] = {
-            "stage": stage,
-            "current_section": section,
-            "sections": {},
-        }
-    _pipeline_status[course_id]["stage"] = stage
-    _pipeline_status[course_id]["current_section"] = section
-    if section is not None:
-        _pipeline_status[course_id]["sections"][section] = stage
-
-
-def get_pipeline_status(course_id: str) -> dict | None:
-    """Return current pipeline status for a course, or None (legacy)."""
-    return _pipeline_status.get(course_id)
-
-
-# ---------------------------------------------------------------------------
 # Helper functions for the full pipeline
 # ---------------------------------------------------------------------------
 
@@ -287,13 +250,18 @@ def _split_markdown_sections(markdown: str, expected_count: int) -> list[Section
 
 
 async def generate_lessons(course_id, session: AsyncSession) -> None:
-    """Full M2 pipeline: research -> verify -> write -> edit for each section.
+    """Legacy monolithic pipeline: research -> verify -> write -> edit per section.
 
-    Called as a background task. Updates course status and pipeline status
-    at each stage.  ``course_id`` may be a UUID or string – DB queries
-    receive it as-is, while the in-memory pipeline status dict always uses
-    ``str(course_id)``.
+    Superseded by pipeline.py for production use. Retained only for existing
+    tests until they are migrated (Phase 5). The ``update_pipeline_status``
+    calls are no-ops since the legacy status dict has been removed.
     """
+
+    def update_pipeline_status(
+        _course_id: str, _section: int | None, _stage: str
+    ) -> None:
+        """No-op — legacy pipeline status tracking removed in Phase 3."""
+        pass
     pipeline_key = str(course_id)
     try:
         course = await get_course(course_id, session)
@@ -1329,10 +1297,24 @@ async def run_write_section(
     if blackboard is None:
         blackboard = await create_blackboard(course_id, session)
 
-    # Run writer
-    draft = await write_section(
-        cards, blackboard, section, list(course.sections), session
-    )
+    # Run writer with retry on empty output
+    max_write_attempts = 3
+    draft = ""
+    for attempt in range(1, max_write_attempts + 1):
+        draft = await write_section(
+            cards, blackboard, section, list(course.sections), session
+        )
+        if draft and draft.strip():
+            break
+        logger.warning(
+            "Writer returned empty content for section %s (attempt %d/%d)",
+            section_position, attempt, max_write_attempts,
+        )
+    if not draft or not draft.strip():
+        raise RuntimeError(
+            f"Writer returned empty content for section {section_position} "
+            f"after {max_write_attempts} attempts"
+        )
 
     # Extract citations from draft
     verified_cards = [c for c in cards if c.verified]
@@ -1403,20 +1385,41 @@ async def run_edit_section(
     # Fetch blackboard
     blackboard = await get_blackboard(course_id, session)
 
-    # Run editor
-    editor_result = await edit_section(
-        section.content, blackboard, cards, section_position, session
-    )
+    # Run editor with retry on empty output, fall back to draft
+    draft = section.content
+    max_edit_attempts = 3
+    edited_content = ""
+    editor_result = None
+    for attempt in range(1, max_edit_attempts + 1):
+        editor_result = await edit_section(
+            draft, blackboard, cards, section_position, session
+        )
+        if editor_result.edited_content and editor_result.edited_content.strip():
+            edited_content = editor_result.edited_content
+            break
+        logger.warning(
+            "Editor returned empty content for section %s (attempt %d/%d)",
+            section_position, attempt, max_edit_attempts,
+        )
+
+    # Fall back to draft if editor consistently returns empty
+    if not edited_content or not edited_content.strip():
+        logger.warning(
+            "Editor returned empty content for section %s after %d attempts, "
+            "falling back to writer draft",
+            section_position, max_edit_attempts,
+        )
+        edited_content = draft
 
     # Update section content with edited version
     verified_cards = [c for c in cards if c.verified]
-    citations = extract_citations(editor_result.edited_content, verified_cards)
-    section.content = editor_result.edited_content
+    citations = extract_citations(edited_content, verified_cards)
+    section.content = edited_content
     section.citations = citations
     await session.commit()
 
     # Update blackboard
-    if blackboard:
+    if blackboard and editor_result:
         try:
             await update_blackboard(
                 blackboard, editor_result.blackboard_updates, session
@@ -1429,7 +1432,7 @@ async def run_edit_section(
             )
 
     return {
-        "edited_content": editor_result.edited_content,
+        "edited_content": edited_content,
         "blackboard_updates": {
             "new_glossary_terms": editor_result.blackboard_updates.new_glossary_terms,
             "new_concept_ownership": editor_result.blackboard_updates.new_concept_ownership,

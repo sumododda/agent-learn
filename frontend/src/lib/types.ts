@@ -14,6 +14,13 @@ export interface Section {
   citations: Citation[] | null;
 }
 
+export interface PipelineStatus {
+  stage: string;
+  section: number;
+  total: number;
+  error: string | null;
+}
+
 export interface Course {
   id: string;
   topic: string;
@@ -21,6 +28,7 @@ export interface Course {
   status: string;
   sections: Section[];
   ungrounded: boolean;
+  pipeline_status: PipelineStatus | null;
 }
 
 export interface EvidenceCard {
@@ -48,24 +56,10 @@ export interface BlackboardState {
   open_questions: string[];
 }
 
-export interface PipelineStatus {
-  course_id: string;
-  stage: string;
-  current_section: number | null;
-  sections: Record<number, string>;
-}
-
 export interface GenerateResponse {
   id: string;
   status: string;
   sections: Section[];
-  run_id: string | null;
-}
-
-export interface PipelineMetadata {
-  stage: string;
-  current_section: number | null;
-  sections: Record<number, string>;
 }
 
 export interface ProgressData {

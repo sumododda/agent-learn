@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@/context/AuthContext';
 import ReactMarkdown from 'react-markdown';
 import MermaidBlock from '@/components/MermaidBlock';
 import { getChatModels, getChatHistory, sendChatMessage } from '@/lib/api';

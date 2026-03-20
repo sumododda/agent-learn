@@ -11,8 +11,11 @@ python-dotenv
 httpx
 PyJWT
 cryptography
+slowapi
 pytest
 pytest-asyncio
 aiosqlite
 anyio
 tavily-python
+passlib[bcrypt]
+tenacity

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { useRealtimeRun } from '@trigger.dev/react-hooks';
-import { PipelineMetadata } from '@/lib/types';
+import { useEffect, useRef, useState } from 'react';
+import { getCourse } from '@/lib/api';
+import { Course, PipelineStatus } from '@/lib/types';
 
 const STAGE_LABELS: Record<string, string> = {
   researching: 'Researching',
@@ -31,54 +31,66 @@ function stageBadgeColor(stage: string): string {
 }
 
 interface PipelineProgressProps {
-  runId: string;
-  accessToken: string;
-  sectionTitles: Record<number, string>;
-  onComplete?: () => void;
+  courseId: string;
+  token: string | null;
+  onComplete: () => void;
 }
 
 export default function PipelineProgress({
-  runId,
-  accessToken,
-  sectionTitles,
+  courseId,
+  token,
   onComplete,
 }: PipelineProgressProps) {
-  const { run, error } = useRealtimeRun(runId, {
-    accessToken,
-    enabled: !!runId,
-  });
-
-  const pipeline = run?.metadata?.pipeline as PipelineMetadata | undefined;
-  const runStatus = run?.status;
-
-  // Notify parent when the run completes (via effect to avoid calling during render)
+  const [course, setCourse] = useState<Course | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const completeCalled = useRef(false);
-  useEffect(() => {
-    if (runStatus === 'COMPLETED' && onComplete && !completeCalled.current) {
-      completeCalled.current = true;
-      onComplete();
-    }
-  }, [runStatus, onComplete]);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  if (!run && !error) {
-    return (
-      <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
-        <p className="text-gray-400 text-sm">Connecting to pipeline...</p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    async function poll() {
+      try {
+        const data = await getCourse(courseId, token);
+        setCourse(data);
+        if (data.pipeline_status) {
+          setPipelineStatus(data.pipeline_status);
+        }
+
+        if (
+          (data.status === 'completed' || data.status === 'completed_partial') &&
+          !completeCalled.current
+        ) {
+          completeCalled.current = true;
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          onComplete();
+        }
+
+        if (data.status === 'failed' || data.pipeline_status?.error) {
+          setError(data.pipeline_status?.error || 'Pipeline failed');
+          if (intervalRef.current) clearInterval(intervalRef.current);
+        }
+      } catch (err) {
+        // Poll failure is non-critical, will retry
+      }
+    }
+
+    poll(); // Initial fetch
+    intervalRef.current = setInterval(poll, 4000);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [courseId, token, onComplete]);
 
   if (error) {
     return (
       <div className="mt-6 p-4 bg-gray-900 border border-red-800 rounded-lg">
-        <p className="text-red-400 text-sm">
-          Failed to connect to pipeline: {error.message}
-        </p>
+        <p className="text-red-400 text-sm">Pipeline error: {error}</p>
       </div>
     );
   }
 
-  if (!pipeline) {
+  if (!pipelineStatus) {
     return (
       <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
         <p className="text-gray-400 text-sm">Waiting for pipeline to start...</p>
@@ -86,17 +98,21 @@ export default function PipelineProgress({
     );
   }
 
-  const overallStage = pipeline.stage;
-  const currentSection = pipeline.current_section;
-  const sections = pipeline.sections || {};
+  const overallStage = pipelineStatus.stage;
+  const currentSection = pipelineStatus.section;
+  const totalSections = pipelineStatus.total;
 
-  const totalSections = Object.keys(sectionTitles).length;
-  const completedSections = Object.values(sections).filter(
-    (s) => s === 'completed'
-  ).length;
+  const isComplete = course?.status === 'completed' || course?.status === 'completed_partial';
+  const isFailed = course?.status === 'failed';
 
-  const isRunFailed = runStatus === 'FAILED';
-  const isRunComplete = runStatus === 'COMPLETED';
+  // Estimate completed sections from current section and stage
+  const completedSections = overallStage === 'completed'
+    ? totalSections
+    : Math.max(0, currentSection - 1);
+
+  const sortedSections = course
+    ? [...course.sections].sort((a, b) => a.position - b.position)
+    : [];
 
   return (
     <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
@@ -108,69 +124,76 @@ export default function PipelineProgress({
           </span>
           <span
             className={`ml-2 text-sm font-medium ${
-              isRunFailed ? 'text-red-400' : isRunComplete ? 'text-green-400' : 'text-purple-400'
+              isFailed ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-purple-400'
             }`}
           >
-            {isRunFailed
+            {isFailed
               ? 'Failed'
-              : isRunComplete
+              : isComplete
               ? 'Complete'
               : STAGE_LABELS[overallStage] || overallStage}
           </span>
         </div>
-        <span className="text-gray-500 text-sm">
-          {completedSections} / {totalSections} sections
-        </span>
+        {totalSections > 0 && (
+          <span className="text-gray-500 text-sm">
+            {completedSections} / {totalSections} sections
+          </span>
+        )}
       </div>
 
       {/* Progress bar */}
-      <div className="w-full bg-gray-800 rounded-full h-2 mb-4">
-        <div
-          className={`h-2 rounded-full transition-all duration-500 ${
-            isRunFailed ? 'bg-red-500' : isRunComplete ? 'bg-green-500' : 'bg-purple-500'
-          }`}
-          style={{
-            width: `${totalSections > 0 ? (completedSections / totalSections) * 100 : 0}%`,
-          }}
-        />
-      </div>
+      {totalSections > 0 && (
+        <div className="w-full bg-gray-800 rounded-full h-2 mb-4">
+          <div
+            className={`h-2 rounded-full transition-all duration-500 ${
+              isFailed ? 'bg-red-500' : isComplete ? 'bg-green-500' : 'bg-purple-500'
+            }`}
+            style={{
+              width: `${(completedSections / totalSections) * 100}%`,
+            }}
+          />
+        </div>
+      )}
 
       {/* Per-section status */}
-      <div className="space-y-1">
-        {Object.entries(sectionTitles)
-          .sort(([a], [b]) => Number(a) - Number(b))
-          .map(([posStr, title]) => {
-            const pos = Number(posStr);
-            const sectionStage = sections[pos] || 'pending';
+      {sortedSections.length > 0 && (
+        <div className="space-y-1">
+          {sortedSections.map((section) => {
+            const pos = section.position;
+            const hasContent = section.content && section.content.trim().length > 0;
             const isActive = currentSection === pos;
 
             return (
               <div
-                key={pos}
+                key={section.id}
                 className={`flex items-center justify-between px-3 py-1.5 rounded text-sm ${
                   isActive ? 'bg-gray-800' : ''
                 }`}
               >
                 <span
                   className={
-                    sectionStage === 'completed'
+                    hasContent
                       ? 'text-green-400'
                       : isActive
                       ? 'text-white'
                       : 'text-gray-500'
                   }
                 >
-                  {pos}. {title}
+                  {pos}. {section.title}
                 </span>
-                <span className={`text-xs ${stageBadgeColor(sectionStage)}`}>
-                  {sectionStage === 'pending'
-                    ? ''
-                    : STAGE_LABELS[sectionStage] || sectionStage}
-                </span>
+                {hasContent && (
+                  <span className="text-xs text-green-400">Done</span>
+                )}
+                {isActive && !hasContent && (
+                  <span className={`text-xs ${stageBadgeColor(overallStage)}`}>
+                    {STAGE_LABELS[overallStage] || overallStage}
+                  </span>
+                )}
               </div>
             );
           })}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
