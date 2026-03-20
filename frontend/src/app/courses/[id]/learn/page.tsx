@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import MermaidBlock from '@/components/MermaidBlock';
 import ChatDrawer from '@/components/ChatDrawer';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@/context/AuthContext';
 import { getCourse, getProgress, updateProgress } from '@/lib/api';
 import { Course, Section } from '@/lib/types';
 
@@ -28,14 +28,12 @@ export default function LearnPage() {
         const data = await getCourse(courseId, token);
         setCourse(data);
 
-        // Fetch current progress to resume from last position
         try {
           const progress = await getProgress(courseId, token);
           if (progress) {
-            const sections = (data.sections || []).sort(
+            const sections = [...(data.sections || [])].sort(
               (a: Section, b: Section) => a.position - b.position
             );
-            // Find the index that matches the saved current_section position
             const resumeIndex = sections.findIndex(
               (s: Section) => s.position === progress.current_section
             );
@@ -45,7 +43,7 @@ export default function LearnPage() {
             setCompletedSections(progress.completed_sections || []);
           }
         } catch {
-          // Progress fetch failed — start from section 0, not critical
+          // Progress fetch failed — start from section 0
         }
         initialLoadDone.current = true;
       } catch (err) {
@@ -64,7 +62,7 @@ export default function LearnPage() {
         const result = await updateProgress(courseId, data, token);
         setCompletedSections(result.completed_sections || []);
       } catch {
-        // Progress tracking is best-effort — don't block navigation
+        // Progress tracking is best-effort
       }
     },
     [courseId, getToken]
@@ -103,36 +101,49 @@ export default function LearnPage() {
   if (error) return <div className="text-center text-red-400 mt-20">{error}</div>;
   if (!course) return <div className="text-center text-gray-400 mt-20">Course not found</div>;
 
-  const sections = course.sections.sort((a: Section, b: Section) => a.position - b.position);
+  const sections = [...course.sections].sort((a: Section, b: Section) => a.position - b.position);
   const currentSection = sections[currentIndex];
 
   if (!currentSection) return <div className="text-center text-gray-400 mt-20">No sections available</div>;
 
   return (
-    <div className="flex gap-8">
-      {/* Sidebar */}
-      <nav className="w-56 flex-shrink-0">
-        <div className="text-gray-500 text-xs uppercase tracking-wider mb-3">Sections</div>
-        <div className="space-y-1">
+    <div className="flex">
+      {/* Sidebar nav — pinned left */}
+      <nav className="fixed left-0 top-[73px] bottom-0 w-64 border-r border-gray-800/50 overflow-y-auto px-4 py-6">
+        <div className="text-gray-600 text-[10px] uppercase tracking-widest font-semibold mb-4 px-2">Sections</div>
+        <div className="flex flex-col gap-1">
           {sections.map((section: Section, index: number) => {
+            const isActive = index === currentIndex;
             const isCompleted = completedSections.includes(section.position);
             return (
               <button
                 key={section.id}
                 onClick={() => handleSectionClick(index, section.position)}
-                className={`block w-full text-left px-3 py-2 text-sm rounded transition-colors ${
-                  index === currentIndex
-                    ? 'text-purple-400 bg-gray-800 border-l-2 border-purple-400'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900'
+                className={`flex items-center gap-3 px-2 py-2.5 rounded-lg text-left transition-colors ${
+                  isActive
+                    ? 'bg-purple-600/10 text-purple-300'
+                    : 'text-gray-500'
                 }`}
               >
-                <span className="flex items-center gap-2">
-                  {isCompleted && (
-                    <svg className="w-3.5 h-3.5 text-green-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
+                  isActive
+                    ? 'bg-purple-600 text-white'
+                    : isCompleted
+                    ? 'bg-green-900/40 text-green-400 border border-green-700/50'
+                    : 'bg-gray-800/60 text-gray-500 border border-gray-700/50'
+                }`}>
+                  {isCompleted && !isActive ? (
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
+                  ) : (
+                    section.position
                   )}
-                  <span>{section.position}. {section.title}</span>
+                </span>
+                <span className={`text-sm leading-snug ${
+                  isActive ? 'text-purple-200 font-medium' : 'text-gray-400'
+                }`}>
+                  {section.title}
                 </span>
               </button>
             );
@@ -141,11 +152,17 @@ export default function LearnPage() {
       </nav>
 
       {/* Content */}
-      <article className="flex-1 min-w-0">
-        <h1 className="text-2xl font-bold mb-1">{currentSection.title}</h1>
-        <p className="text-gray-500 text-sm mb-6">Section {currentSection.position} of {sections.length}</p>
+      <article className="flex-1 min-w-0 max-w-[820px] mx-auto ml-72">
+        <div className="mb-8">
+          <p className="text-purple-400 text-sm font-medium tracking-wide mb-2">
+            Section {currentSection.position} of {sections.length}
+          </p>
+          <h1 className="text-2xl font-bold text-white leading-tight">
+            {currentSection.title}
+          </h1>
+        </div>
 
-        <div className="prose prose-invert prose-purple max-w-none">
+        <div className="learn-content">
           <ReactMarkdown
             components={{
               code({ className, children }) {
@@ -156,16 +173,16 @@ export default function LearnPage() {
               },
             }}
           >
-            {currentSection.content || 'Content not yet generated.'}
+            {(currentSection.content || 'Content not yet generated.').replace(/^##?\s+.+\n+/, '')}
           </ReactMarkdown>
         </div>
 
         {/* Prev/Next navigation */}
-        <div className="flex justify-between mt-8 pt-4 border-t border-gray-800">
+        <div className="flex justify-between mt-12 pt-6 border-t border-gray-800/60">
           <button
             onClick={() => handlePrev(currentIndex - 1, sections[currentIndex - 1].position)}
             disabled={currentIndex === 0}
-            className="text-sm text-gray-400 hover:text-white disabled:text-gray-700 transition-colors"
+            className="text-sm text-gray-500 hover:text-gray-300 disabled:text-gray-800 disabled:cursor-default transition-colors"
           >
             &larr; {currentIndex > 0 ? sections[currentIndex - 1].title : 'Previous'}
           </button>
@@ -178,7 +195,7 @@ export default function LearnPage() {
               )
             }
             disabled={currentIndex === sections.length - 1}
-            className="text-sm text-purple-400 hover:text-purple-300 disabled:text-gray-700 transition-colors"
+            className="text-sm text-purple-400 hover:text-purple-300 disabled:text-gray-800 disabled:cursor-default transition-colors"
           >
             {currentIndex < sections.length - 1 ? sections[currentIndex + 1].title : 'Next'} &rarr;
           </button>

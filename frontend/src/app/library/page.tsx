@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@/context/AuthContext';
 import { listMyCoursesWithProgress } from '@/lib/api';
 import { CourseWithProgress } from '@/lib/types';
 
