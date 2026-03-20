@@ -73,7 +73,7 @@ async def course_with_evidence(evidence_db):
     """Create a course with sections and evidence cards in the DB."""
     async with evidence_db() as session:
         # Create course
-        course = Course(topic="Python Testing", status="completed")
+        course = Course(topic="Python Testing", status="completed", user_id="test-user-id")
         session.add(course)
         await session.commit()
 
@@ -117,7 +117,7 @@ async def course_with_evidence(evidence_db):
 async def course_with_blackboard(evidence_db):
     """Create a course with a populated blackboard."""
     async with evidence_db() as session:
-        course = Course(topic="Python Blackboard", status="completed")
+        course = Course(topic="Python Blackboard", status="completed", user_id="test-user-id")
         session.add(course)
         await session.commit()
 

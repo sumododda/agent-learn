@@ -11,6 +11,7 @@ from app.main import app
 from app.models import Base, Blackboard, EvidenceCard, ResearchBrief
 from app.database import get_session
 from app.auth import get_current_user
+from app.limiter import limiter
 from app.agent import (
     BlackboardUpdates,
     CardVerification,
@@ -52,11 +53,13 @@ async def setup_db():
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_current_user] = lambda: "test-user-id"
+    limiter.enabled = False
     yield
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     app.dependency_overrides.clear()
+    limiter.enabled = True
 
 
 @pytest.fixture
