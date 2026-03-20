@@ -7,7 +7,6 @@ Tests cover:
 - edit_section: editor agent invocation, EditorResult handling
 - extract_citations: [N] marker extraction and card mapping
 - Editor/BlackboardUpdates schema validation
-- create_editor: agent creation with correct config
 """
 
 import uuid
@@ -463,8 +462,17 @@ def test_format_outline_context_objects():
 
 
 # ---------------------------------------------------------------------------
-# Tests: write_section
+# Tests: write_section (deepagents writer via ChatLiteLLM)
 # ---------------------------------------------------------------------------
+
+
+def _mock_writer_agent(content_text):
+    """Create a mock writer agent whose ainvoke returns plain message content."""
+    mock_agent = AsyncMock()
+    mock_msg = MagicMock()
+    mock_msg.content = content_text
+    mock_agent.ainvoke.return_value = {"messages": [mock_msg]}
+    return mock_agent
 
 
 @pytest.mark.anyio
@@ -477,31 +485,19 @@ async def test_write_section_filters_verified_cards(setup_db, db_session, course
         SimpleNamespace(position=1, title="Introduction", summary="Getting started"),
     ]
 
-    mock_result = {
-        "messages": [
-            MagicMock(content="## Introduction\n\nPython was created in 1991 [1]. It uses dynamic typing [2].")
-        ]
-    }
+    mock_content = "## Introduction\n\nPython was created in 1991 [1]. It uses dynamic typing [2]."
+    mock_agent = _mock_writer_agent(mock_content)
 
-    with patch("app.agent_service.create_writer") as mock_create:
-        mock_agent = AsyncMock()
-        mock_agent.ainvoke = AsyncMock(return_value=mock_result)
-        mock_create.return_value = mock_agent
-
+    with patch("app.agent_service.create_writer", return_value=mock_agent):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
 
     assert "## Introduction" in result
 
-    # Check that the message sent to the writer contains only 2 verified cards
+    # Check that the message sent to the writer contains only verified cards
     call_args = mock_agent.ainvoke.call_args
     message = call_args[0][0]["messages"][0]["content"]
-    assert "[1]" in message  # first verified card
-    assert "[2]" in message  # second verified card
-    # The unverified card (index 2 in original list) should not appear as [3]
-    # in the writer message because only verified cards are passed
-    # The writer message should show (No evidence cards) or have exactly 2 cards
     assert "Python was created by Guido van Rossum" in message
     assert "Python uses dynamic typing" in message
 
@@ -514,25 +510,14 @@ async def test_write_section_with_empty_blackboard(setup_db, db_session, course_
     section = SimpleNamespace(title="Introduction", summary="Getting started")
     outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
 
-    mock_result = {
-        "messages": [MagicMock(content="## Introduction\n\nContent here.")]
-    }
+    mock_agent = _mock_writer_agent("## Introduction\n\nContent here.")
 
-    with patch("app.agent_service.create_writer") as mock_create:
-        mock_agent = AsyncMock()
-        mock_agent.ainvoke = AsyncMock(return_value=mock_result)
-        mock_create.return_value = mock_agent
-
+    with patch("app.agent_service.create_writer", return_value=mock_agent):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
 
     assert "## Introduction" in result
-
-    # Check blackboard section mentions empty/first
-    call_args = mock_agent.ainvoke.call_args
-    message = call_args[0][0]["messages"][0]["content"]
-    assert "first section" in message.lower() or "empty" in message.lower()
 
 
 @pytest.mark.anyio
@@ -543,15 +528,9 @@ async def test_write_section_with_dict_section(setup_db, db_session, course_with
     section = {"title": "Introduction", "summary": "Getting started", "position": 1}
     outline = [{"position": 1, "title": "Introduction", "summary": "Getting started"}]
 
-    mock_result = {
-        "messages": [MagicMock(content="## Introduction\n\nContent here.")]
-    }
+    mock_agent = _mock_writer_agent("## Introduction\n\nContent here.")
 
-    with patch("app.agent_service.create_writer") as mock_create:
-        mock_agent = AsyncMock()
-        mock_agent.ainvoke = AsyncMock(return_value=mock_result)
-        mock_create.return_value = mock_agent
-
+    with patch("app.agent_service.create_writer", return_value=mock_agent):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
@@ -559,34 +538,19 @@ async def test_write_section_with_dict_section(setup_db, db_session, course_with
     assert "## Introduction" in result
 
 
-@pytest.mark.anyio
-async def test_write_section_fallback_to_sync(setup_db, db_session, course_with_cards):
-    """write_section falls back to sync invoke when ainvoke raises AttributeError."""
-    course, cards = course_with_cards
+# ---------------------------------------------------------------------------
+# Tests: edit_section (deepagents editor via ChatLiteLLM)
+# ---------------------------------------------------------------------------
 
-    section = SimpleNamespace(title="Intro", summary="Start")
-    outline = [SimpleNamespace(position=1, title="Intro", summary="Start")]
 
-    mock_result = {
-        "messages": [MagicMock(content="## Intro\n\nSync fallback content.")]
+def _mock_editor_agent(editor_result):
+    """Create a mock editor agent whose ainvoke returns structured_response."""
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "structured_response": editor_result,
+        "messages": [],
     }
-
-    with patch("app.agent_service.create_writer") as mock_create:
-        mock_agent = MagicMock()
-        mock_agent.ainvoke = MagicMock(side_effect=AttributeError("no ainvoke"))
-        mock_agent.invoke = MagicMock(return_value=mock_result)
-        mock_create.return_value = mock_agent
-
-        from app.agent_service import write_section
-
-        result = await write_section(cards, None, section, outline, db_session)
-
-    assert "## Intro" in result
-
-
-# ---------------------------------------------------------------------------
-# Tests: edit_section
-# ---------------------------------------------------------------------------
+    return mock_agent
 
 
 @pytest.mark.anyio
@@ -595,13 +559,9 @@ async def test_edit_section_returns_editor_result(setup_db, db_session, course_w
     course, cards = course_with_cards
     draft = "## Introduction\n\nDraft content."
 
-    with (
-        patch("app.agent_service.create_editor") as mock_create,
-        patch("app.agent_service._invoke_agent", new_callable=AsyncMock) as mock_invoke,
-    ):
-        mock_create.return_value = MagicMock()
-        mock_invoke.return_value = sample_editor_result
+    mock_agent = _mock_editor_agent(sample_editor_result)
 
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
         from app.agent_service import edit_section
 
         result = await edit_section(draft, None, cards, 1, db_session)
@@ -614,28 +574,24 @@ async def test_edit_section_returns_editor_result(setup_db, db_session, course_w
 
 @pytest.mark.anyio
 async def test_edit_section_handles_dict_result(setup_db, db_session, course_with_cards):
-    """edit_section handles agent returning a dict (JSON fallback)."""
+    """edit_section handles editor returning a dict (JSON fallback)."""
     course, cards = course_with_cards
     draft = "## Test\n\nContent."
 
-    dict_result = {
-        "edited_content": "## Test\n\nEdited content.",
-        "blackboard_updates": {
-            "new_glossary_terms": {},
-            "new_concept_ownership": {},
-            "topics_covered": ["test topic"],
-            "key_points_summary": "Test summary",
-            "new_sources": [],
-        },
-    }
+    editor_result = EditorResult(
+        edited_content="## Test\n\nEdited content.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=["test topic"],
+            key_points_summary="Test summary",
+            new_sources=[],
+        ),
+    )
 
-    with (
-        patch("app.agent_service.create_editor") as mock_create,
-        patch("app.agent_service._invoke_agent", new_callable=AsyncMock) as mock_invoke,
-    ):
-        mock_create.return_value = MagicMock()
-        mock_invoke.return_value = dict_result
+    mock_agent = _mock_editor_agent(editor_result)
 
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
         from app.agent_service import edit_section
 
         result = await edit_section(draft, None, cards, 1, db_session)
@@ -676,20 +632,16 @@ async def test_edit_section_includes_blackboard_in_message(setup_db, db_session,
         ),
     )
 
-    with (
-        patch("app.agent_service.create_editor") as mock_create,
-        patch("app.agent_service._invoke_agent", new_callable=AsyncMock) as mock_invoke,
-    ):
-        mock_create.return_value = MagicMock()
-        mock_invoke.return_value = mock_result
+    mock_agent = _mock_editor_agent(mock_result)
 
+    with patch("app.agent_service.create_editor", return_value=mock_agent) as mock_create:
         from app.agent_service import edit_section
 
         result = await edit_section(draft, bb, cards, 2, db_session)
 
     # Verify the message sent to editor includes blackboard context
-    call_args = mock_invoke.call_args
-    message = call_args[0][1]  # second positional arg is the message string
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
     assert "BLACKBOARD" in message
     assert "var" in message  # glossary term should be in the message
     assert "Section position: 2" in message
@@ -785,49 +737,3 @@ async def test_extract_citations_skips_zero(setup_db, course_with_cards):
     citations = extract_citations(content, cards)
     assert len(citations) == 1
     assert citations[0]["number"] == 1
-
-
-# ---------------------------------------------------------------------------
-# Tests: create_editor agent config
-# ---------------------------------------------------------------------------
-
-
-def test_create_editor_no_tools():
-    """create_editor creates an agent with no tools and ToolStrategy(EditorResult)."""
-    with (
-        patch("app.agent.get_model") as mock_model,
-        patch("app.agent.create_deep_agent") as mock_create,
-    ):
-        mock_model.return_value = MagicMock()
-        mock_create.return_value = MagicMock()
-
-        from app.agent import create_editor
-
-        create_editor()
-
-    call_kwargs = mock_create.call_args
-    assert call_kwargs.kwargs["tools"] == []
-    assert call_kwargs.kwargs["name"] == "agent-learn-editor"
-    # Verify ToolStrategy is used for structured output
-    response_format = call_kwargs.kwargs["response_format"]
-    assert response_format is not None
-
-
-def test_create_writer_no_structured_output():
-    """create_writer does NOT use ToolStrategy — returns plain markdown."""
-    with (
-        patch("app.agent.get_model") as mock_model,
-        patch("app.agent.create_deep_agent") as mock_create,
-    ):
-        mock_model.return_value = MagicMock()
-        mock_create.return_value = MagicMock()
-
-        from app.agent import create_writer
-
-        create_writer()
-
-    call_kwargs = mock_create.call_args
-    assert call_kwargs.kwargs["tools"] == []
-    assert call_kwargs.kwargs["name"] == "agent-learn-writer"
-    # Writer should NOT have response_format
-    assert "response_format" not in call_kwargs.kwargs

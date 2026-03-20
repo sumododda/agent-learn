@@ -1,18 +1,13 @@
+"""Agent definitions: schemas, system prompts, and deepagents creators."""
+import json
+import logging
+
 from pydantic import BaseModel
-from langchain.chat_models import init_chat_model
-from langchain.agents.structured_output import ToolStrategy
 from deepagents import create_deep_agent
-from app.config import settings
+from langchain.agents.structured_output import ToolStrategy
+from app import provider_service
 
-
-def get_model():
-    """Create an LLM instance via OpenRouter."""
-    return init_chat_model(
-        model=settings.OPENROUTER_MODEL,
-        model_provider="openai",
-        base_url="https://openrouter.ai/api/v1",
-        api_key=settings.OPENROUTER_API_KEY,
-    )
+logger = logging.getLogger(__name__)
 
 
 # --- Structured output schemas for planner ---
@@ -308,161 +303,92 @@ Output a structured VerificationResult with:
 - gaps: list of unanswered questions or weak areas that need more research"""
 
 
-# --- Planner subagent config (dict form, used by supervisor) ---
+# --- Subagent dicts (for reference / orchestrator) ---
 
 planner_subagent = {
     "name": "planner",
-    "description": (
-        "Generates a structured course outline from a topic and optional "
-        "learner instructions. Use this when asked to create a course outline."
-    ),
+    "description": "Generates a structured course outline from a topic and optional learner instructions.",
     "system_prompt": PLANNER_PROMPT,
     "tools": [],
 }
 
-
-# --- Writer subagent config (dict form, used by supervisor) ---
-
 writer_subagent = {
     "name": "writer",
-    "description": (
-        "Generates markdown lesson content for each section of an approved "
-        "course outline. Use this when asked to generate lesson content."
-    ),
+    "description": "Generates markdown lesson content for each section of an approved course outline.",
     "system_prompt": WRITER_PROMPT,
     "tools": [],
 }
 
 
-def create_supervisor():
-    """Create the agent-learn supervisor with subagents.
-
-    The supervisor delegates to specialized subagents via the built-in
-    task() tool.  It has access to both the planner (outline generation)
-    and the writer (lesson content generation).
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
-        system_prompt=SUPERVISOR_PROMPT,
-        subagents=[planner_subagent, writer_subagent],
-        name="agent-learn-supervisor",
-    )
-    return agent
+# --- Agent creators (deepagents + ChatLiteLLM) ---
 
 
-def create_planner():
-    """Create a standalone planner agent with structured output.
-
-    This is the primary entry point for outline generation.  We invoke
-    the planner directly (rather than through the supervisor) because
-    Deep Agents excludes `structured_response` from subagent return
-    state, so a supervisor-delegated call would lose the typed output.
-    Calling the planner directly with response_format gives us a
-    guaranteed CourseOutlineWithBriefs in result["structured_response"].
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
+def create_planner(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a planner agent with structured output, backed by LiteLLM."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
         system_prompt=PLANNER_PROMPT,
         response_format=ToolStrategy(CourseOutlineWithBriefs),
         tools=[],
         name="agent-learn-planner",
     )
-    return agent
 
 
-def create_writer():
-    """Create a standalone writer agent that returns plain markdown.
-
-    No structured output — the writer returns prose which we split
-    by ## headings in agent_service.py.
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
+def create_writer(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a writer agent (plain markdown output)."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
         system_prompt=WRITER_PROMPT,
         tools=[],
         name="agent-learn-writer",
     )
-    return agent
 
 
-def create_discovery_researcher():
-    """Create a discovery researcher agent that synthesizes search results.
-
-    The agent receives pre-fetched Tavily search results and produces
-    a structured TopicBrief. It does NOT call Tavily itself — the
-    service layer handles all search API calls.
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
+def create_discovery_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a discovery researcher with structured TopicBrief output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
         system_prompt=DISCOVERY_RESEARCHER_PROMPT,
         response_format=ToolStrategy(TopicBrief),
         tools=[],
         name="agent-learn-discovery-researcher",
     )
-    return agent
 
 
-def create_section_researcher():
-    """Create a section researcher agent that produces evidence cards.
-
-    The agent receives pre-fetched Tavily search results and a research
-    brief, then extracts structured evidence cards with source tiers
-    and confidence ratings. It does NOT call Tavily itself — the
-    service layer handles all search API calls.
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
+def create_section_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a section researcher with structured EvidenceCardSet output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
         system_prompt=SECTION_RESEARCHER_PROMPT,
         response_format=ToolStrategy(EvidenceCardSet),
         tools=[],
         name="agent-learn-section-researcher",
     )
-    return agent
 
 
-def create_verifier():
-    """Create a verifier agent that checks evidence quality.
-
-    The verifier reviews evidence cards against research brief questions
-    and produces a VerificationResult. It has NO tools — pure LLM
-    judgment only. It does not search or gather new evidence.
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
+def create_verifier(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a verifier with structured VerificationResult output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
         system_prompt=VERIFIER_PROMPT,
         response_format=ToolStrategy(VerificationResult),
         tools=[],
         name="agent-learn-verifier",
     )
-    return agent
 
 
-def create_editor():
-    """Create an editor agent that polishes drafts and generates blackboard updates.
-
-    The editor receives a draft section, blackboard state, and evidence cards.
-    It returns an EditorResult with edited content and blackboard updates.
-    It has NO tools — pure LLM editing only.
-    """
-    model = get_model()
-
-    agent = create_deep_agent(
-        model=model,
+def create_editor(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create an editor with structured EditorResult output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
         system_prompt=EDITOR_PROMPT,
         response_format=ToolStrategy(EditorResult),
         tools=[],
         name="agent-learn-editor",
     )
-    return agent

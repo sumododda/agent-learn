@@ -20,8 +20,11 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.agent import (
     BlackboardUpdates,
     CardVerification,
+    CourseOutlineWithBriefs,
     EditorResult,
     EvidenceCardItem,
+    OutlineSection,
+    ResearchBriefItem,
     VerificationResult,
 )
 from app.models import Base, Blackboard, Course, EvidenceCard, ResearchBrief, Section
@@ -63,9 +66,6 @@ async def error_session():
 @pytest.mark.anyio
 async def test_tavily_failure_creates_ungrounded_course(setup_db, client):
     """When Tavily fails during discovery, course is created with ungrounded=True."""
-    from app.agent import CourseOutlineWithBriefs, OutlineSection, ResearchBriefItem
-
-    # The generate_outline function should catch Tavily errors and return ungrounded=True
     outline = CourseOutlineWithBriefs(
         sections=[
             OutlineSection(position=1, title="Intro", summary="Getting started"),
@@ -87,10 +87,17 @@ async def test_tavily_failure_creates_ungrounded_course(setup_db, client):
 
     # generate_outline returns (outline, ungrounded=True)
     mock_return = (outline, True)
-    with patch(
-        "app.routers.courses.generate_outline",
-        new_callable=AsyncMock,
-        return_value=mock_return,
+    with (
+        patch(
+            "app.routers.courses._get_user_provider",
+            new_callable=AsyncMock,
+            return_value=("anthropic", "claude-sonnet-4-20250514", {"api_key": "sk-test"}, {}),
+        ),
+        patch(
+            "app.routers.courses.generate_outline",
+            new_callable=AsyncMock,
+            return_value=mock_return,
+        ),
     ):
         response = await client.post(
             "/api/courses", json={"topic": "Machine Learning"}
@@ -157,7 +164,7 @@ async def test_all_cards_rejected_writer_still_runs(setup_db, error_session):
     await error_session.commit()
 
     # Verifier rejects all cards
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = False
             card.verification_note = "Rejected: insufficient"
@@ -173,11 +180,11 @@ async def test_all_cards_rejected_writer_still_runs(setup_db, error_session):
 
     write_was_called = []
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         write_was_called.append(section.position)
         return f"## {section.title}\n\nContent without evidence."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return EditorResult(
             edited_content=f"## Section {section_position}\n\nEdited.",
             blackboard_updates=BlackboardUpdates(
@@ -189,7 +196,7 @@ async def test_all_cards_rejected_writer_still_runs(setup_db, error_session):
             ),
         )
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         pass  # Cards already seeded
 
     with (
@@ -398,14 +405,14 @@ async def test_pipeline_no_section_briefs(setup_db, error_session):
     error_session.add(discovery)
     await error_session.commit()
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         # No section briefs to research
         pass
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return EditorResult(
             edited_content=f"## Section {section_position}\n\nEdited.",
             blackboard_updates=BlackboardUpdates(
@@ -441,8 +448,6 @@ async def test_pipeline_no_section_briefs(setup_db, error_session):
 @pytest.mark.anyio
 async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
     """generate_outline returns ungrounded=True when discover_topic raises."""
-    from app.agent import CourseOutlineWithBriefs, OutlineSection, ResearchBriefItem
-
     mock_outline = CourseOutlineWithBriefs(
         sections=[OutlineSection(position=1, title="Intro", summary="Start")],
         research_briefs=[
@@ -454,6 +459,14 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
         ],
     )
 
+    def _mock_planner_agent(structured_response):
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {
+            "structured_response": structured_response,
+            "messages": [],
+        }
+        return mock_agent
+
     with (
         patch(
             "app.agent_service.discover_topic",
@@ -462,16 +475,11 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
         ),
         patch(
             "app.agent_service.create_planner",
-        ) as mock_planner,
-        patch(
-            "app.agent_service._invoke_agent",
-            new_callable=AsyncMock,
-            return_value=mock_outline,
+            return_value=_mock_planner_agent(mock_outline),
         ),
         patch("app.agent_service.settings") as mock_settings,
     ):
         mock_settings.TAVILY_API_KEY = "fake-key"
-        mock_planner.return_value = MagicMock()
 
         from app.agent_service import generate_outline
 

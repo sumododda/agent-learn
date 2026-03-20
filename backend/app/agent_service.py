@@ -33,6 +33,35 @@ from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Deep Agents invocation helper
+# ---------------------------------------------------------------------------
+
+
+async def _invoke_agent(agent, message: str):
+    """Invoke a Deep Agents agent with async/sync fallback."""
+    try:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": message}]}
+        )
+    except AttributeError:
+        result = await asyncio.to_thread(
+            agent.invoke,
+            {"messages": [{"role": "user", "content": message}]},
+        )
+    if "structured_response" in result and result["structured_response"] is not None:
+        return result["structured_response"]
+    last_message = result["messages"][-1]
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    try:
+        data = json.loads(content)
+        return data
+    except (json.JSONDecodeError, ValueError):
+        logger.error("Failed to parse agent output: %s", content[:500])
+        raise ValueError(f"Failed to parse agent output: {content[:500]}")
+
+
 # ---------------------------------------------------------------------------
 # Helper functions for the full pipeline
 # ---------------------------------------------------------------------------
@@ -76,39 +105,6 @@ async def update_course_status(
         await session.commit()
 
 
-async def _invoke_agent(agent, message: str):
-    """Invoke a Deep Agents agent with async/sync fallback.
-
-    Returns the structured_response if available, otherwise parses
-    the last message content as JSON.
-    """
-    try:
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": message}]}
-        )
-    except AttributeError:
-        result = await asyncio.to_thread(
-            agent.invoke,
-            {"messages": [{"role": "user", "content": message}]},
-        )
-
-    # Preferred path: ToolStrategy places output in structured_response
-    if "structured_response" in result and result["structured_response"] is not None:
-        return result["structured_response"]
-
-    # Fallback: try to parse the last assistant message as JSON
-    last_message = result["messages"][-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
-
-    try:
-        data = json.loads(content)
-        return data
-    except (json.JSONDecodeError, ValueError):
-        logger.error("Failed to parse agent output: %s", content[:500])
-        raise ValueError(
-            f"Failed to parse agent output: {content[:500]}"
-        )
-
 
 def _generate_discovery_queries(topic: str, instructions: str | None) -> list[str]:
     """Generate 3-5 broad search queries from the topic for discovery research."""
@@ -125,7 +121,14 @@ def _generate_discovery_queries(topic: str, instructions: str | None) -> list[st
     return queries[:5]  # Cap at 5 queries
 
 
-async def discover_topic(topic: str, instructions: str | None = None) -> TopicBrief:
+async def discover_topic(
+    topic: str,
+    instructions: str | None = None,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
+) -> TopicBrief:
     """Run discovery research on a topic using Tavily + synthesis agent.
 
     1. Generate broad search queries from the topic
@@ -134,6 +137,8 @@ async def discover_topic(topic: str, instructions: str | None = None) -> TopicBr
     4. Return TopicBrief
     """
     from tavily import AsyncTavilyClient
+
+    credentials = credentials or {}
 
     # Generate search queries
     queries = _generate_discovery_queries(topic, instructions)
@@ -167,7 +172,6 @@ async def discover_topic(topic: str, instructions: str | None = None) -> TopicBr
     logger.info("Discovery research: %d total search results collected", len(all_search_results))
 
     # Pass results to discovery researcher agent for synthesis
-    researcher = create_discovery_researcher()
     message = (
         f"Topic: {topic}\n"
     )
@@ -175,6 +179,7 @@ async def discover_topic(topic: str, instructions: str | None = None) -> TopicBr
         message += f"Learner instructions: {instructions}\n"
     message += f"\nSearch results:\n{json.dumps(all_search_results, indent=2)}"
 
+    researcher = create_discovery_researcher(provider, model, credentials, extra_fields)
     result = await _invoke_agent(researcher, message)
 
     # Ensure we have a TopicBrief
@@ -187,19 +192,28 @@ async def discover_topic(topic: str, instructions: str | None = None) -> TopicBr
 
 
 async def generate_outline(
-    topic: str, instructions: str | None = None
+    topic: str,
+    instructions: str | None = None,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
     Returns (CourseOutlineWithBriefs, ungrounded_flag).
     If discovery fails, falls back to ungrounded planning (ungrounded=True).
     """
+    credentials = credentials or {}
+
     # Step 1: Discovery research (wrapped in try/except for fallback)
     topic_brief = None
     ungrounded = False
     try:
         if settings.TAVILY_API_KEY:
-            topic_brief = await discover_topic(topic, instructions)
+            topic_brief = await discover_topic(
+                topic, instructions, provider, model, credentials, extra_fields
+            )
             logger.info("Discovery research completed successfully")
         else:
             logger.warning("TAVILY_API_KEY not set — skipping discovery research")
@@ -209,14 +223,13 @@ async def generate_outline(
         ungrounded = True
 
     # Step 2: Plan with topic brief context
-    planner = create_planner()
-
     message = f"Generate a course outline for the topic: {topic}"
     if instructions:
         message += f"\n\nLearner instructions: {instructions}"
     if topic_brief:
         message += f"\n\nResearch findings:\n{topic_brief.model_dump_json()}"
 
+    planner = create_planner(provider, model, credentials, extra_fields)
     result = await _invoke_agent(planner, message)
 
     # Ensure we have a CourseOutlineWithBriefs
@@ -249,13 +262,21 @@ def _split_markdown_sections(markdown: str, expected_count: int) -> list[Section
     return sections
 
 
-async def generate_lessons(course_id, session: AsyncSession) -> None:
+async def generate_lessons(
+    course_id,
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
+) -> None:
     """Legacy monolithic pipeline: research -> verify -> write -> edit per section.
 
     Superseded by pipeline.py for production use. Retained only for existing
     tests until they are migrated (Phase 5). The ``update_pipeline_status``
     calls are no-ops since the legacy status dict has been removed.
     """
+    credentials = credentials or {}
 
     def update_pipeline_status(
         _course_id: str, _section: int | None, _stage: str
@@ -270,7 +291,7 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
         # 1. Parallel section research
         await update_course_status(course_id, "researching", session)
         update_pipeline_status(pipeline_key, None, "researching")
-        await research_all_sections(course_id, briefs, session)
+        await research_all_sections(course_id, briefs, session, provider, model, credentials, extra_fields)
 
         # 2. Sequential per section: verify -> write -> edit
         blackboard = await create_blackboard(course_id, session)
@@ -294,10 +315,10 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
                 None,
             )
             if brief and cards:
-                verification = await verify_evidence(cards, brief, session)
+                verification = await verify_evidence(cards, brief, session, provider, model, credentials, extra_fields)
                 if verification.needs_more_research:
                     new_card_items = await research_section_targeted(
-                        verification.gaps
+                        verification.gaps, provider, model, credentials, extra_fields
                     )
                     if new_card_items:
                         await save_evidence_cards(
@@ -309,7 +330,7 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
                     cards = await get_evidence_cards(
                         course_id, section.position, session
                     )
-                    await verify_evidence(cards, brief, session)
+                    await verify_evidence(cards, brief, session, provider, model, credentials, extra_fields)
 
             # Write → Edit → Persist (wrapped per-section so one failure doesn't stop others)
             try:
@@ -318,7 +339,7 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
                 )
                 await update_course_status(course_id, "writing", session)
                 draft = await write_section(
-                    cards, blackboard, section, list(course.sections), session
+                    cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields
                 )
 
                 if not draft or not draft.strip():
@@ -337,7 +358,7 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
                 )
                 await update_course_status(course_id, "editing", session)
                 editor_result = await edit_section(
-                    draft, blackboard, cards, section.position, session
+                    draft, blackboard, cards, section.position, session, provider, model, credentials, extra_fields
                 )
 
                 # Persist
@@ -405,7 +426,13 @@ async def generate_lessons(course_id, session: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def research_section(brief: ResearchBrief) -> list[EvidenceCardItem]:
+async def research_section(
+    brief: ResearchBrief,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
+) -> list[EvidenceCardItem]:
     """Research a single section by searching each must-answer question via Tavily.
 
     1. For each question in the brief, call AsyncTavilyClient.search
@@ -414,6 +441,8 @@ async def research_section(brief: ResearchBrief) -> list[EvidenceCardItem]:
     4. Return the extracted evidence cards
     """
     from tavily import AsyncTavilyClient
+
+    credentials = credentials or {}
 
     client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
     all_results: list[dict] = []
@@ -454,13 +483,13 @@ async def research_section(brief: ResearchBrief) -> list[EvidenceCardItem]:
     )
 
     # Pass to section researcher agent for evidence card extraction
-    researcher = create_section_researcher()
     message = (
         f"Research brief:\n"
         f"Questions: {json.dumps(brief.questions)}\n\n"
         f"Search results:\n{json.dumps(all_results, indent=2)}"
     )
 
+    researcher = create_section_researcher(provider, model, credentials, extra_fields)
     result = await _invoke_agent(researcher, message)
 
     # Ensure we have an EvidenceCardSet
@@ -476,7 +505,13 @@ async def research_section(brief: ResearchBrief) -> list[EvidenceCardItem]:
 
 
 async def research_all_sections(
-    course_id, briefs: list[ResearchBrief], session: AsyncSession
+    course_id,
+    briefs: list[ResearchBrief],
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> None:
     """Run section research in parallel for all section-level briefs.
 
@@ -484,6 +519,7 @@ async def research_all_sections(
     runs asyncio.gather with return_exceptions=True, and saves
     evidence cards for each successful result.
     """
+    credentials = credentials or {}
     section_briefs = [b for b in briefs if b.section_position is not None]
 
     if not section_briefs:
@@ -497,7 +533,7 @@ async def research_all_sections(
     )
 
     results = await asyncio.gather(
-        *[research_section(brief) for brief in section_briefs],
+        *[research_section(brief, provider, model, credentials, extra_fields) for brief in section_briefs],
         return_exceptions=True,
     )
 
@@ -603,6 +639,10 @@ async def verify_evidence(
     cards: list[EvidenceCard],
     brief: ResearchBrief,
     session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> VerificationResult:
     """Invoke the verifier agent to check evidence quality for a section.
 
@@ -611,12 +651,13 @@ async def verify_evidence(
     3. Update card verified status and verification_note in DB
     4. Return VerificationResult
     """
-    verifier = create_verifier()
+    credentials = credentials or {}
     message = (
         f"Research brief questions:\n{json.dumps(brief.questions)}\n\n"
         f"Evidence cards:\n{_format_cards_for_verifier(cards)}"
     )
 
+    verifier = create_verifier(provider, model, credentials, extra_fields)
     result = await _invoke_agent(verifier, message)
 
     # Ensure we have a VerificationResult
@@ -641,7 +682,13 @@ async def verify_evidence(
     return result
 
 
-async def research_section_targeted(gaps: list[str]) -> list[EvidenceCardItem]:
+async def research_section_targeted(
+    gaps: list[str],
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
+) -> list[EvidenceCardItem]:
     """One retry with targeted queries for specific gaps.
 
     For each gap, call AsyncTavilyClient.search with search_depth="advanced"
@@ -649,6 +696,8 @@ async def research_section_targeted(gaps: list[str]) -> list[EvidenceCardItem]:
     researcher agent for evidence card extraction.
     """
     from tavily import AsyncTavilyClient
+
+    credentials = credentials or {}
 
     client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
     all_results: list[dict] = []
@@ -684,12 +733,12 @@ async def research_section_targeted(gaps: list[str]) -> list[EvidenceCardItem]:
     )
 
     # Reuse section researcher for evidence card extraction
-    researcher = create_section_researcher()
     message = (
         f"Fill these specific gaps:\n{json.dumps(gaps)}\n\n"
         f"Search results:\n{json.dumps(all_results, indent=2)}"
     )
 
+    researcher = create_section_researcher(provider, model, credentials, extra_fields)
     result = await _invoke_agent(researcher, message)
 
     # Ensure we have an EvidenceCardSet
@@ -871,6 +920,10 @@ async def write_section(
     section,
     outline: Sequence,
     session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> str:
     """Invoke the writer agent to generate a single section with evidence.
 
@@ -879,7 +932,7 @@ async def write_section(
     3. Invoke writer (plain markdown output, NOT structured)
     4. Return draft markdown string
     """
-    writer = create_writer()
+    credentials = credentials or {}
 
     # Filter to verified cards only
     verified_cards = [c for c in cards if c.verified]
@@ -907,24 +960,14 @@ async def write_section(
         f"Write the section now. Start with ## {sec_title}"
     )
 
-    # Invoke writer — returns plain markdown, NOT structured output
+    # Invoke writer — returns plain markdown string (no structured output)
+    writer = create_writer(provider, model, credentials, extra_fields)
     try:
-        result = await writer.ainvoke(
-            {"messages": [{"role": "user", "content": message}]}
-        )
+        result = await writer.ainvoke({"messages": [{"role": "user", "content": message}]})
     except AttributeError:
-        result = await asyncio.to_thread(
-            writer.invoke,
-            {"messages": [{"role": "user", "content": message}]},
-        )
-
-    # Extract markdown from the last message
+        result = await asyncio.to_thread(writer.invoke, {"messages": [{"role": "user", "content": message}]})
     last_message = result["messages"][-1]
-    content = (
-        last_message.content
-        if hasattr(last_message, "content")
-        else str(last_message)
-    )
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
 
     logger.info("Writer produced draft for section '%s'", sec_title)
     return content
@@ -941,14 +984,18 @@ async def edit_section(
     cards: list[EvidenceCard],
     section_position: int,
     session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> EditorResult:
     """Invoke the editor agent to polish a draft and generate blackboard updates.
 
     1. Build message with draft, blackboard state, evidence cards, section position
-    2. Invoke editor (structured output via ToolStrategy)
+    2. Invoke editor (JSON mode via LiteLLM)
     3. Return EditorResult
     """
-    editor = create_editor()
+    credentials = credentials or {}
 
     cards_text = _format_cards_for_writer(cards)
     blackboard_text = _format_blackboard_for_agent(blackboard)
@@ -962,6 +1009,7 @@ async def edit_section(
         f"Polish the draft, check citations, and generate blackboard updates."
     )
 
+    editor = create_editor(provider, model, credentials, extra_fields)
     result = await _invoke_agent(editor, message)
 
     # Ensure we have an EditorResult
@@ -1010,7 +1058,12 @@ def extract_citations(
 
 
 async def run_discover_and_plan(
-    course_id, session: AsyncSession
+    course_id,
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> dict:
     """Run discovery research + planning for a course.
 
@@ -1027,6 +1080,8 @@ async def run_discover_and_plan(
     """
     from sqlalchemy.orm import selectinload
 
+    credentials = credentials or {}
+
     # Fetch course
     result = await session.execute(
         select(Course)
@@ -1039,7 +1094,7 @@ async def run_discover_and_plan(
 
     # Run discovery research + planner
     outline_with_briefs, ungrounded = await generate_outline(
-        course.topic, course.instructions
+        course.topic, course.instructions, provider, model, credentials, extra_fields
     )
 
     # Set ungrounded flag
@@ -1126,7 +1181,13 @@ async def run_discover_and_plan(
 
 
 async def run_research_section(
-    course_id, section_position: int, session: AsyncSession
+    course_id,
+    section_position: int,
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> dict:
     """Run section researcher for one section.
 
@@ -1139,6 +1200,8 @@ async def run_research_section(
             "evidence_cards": [{id, claim, source_url, ...}, ...],
         }
     """
+    credentials = credentials or {}
+
     # Fetch research brief for this section
     result = await session.execute(
         select(ResearchBrief).where(
@@ -1154,7 +1217,7 @@ async def run_research_section(
         )
 
     # Run section researcher (Tavily search + agent)
-    card_items = await research_section(brief)
+    card_items = await research_section(brief, provider, model, credentials, extra_fields)
 
     # Save evidence cards to DB
     await save_evidence_cards(course_id, section_position, card_items, session)
@@ -1184,7 +1247,13 @@ async def run_research_section(
 
 
 async def run_verify_section(
-    course_id, section_position: int, session: AsyncSession
+    course_id,
+    section_position: int,
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> dict:
     """Run verifier for one section.
 
@@ -1202,6 +1271,8 @@ async def run_verify_section(
             },
         }
     """
+    credentials = credentials or {}
+
     # Fetch evidence cards
     cards = await get_evidence_cards(course_id, section_position, session)
     if not cards:
@@ -1225,18 +1296,18 @@ async def run_verify_section(
         )
 
     # Run verifier
-    verification = await verify_evidence(cards, brief, session)
+    verification = await verify_evidence(cards, brief, session, provider, model, credentials, extra_fields)
 
     # If verifier says we need more research, do targeted re-research
     if verification.needs_more_research:
-        new_card_items = await research_section_targeted(verification.gaps)
+        new_card_items = await research_section_targeted(verification.gaps, provider, model, credentials, extra_fields)
         if new_card_items:
             await save_evidence_cards(
                 course_id, section_position, new_card_items, session
             )
         # Re-fetch and re-verify
         cards = await get_evidence_cards(course_id, section_position, session)
-        verification = await verify_evidence(cards, brief, session)
+        verification = await verify_evidence(cards, brief, session, provider, model, credentials, extra_fields)
 
     verified_count = sum(
         1 for v in verification.card_verifications if v.verified
@@ -1253,7 +1324,13 @@ async def run_verify_section(
 
 
 async def run_write_section(
-    course_id, section_position: int, session: AsyncSession
+    course_id,
+    section_position: int,
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> dict:
     """Run writer for one section.
 
@@ -1268,6 +1345,8 @@ async def run_write_section(
         }
     """
     from sqlalchemy.orm import selectinload
+
+    credentials = credentials or {}
 
     # Fetch course with sections for outline context
     course_result = await session.execute(
@@ -1302,7 +1381,7 @@ async def run_write_section(
     draft = ""
     for attempt in range(1, max_write_attempts + 1):
         draft = await write_section(
-            cards, blackboard, section, list(course.sections), session
+            cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields
         )
         if draft and draft.strip():
             break
@@ -1332,7 +1411,13 @@ async def run_write_section(
 
 
 async def run_edit_section(
-    course_id, section_position: int, session: AsyncSession
+    course_id,
+    section_position: int,
+    session: AsyncSession,
+    provider: str = "",
+    model: str = "",
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
 ) -> dict:
     """Run editor for one section.
 
@@ -1353,6 +1438,8 @@ async def run_edit_section(
         }
     """
     from sqlalchemy.orm import selectinload
+
+    credentials = credentials or {}
 
     # Fetch course with sections
     course_result = await session.execute(
@@ -1392,7 +1479,7 @@ async def run_edit_section(
     editor_result = None
     for attempt in range(1, max_edit_attempts + 1):
         editor_result = await edit_section(
-            draft, blackboard, cards, section_position, session
+            draft, blackboard, cards, section_position, session, provider, model, credentials, extra_fields
         )
         if editor_result.edited_content and editor_result.edited_content.strip():
             edited_content = editor_result.edited_content

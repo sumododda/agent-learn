@@ -27,6 +27,15 @@ from app.agent import (
     VerificationResult,
 )
 
+# ---------------------------------------------------------------------------
+# Provider test constants (used across multiple test files)
+# ---------------------------------------------------------------------------
+
+TEST_PROVIDER = "anthropic"
+TEST_MODEL = "claude-sonnet-4-20250514"
+TEST_CREDENTIALS = {"api_key": "sk-test-fake"}
+TEST_EXTRA_FIELDS = {}
+
 # Use sqlite for tests (requires aiosqlite)
 TEST_DATABASE_URL = "sqlite+aiosqlite://"
 
@@ -271,32 +280,11 @@ def sample_editor_result():
 
 
 @pytest.fixture
-def mock_discovery_researcher():
-    """A mock for create_discovery_researcher that returns a mock agent."""
-    mock_agent = MagicMock()
-    mock_agent.ainvoke = AsyncMock()
-    return mock_agent
-
-
-@pytest.fixture
-def mock_section_researcher():
-    """A mock for create_section_researcher that returns a mock agent."""
-    mock_agent = MagicMock()
-    mock_agent.ainvoke = AsyncMock()
-    return mock_agent
-
-
-@pytest.fixture
-def mock_verifier_agent():
-    """A mock for create_verifier that returns a mock agent."""
-    mock_agent = MagicMock()
-    mock_agent.ainvoke = AsyncMock()
-    return mock_agent
-
-
-@pytest.fixture
-def mock_editor_agent():
-    """A mock for create_editor that returns a mock agent."""
-    mock_agent = MagicMock()
-    mock_agent.ainvoke = AsyncMock()
-    return mock_agent
+def mock_provider_params():
+    """Provider params for mocking LiteLLM calls."""
+    return {
+        "provider": TEST_PROVIDER,
+        "model": TEST_MODEL,
+        "credentials": TEST_CREDENTIALS,
+        "extra_fields": TEST_EXTRA_FIELDS,
+    }

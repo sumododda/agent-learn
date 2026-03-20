@@ -234,7 +234,7 @@ async def test_full_pipeline_happy_path(
             await session.commit()
 
     # research_all_sections mock: seeds evidence cards into DB
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(
@@ -242,7 +242,7 @@ async def test_full_pipeline_happy_path(
                 )
 
     # verify_evidence mock: marks all cards as verified
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
             card.verification_note = "Verified in test"
@@ -250,11 +250,11 @@ async def test_full_pipeline_happy_path(
         return make_verification_result(len(cards))
 
     # write_section mock: returns draft markdown
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nDraft content. Claim [1]. Claim [2]."
 
     # edit_section mock: returns EditorResult per section
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (
@@ -348,21 +348,21 @@ async def test_pipeline_status_updates_per_section(
     # Track pipeline status at each stage transition
     status_snapshots = []
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
         await session.commit()
         return make_verification_result(len(cards))
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (
@@ -396,24 +396,24 @@ async def test_blackboard_accumulates_across_sections(
     """Blackboard glossary, concepts, and coverage grow with each section."""
     course, sections = course_with_sections_and_briefs
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
         await session.commit()
         return make_verification_result(len(cards))
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent [1]."
 
     # Each section adds unique glossary terms
     edit_call_count = 0
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         nonlocal edit_call_count
         edit_call_count += 1
         return EditorResult(
@@ -488,12 +488,12 @@ async def test_partial_failure_write_error(
     """When write_section fails for one section, pipeline sets status to 'failed'."""
     course, sections = course_with_sections_and_briefs
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
         await session.commit()
@@ -501,14 +501,14 @@ async def test_partial_failure_write_error(
 
     write_call_count = 0
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         nonlocal write_call_count
         write_call_count += 1
         if section.position == 2:
             raise RuntimeError("LLM timeout on section 2")
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (
@@ -553,14 +553,14 @@ async def test_re_research_on_verification_gap(
     """When verifier says needs_more_research, research_section_targeted is called."""
     course, sections = course_with_sections_and_briefs
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
     verify_call_count = 0
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         nonlocal verify_call_count
         verify_call_count += 1
         for card in cards:
@@ -591,7 +591,7 @@ async def test_re_research_on_verification_gap(
     # research_section_targeted should be called once (for section 1's gaps)
     targeted_research_called = False
 
-    async def mock_research_targeted(gaps):
+    async def mock_research_targeted(gaps, *args, **kwargs):
         nonlocal targeted_research_called
         targeted_research_called = True
         assert "What are Python's key features?" in gaps
@@ -607,10 +607,10 @@ async def test_re_research_on_verification_gap(
             )
         ]
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (
@@ -656,7 +656,7 @@ async def test_research_runs_in_parallel(
 
     research_all_called = False
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         nonlocal research_all_called
         research_all_called = True
         # Verify it receives briefs including section-level ones
@@ -666,16 +666,16 @@ async def test_research_runs_in_parallel(
         for b in section_briefs:
             await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
         await session.commit()
         return make_verification_result(len(cards))
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (
@@ -711,23 +711,23 @@ async def test_verify_write_edit_sequential_per_section(
 
     call_sequence = []
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         call_sequence.append(("verify", brief.section_position))
         for card in cards:
             card.verified = True
         await session.commit()
         return make_verification_result(len(cards))
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         call_sequence.append(("write", section.position))
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         call_sequence.append(("edit", section_position))
         return make_editor_result(section_position)
 
@@ -766,21 +766,21 @@ async def test_bad_blackboard_update_doesnt_crash_pipeline(
     """Editor returns bad blackboard updates; pipeline logs warning but continues."""
     course, sections = course_with_sections_and_briefs
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
         await session.commit()
         return make_verification_result(len(cards))
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         # Return valid EditorResult but with updates that will cause
         # update_blackboard to internally handle the error (we test
         # that the try/except in generate_lessons also protects)
@@ -890,21 +890,21 @@ async def test_course_status_full_transition_sequence(
             c.status = status
             await session.commit()
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = True
         await session.commit()
         return make_verification_result(len(cards))
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         return f"## {section.title}\n\nContent [1]."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (
@@ -948,13 +948,13 @@ async def test_writer_runs_with_empty_verified_cards(
     """When verifier rejects all cards, writer still runs with empty verified cards list."""
     course, sections = course_with_sections_and_briefs
 
-    async def mock_research_all(course_id, briefs, session):
+    async def mock_research_all(course_id, briefs, session, *args, **kwargs):
         for b in briefs:
             if b.section_position is not None:
                 await _seed_evidence_cards(session, course_id, b.section_position)
 
     # Verifier rejects all cards
-    async def mock_verify(cards, brief, session):
+    async def mock_verify(cards, brief, session, *args, **kwargs):
         for card in cards:
             card.verified = False
             card.verification_note = "Rejected in test"
@@ -970,13 +970,13 @@ async def test_writer_runs_with_empty_verified_cards(
 
     write_cards_counts = []
 
-    async def mock_write(cards, blackboard, section, outline, session):
+    async def mock_write(cards, blackboard, section, outline, session, *args, **kwargs):
         # The service passes all cards; writer filters to verified ones internally.
         # This test verifies the pipeline still calls write_section regardless.
         write_cards_counts.append(len(cards))
         return f"## {section.title}\n\nContent without citations."
 
-    async def mock_edit(draft, blackboard, cards, section_position, session):
+    async def mock_edit(draft, blackboard, cards, section_position, session, *args, **kwargs):
         return make_editor_result(section_position)
 
     with (

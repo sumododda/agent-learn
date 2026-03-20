@@ -17,6 +17,11 @@ export function AuthHeader() {
         </Link>
       </div>
       <div className="flex items-center gap-4">
+        {isLoaded && isSignedIn && (
+          <Link href="/settings" className="text-sm text-gray-400 hover:text-white transition-colors">
+            Settings
+          </Link>
+        )}
         {isLoaded && !isSignedIn && (
           <Link href="/login" className="text-sm text-gray-400 hover:text-white transition-colors">
             Sign In
