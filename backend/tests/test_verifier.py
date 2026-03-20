@@ -3,7 +3,7 @@
 Tests cover:
 - CardVerification / VerificationResult schema validation
 - _format_cards_for_verifier: numbered card formatting
-- verify_evidence: invoke_verifier invocation, DB updates, result handling
+- verify_evidence: create_verifier invocation, DB updates, result handling
 - _update_card_verification: DB persistence of verified/note fields
 - research_section_targeted: Tavily advanced search, evidence extraction
 """
@@ -24,6 +24,16 @@ from app.agent import (
     EvidenceCardSet,
 )
 from app.models import Base, Course, EvidenceCard, ResearchBrief
+
+
+def _mock_structured_agent(structured_response):
+    """Create a mock agent whose ainvoke returns a structured_response."""
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "structured_response": structured_response,
+        "messages": [],
+    }
+    return mock_agent
 
 
 # ---------------------------------------------------------------------------
@@ -289,9 +299,8 @@ async def test_verify_evidence_good_set(setup_db, sample_research_brief, good_ve
         )
 
         with patch(
-            "app.agent_service.invoke_verifier",
-            new_callable=AsyncMock,
-            return_value=good_verification_result,
+            "app.agent_service.create_verifier",
+            return_value=_mock_structured_agent(good_verification_result),
         ):
             from app.agent_service import verify_evidence
 
@@ -362,9 +371,8 @@ async def test_verify_evidence_bad_set(setup_db, sample_research_brief, bad_veri
         )
 
         with patch(
-            "app.agent_service.invoke_verifier",
-            new_callable=AsyncMock,
-            return_value=bad_verification_result,
+            "app.agent_service.create_verifier",
+            return_value=_mock_structured_agent(bad_verification_result),
         ):
             from app.agent_service import verify_evidence
 
@@ -389,7 +397,7 @@ async def test_verify_evidence_bad_set(setup_db, sample_research_brief, bad_veri
 
 @pytest.mark.anyio
 async def test_verify_evidence_handles_dict_result(setup_db):
-    """verify_evidence handles invoke_verifier returning a VerificationResult (always)."""
+    """verify_evidence handles verifier returning a VerificationResult (always)."""
     engine = create_async_engine("sqlite+aiosqlite://")
 
     async with engine.begin() as conn:
@@ -435,9 +443,8 @@ async def test_verify_evidence_handles_dict_result(setup_db):
         )
 
         with patch(
-            "app.agent_service.invoke_verifier",
-            new_callable=AsyncMock,
-            return_value=verification_result,
+            "app.agent_service.create_verifier",
+            return_value=_mock_structured_agent(verification_result),
         ):
             from app.agent_service import verify_evidence
 
@@ -500,9 +507,8 @@ async def test_verify_evidence_skips_out_of_range_index(setup_db):
         )
 
         with patch(
-            "app.agent_service.invoke_verifier",
-            new_callable=AsyncMock,
-            return_value=result_data,
+            "app.agent_service.create_verifier",
+            return_value=_mock_structured_agent(result_data),
         ):
             from app.agent_service import verify_evidence
 
@@ -542,9 +548,8 @@ async def test_research_section_targeted_returns_cards(
     with (
         patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
         patch(
-            "app.agent_service.invoke_section_researcher",
-            new_callable=AsyncMock,
-            return_value=mock_card_set,
+            "app.agent_service.create_section_researcher",
+            return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
         mock_client = AsyncMock()
@@ -606,9 +611,8 @@ async def test_research_section_targeted_partial_failure(
     with (
         patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
         patch(
-            "app.agent_service.invoke_section_researcher",
-            new_callable=AsyncMock,
-            return_value=mock_card_set,
+            "app.agent_service.create_section_researcher",
+            return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
         mock_client = AsyncMock()
@@ -631,7 +635,7 @@ async def test_research_section_targeted_partial_failure(
 async def test_research_section_targeted_handles_dict_result(
     setup_db, mock_tavily_advanced_response
 ):
-    """research_section_targeted handles invoke_section_researcher returning EvidenceCardSet."""
+    """research_section_targeted handles section researcher returning EvidenceCardSet."""
     new_cards = [
         EvidenceCardItem(
             claim="Dict result card",
@@ -648,9 +652,8 @@ async def test_research_section_targeted_handles_dict_result(
     with (
         patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
         patch(
-            "app.agent_service.invoke_section_researcher",
-            new_callable=AsyncMock,
-            return_value=mock_card_set,
+            "app.agent_service.create_section_researcher",
+            return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
         mock_client = AsyncMock()

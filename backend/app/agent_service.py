@@ -9,12 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import (
-    invoke_planner,
-    invoke_writer,
-    invoke_editor,
-    invoke_discovery_researcher,
-    invoke_section_researcher,
-    invoke_verifier,
+    create_planner,
+    create_writer,
+    create_editor,
+    create_discovery_researcher,
+    create_section_researcher,
+    create_verifier,
     CourseOutline,
     CourseOutlineWithBriefs,
     CourseContent,
@@ -32,6 +32,35 @@ from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 # json still used by generate_outline fallback
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Deep Agents invocation helper
+# ---------------------------------------------------------------------------
+
+
+async def _invoke_agent(agent, message: str):
+    """Invoke a Deep Agents agent with async/sync fallback."""
+    try:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": message}]}
+        )
+    except AttributeError:
+        result = await asyncio.to_thread(
+            agent.invoke,
+            {"messages": [{"role": "user", "content": message}]},
+        )
+    if "structured_response" in result and result["structured_response"] is not None:
+        return result["structured_response"]
+    last_message = result["messages"][-1]
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    try:
+        data = json.loads(content)
+        return data
+    except (json.JSONDecodeError, ValueError):
+        logger.error("Failed to parse agent output: %s", content[:500])
+        raise ValueError(f"Failed to parse agent output: {content[:500]}")
+
 
 # ---------------------------------------------------------------------------
 # Helper functions for the full pipeline
@@ -150,7 +179,8 @@ async def discover_topic(
         message += f"Learner instructions: {instructions}\n"
     message += f"\nSearch results:\n{json.dumps(all_search_results, indent=2)}"
 
-    result = await invoke_discovery_researcher(message, provider, model, credentials, extra_fields)
+    researcher = create_discovery_researcher(provider, model, credentials, extra_fields)
+    result = await _invoke_agent(researcher, message)
 
     # Ensure we have a TopicBrief
     if isinstance(result, TopicBrief):
@@ -199,7 +229,8 @@ async def generate_outline(
     if topic_brief:
         message += f"\n\nResearch findings:\n{topic_brief.model_dump_json()}"
 
-    result = await invoke_planner(message, provider, model, credentials, extra_fields)
+    planner = create_planner(provider, model, credentials, extra_fields)
+    result = await _invoke_agent(planner, message)
 
     # Ensure we have a CourseOutlineWithBriefs
     if isinstance(result, CourseOutlineWithBriefs):
@@ -458,7 +489,8 @@ async def research_section(
         f"Search results:\n{json.dumps(all_results, indent=2)}"
     )
 
-    result = await invoke_section_researcher(message, provider, model, credentials, extra_fields)
+    researcher = create_section_researcher(provider, model, credentials, extra_fields)
+    result = await _invoke_agent(researcher, message)
 
     # Ensure we have an EvidenceCardSet
     if isinstance(result, EvidenceCardSet):
@@ -625,7 +657,8 @@ async def verify_evidence(
         f"Evidence cards:\n{_format_cards_for_verifier(cards)}"
     )
 
-    result = await invoke_verifier(message, provider, model, credentials, extra_fields)
+    verifier = create_verifier(provider, model, credentials, extra_fields)
+    result = await _invoke_agent(verifier, message)
 
     # Ensure we have a VerificationResult
     if isinstance(result, dict):
@@ -705,7 +738,8 @@ async def research_section_targeted(
         f"Search results:\n{json.dumps(all_results, indent=2)}"
     )
 
-    result = await invoke_section_researcher(message, provider, model, credentials, extra_fields)
+    researcher = create_section_researcher(provider, model, credentials, extra_fields)
+    result = await _invoke_agent(researcher, message)
 
     # Ensure we have an EvidenceCardSet
     if isinstance(result, EvidenceCardSet):
@@ -926,8 +960,14 @@ async def write_section(
         f"Write the section now. Start with ## {sec_title}"
     )
 
-    # Invoke writer — returns plain markdown string
-    content = await invoke_writer(message, provider, model, credentials, extra_fields)
+    # Invoke writer — returns plain markdown string (no structured output)
+    writer = create_writer(provider, model, credentials, extra_fields)
+    try:
+        result = await writer.ainvoke({"messages": [{"role": "user", "content": message}]})
+    except AttributeError:
+        result = await asyncio.to_thread(writer.invoke, {"messages": [{"role": "user", "content": message}]})
+    last_message = result["messages"][-1]
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
 
     logger.info("Writer produced draft for section '%s'", sec_title)
     return content
@@ -969,7 +1009,8 @@ async def edit_section(
         f"Polish the draft, check citations, and generate blackboard updates."
     )
 
-    result = await invoke_editor(message, provider, model, credentials, extra_fields)
+    editor = create_editor(provider, model, credentials, extra_fields)
+    result = await _invoke_agent(editor, message)
 
     # Ensure we have an EditorResult
     if isinstance(result, EditorResult):

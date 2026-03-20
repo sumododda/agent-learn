@@ -4,6 +4,8 @@ sqlalchemy[asyncio]
 asyncpg
 alembic
 litellm
+deepagents
+langchain-litellm
 pydantic-settings
 python-dotenv
 httpx
