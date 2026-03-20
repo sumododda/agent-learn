@@ -43,6 +43,13 @@ class SectionFull(BaseModel):
     citations: list[Citation] | None = None
 
 
+class PipelineStatusResponse(BaseModel):
+    stage: str
+    section: int = 0
+    total: int = 0
+    error: str | None = None
+
+
 class CourseResponse(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -52,6 +59,7 @@ class CourseResponse(BaseModel):
     status: str
     ungrounded: bool = False
     sections: list[SectionFull]
+    pipeline_status: PipelineStatusResponse | None = None
 
 
 class GenerateResponse(BaseModel):
@@ -60,7 +68,6 @@ class GenerateResponse(BaseModel):
     id: UUID
     status: str
     sections: list[SectionFull]
-    run_id: str | None = None
 
 
 class EvidenceCardResponse(BaseModel):
@@ -107,124 +114,6 @@ class BlackboardResponse(BaseModel):
     source_log: list = []
     open_questions: list = []
     updated_at: datetime
-
-
-class SectionPipelineStatus(BaseModel):
-    position: int
-    stage: str
-
-
-class PipelineStatus(BaseModel):
-    course_id: str
-    stage: str
-    current_section: int | None = None
-    sections: dict[int, str] = {}
-
-
-# ---------------------------------------------------------------------------
-# Internal API endpoint schemas (Phase 2, Milestone 3)
-# ---------------------------------------------------------------------------
-
-
-class InternalCourseRequest(BaseModel):
-    """Request body for endpoints that only need a course_id."""
-    course_id: str
-
-
-class InternalSectionRequest(BaseModel):
-    """Request body for endpoints that need course_id + section_position."""
-    course_id: str
-    section_position: int
-
-
-class InternalSectionInfo(BaseModel):
-    """A section returned from discover-and-plan."""
-    id: str
-    position: int
-    title: str
-    summary: str
-
-
-class InternalResearchBriefInfo(BaseModel):
-    """A research brief returned from discover-and-plan."""
-    id: str
-    section_position: int | None = None
-    questions: list = []
-    source_policy: dict = {}
-
-
-class DiscoverAndPlanResponse(BaseModel):
-    """Response from POST /api/internal/discover-and-plan."""
-    sections: list[InternalSectionInfo]
-    research_briefs: list[InternalResearchBriefInfo]
-    ungrounded: bool = False
-
-
-class InternalEvidenceCardInfo(BaseModel):
-    """An evidence card returned from research-section."""
-    id: str
-    section_position: int
-    claim: str
-    source_url: str
-    source_title: str
-    source_tier: int
-    passage: str
-    retrieved_date: str
-    confidence: float
-    caveat: str | None = None
-    explanation: str
-    verified: bool = False
-
-
-class ResearchSectionResponse(BaseModel):
-    """Response from POST /api/internal/research-section."""
-    evidence_cards: list[InternalEvidenceCardInfo]
-
-
-class VerificationResultInfo(BaseModel):
-    """Verification result details."""
-    cards_verified: int
-    cards_total: int
-    needs_more_research: bool
-    gaps: list[str] = []
-
-
-class VerifySectionResponse(BaseModel):
-    """Response from POST /api/internal/verify-section."""
-    verification_result: VerificationResultInfo
-
-
-class WriteSectionResponse(BaseModel):
-    """Response from POST /api/internal/write-section."""
-    content: str
-    citations: list[dict] = []
-
-
-class BlackboardUpdatesInfo(BaseModel):
-    """Blackboard updates returned from edit-section."""
-    new_glossary_terms: dict = {}
-    new_concept_ownership: dict = {}
-    topics_covered: list[str] = []
-    key_points_summary: str = ""
-    new_sources: list[dict] = []
-
-
-class EditSectionResponse(BaseModel):
-    """Response from POST /api/internal/edit-section."""
-    edited_content: str
-    blackboard_updates: BlackboardUpdatesInfo
-
-
-class SetCourseStatusRequest(BaseModel):
-    """Request body for POST /api/internal/set-course-status."""
-    course_id: str
-    status: str
-
-
-class SetCourseStatusResponse(BaseModel):
-    """Response from POST /api/internal/set-course-status."""
-    course_id: str
-    status: str
 
 
 # ---------------------------------------------------------------------------
