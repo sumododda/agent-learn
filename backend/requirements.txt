@@ -18,4 +18,5 @@ aiosqlite
 anyio
 tavily-python
 passlib[bcrypt]
+argon2-cffi
 tenacity

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = ""
     JWT_EXPIRE_MINUTES: int = 1440
     CHAT_DEFAULT_MODEL: str = "anthropic/claude-sonnet-4"
+    ENCRYPTION_PEPPER: str = ""
 
     model_config = {"env_file": ".env"}
 
