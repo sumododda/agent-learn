@@ -7,7 +7,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 interface AuthContextValue {
   getToken: () => Promise<string | null>;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, turnstileToken: string) => Promise<{ email: string; message: string }>;
+  verifyOtp: (email: string, otp: string) => Promise<void>;
+  resendOtp: (email: string) => Promise<{ message: string }>;
   logout: () => void;
   isSignedIn: boolean;
   isLoaded: boolean;
@@ -77,19 +79,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const register = useCallback(async (email: string, password: string): Promise<void> => {
+  const register = useCallback(async (email: string, password: string, turnstileToken: string): Promise<{ email: string; message: string }> => {
     const res = await fetch(`${API_BASE}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, turnstile_token: turnstileToken }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
       throw new Error(err.detail || 'Registration failed');
     }
-    const data: { token: string; user_id: string } = await res.json();
+    const data: { email: string; message: string } = await res.json();
+    return { email: data.email, message: data.message };
+  }, []);
+
+  const verifyOtp = useCallback(async (email: string, otp: string): Promise<void> => {
+    const res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Verification failed' }));
+      throw new Error(err.detail || 'Verification failed');
+    }
+    const data: { token: string; user_id: string; provider_keys_loaded?: number } = await res.json();
     localStorage.setItem('token', data.token);
     setToken(data.token);
+    if (typeof data.provider_keys_loaded === 'number') {
+      setProviderKeysLoaded(data.provider_keys_loaded);
+    }
+  }, []);
+
+  const resendOtp = useCallback(async (email: string): Promise<{ message: string }> => {
+    const res = await fetch(`${API_BASE}/api/auth/resend-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Resend failed' }));
+      throw new Error(err.detail || 'Resend failed');
+    }
+    return res.json();
   }, []);
 
   const logout = useCallback(() => {
@@ -100,7 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isSignedIn = token !== null && !isTokenExpired(token);
 
   return (
-    <AuthContext.Provider value={{ getToken, login, register, logout, isSignedIn, isLoaded, providerKeysLoaded }}>
+    <AuthContext.Provider value={{ getToken, login, register, verifyOtp, resendOtp, logout, isSignedIn, isLoaded, providerKeysLoaded }}>
       {children}
     </AuthContext.Provider>
   );

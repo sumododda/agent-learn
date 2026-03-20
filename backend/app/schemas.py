@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class CourseCreate(BaseModel):
@@ -185,12 +185,13 @@ class ChatModelInfo(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    turnstile_token: str
 
 
 class LoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
 
@@ -198,6 +199,24 @@ class AuthResponse(BaseModel):
     token: str
     user_id: str
     provider_keys_loaded: bool = True
+
+
+class RegisterResponse(BaseModel):
+    message: str
+    email: str
+
+
+class OtpVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class OtpResendRequest(BaseModel):
+    email: EmailStr
+
+
+class OtpResendResponse(BaseModel):
+    message: str
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +228,7 @@ class ProviderSaveRequest(BaseModel):
     provider: str
     credentials: dict
     extra_fields: dict = {}
-    password: str
+    password: str | None = None
 
 
 class ProviderUpdateRequest(BaseModel):

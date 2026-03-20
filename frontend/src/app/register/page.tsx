@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import { useAuth } from '@/context/AuthContext';
 
 export default function RegisterPage() {
@@ -13,17 +14,24 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const turnstileRef = useRef<TurnstileInstance>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!turnstileToken) {
+      setError('Please complete the verification');
+      return;
+    }
     setLoading(true);
-
     try {
-      await register(email, password);
-      router.push('/');
+      await register(email, password, turnstileToken);
+      router.push(`/verify?email=${encodeURIComponent(email)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed');
+      turnstileRef.current?.reset();
+      setTurnstileToken(null);
     } finally {
       setLoading(false);
     }
@@ -52,12 +60,23 @@ export default function RegisterPage() {
           className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
           disabled={loading}
         />
+        <Turnstile
+          ref={turnstileRef}
+          siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '1x00000000000000000000AA'}
+          onSuccess={(token) => setTurnstileToken(token)}
+          onError={() => setTurnstileToken(null)}
+          onExpire={() => {
+            setTurnstileToken(null);
+            turnstileRef.current?.reset();
+          }}
+          options={{ theme: 'dark', size: 'flexible' }}
+        />
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || !turnstileToken}
           className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
         >
-          {loading ? 'Creating account...' : 'Register'}
+          {loading ? 'Creating account...' : !turnstileToken ? 'Verifying...' : 'Register'}
         </button>
         {error && <p className="text-red-400 text-sm text-center">{error}</p>}
       </form>
