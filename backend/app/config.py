@@ -3,7 +3,6 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://agentlearn:agentlearn@localhost:5432/agentlearn"
-    TAVILY_API_KEY: str = ""
     JWT_SECRET_KEY: str = ""
     JWT_EXPIRE_MINUTES: int = 1440
     ENCRYPTION_PEPPER: str = ""

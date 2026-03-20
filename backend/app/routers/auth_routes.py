@@ -47,17 +47,23 @@ async def _load_provider_keys(user_id_str: str, user_id_uuid, password: str, ses
     if not configs:
         return True
 
+    from app.search_service import SEARCH_PROVIDERS
+
     key = derive_key(password, salt_row.salt, settings.ENCRYPTION_PEPPER.encode("utf-8"))
     try:
         credentials: dict[str, dict] = {}
         default_provider: str | None = None
+        default_search_provider: str | None = None
 
         for config in configs:
             try:
                 decrypted = decrypt_credentials(key, config.encrypted_credentials)
                 credentials[config.provider] = json.loads(decrypted)
                 if config.is_default:
-                    default_provider = config.provider
+                    if config.provider in SEARCH_PROVIDERS:
+                        default_search_provider = config.provider
+                    else:
+                        default_provider = config.provider
             except Exception:
                 logger.warning(
                     "Failed to decrypt credentials for user=%s provider=%s — skipping",
@@ -66,7 +72,7 @@ async def _load_provider_keys(user_id_str: str, user_id_uuid, password: str, ses
                 )
 
         if credentials:
-            key_cache.populate(user_id_str, credentials, default_provider)
+            key_cache.populate(user_id_str, credentials, default_provider, default_search_provider)
 
         return bool(credentials) or not configs
     finally:

@@ -16,7 +16,10 @@ pytest
 pytest-asyncio
 aiosqlite
 anyio
+bcrypt<4.1
 tavily-python
+exa_py
+duckduckgo-search
 passlib[bcrypt]
 argon2-cffi
 tenacity

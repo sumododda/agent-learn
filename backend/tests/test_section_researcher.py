@@ -1,7 +1,7 @@
 """Tests for Phase 3: Section researcher + evidence cards.
 
 Tests cover:
-- research_section: Tavily mocking, create_section_researcher, EvidenceCardItem output
+- research_section: search service mocking, create_section_researcher, EvidenceCardItem output
 - research_all_sections: parallel execution, error isolation, DB persistence
 - save_evidence_cards: bulk insert, retrieved_date, field mapping
 - get_evidence_cards: query by course_id + section_position
@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.agent import EvidenceCardItem, EvidenceCardSet
 from app.models import EvidenceCard, ResearchBrief
+from app.search_service import SearchResult
 
 
 def _mock_structured_agent(structured_response):
@@ -71,24 +72,22 @@ def sample_evidence_cards():
 
 
 @pytest.fixture
-def mock_tavily_response():
-    """A mock Tavily search response dict."""
-    return {
-        "results": [
-            {
-                "title": "Python FAQ",
-                "url": "https://docs.python.org/3/faq/general.html",
-                "content": "Python was conceived in the late 1980s by Guido van Rossum...",
-                "score": 0.95,
-            },
-            {
-                "title": "Python Type Checking Guide",
-                "url": "https://realpython.com/python-type-checking/",
-                "content": "Python is a dynamically typed language...",
-                "score": 0.88,
-            },
-        ]
-    }
+def mock_search_results():
+    """Mock search results from search_service.search."""
+    return [
+        SearchResult(
+            title="Python FAQ",
+            url="https://docs.python.org/3/faq/general.html",
+            content="Python was conceived in the late 1980s by Guido van Rossum...",
+            score=0.95,
+        ),
+        SearchResult(
+            title="Python Type Checking Guide",
+            url="https://realpython.com/python-type-checking/",
+            content="Python is a dynamically typed language...",
+            score=0.88,
+        ),
+    ]
 
 
 @pytest.fixture
@@ -114,113 +113,111 @@ def mock_research_brief(setup_db):
 
 @pytest.mark.anyio
 async def test_research_section_returns_cards(
-    mock_research_brief, mock_tavily_response, sample_evidence_cards
+    mock_research_brief, mock_search_results, sample_evidence_cards
 ):
-    """research_section calls Tavily for each question and returns EvidenceCardItems."""
+    """research_section calls search service for each question and returns EvidenceCardItems."""
     mock_card_set = EvidenceCardSet(cards=sample_evidence_cards)
 
     with (
-        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
+        patch("app.search_service.search", new_callable=AsyncMock, return_value=mock_search_results) as mock_search,
         patch(
             "app.agent_service.create_section_researcher",
             return_value=_mock_structured_agent(mock_card_set),
         ) as mock_create,
     ):
-        # Set up Tavily mock
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(return_value=mock_tavily_response)
-        mock_tavily_cls.return_value = mock_client
-
         from app.agent_service import research_section
 
-        result = await research_section(mock_research_brief)
+        result = await research_section(
+            mock_research_brief,
+            search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     # Should return a list of EvidenceCardItem
     assert isinstance(result, list)
     assert len(result) == 3
     assert all(isinstance(c, EvidenceCardItem) for c in result)
 
-    # Tavily should be called once per question
-    assert mock_client.search.call_count == 3
+    # Search should be called once per question
+    assert mock_search.call_count == 3
 
     # create_section_researcher should be called once
     mock_create.assert_called_once()
 
 
 @pytest.mark.anyio
-async def test_research_section_handles_partial_tavily_failure(
-    mock_research_brief, mock_tavily_response, sample_evidence_cards
+async def test_research_section_handles_partial_search_failure(
+    mock_research_brief, mock_search_results, sample_evidence_cards
 ):
-    """research_section continues when some Tavily searches fail."""
+    """research_section continues when some searches fail."""
     mock_card_set = EvidenceCardSet(cards=sample_evidence_cards)
 
     with (
-        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
+        patch(
+            "app.search_service.search",
+            new_callable=AsyncMock,
+            side_effect=[
+                mock_search_results,
+                RuntimeError("Search timeout"),
+                mock_search_results,
+            ],
+        ) as mock_search,
         patch(
             "app.agent_service.create_section_researcher",
             return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
-        mock_client = AsyncMock()
-        # First call succeeds, second fails, third succeeds
-        mock_client.search = AsyncMock(
-            side_effect=[
-                mock_tavily_response,
-                RuntimeError("Tavily timeout"),
-                mock_tavily_response,
-            ]
-        )
-        mock_tavily_cls.return_value = mock_client
-
         from app.agent_service import research_section
 
-        result = await research_section(mock_research_brief)
+        result = await research_section(
+            mock_research_brief,
+            search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     # Should still succeed with partial results
     assert len(result) == 3
-    assert mock_client.search.call_count == 3
+    assert mock_search.call_count == 3
 
 
 @pytest.mark.anyio
-async def test_research_section_raises_when_all_tavily_fail(mock_research_brief):
-    """research_section raises RuntimeError when all Tavily searches fail."""
-    with patch("tavily.AsyncTavilyClient") as mock_tavily_cls:
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(side_effect=RuntimeError("Tavily down"))
-        mock_tavily_cls.return_value = mock_client
-
+async def test_research_section_raises_when_all_searches_fail(mock_research_brief):
+    """research_section raises RuntimeError when all searches fail."""
+    with patch(
+        "app.search_service.search",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Search down"),
+    ):
         from app.agent_service import research_section
 
-        with pytest.raises(RuntimeError, match="All Tavily searches failed"):
-            await research_section(mock_research_brief)
+        with pytest.raises(RuntimeError, match="All searches failed"):
+            await research_section(
+                mock_research_brief,
+                search_provider="tavily", search_credentials={"api_key": "test"},
+            )
 
 
 @pytest.mark.anyio
 async def test_research_section_handles_dict_result(
-    mock_research_brief, mock_tavily_response, sample_evidence_cards
+    mock_research_brief, mock_search_results, sample_evidence_cards
 ):
     """research_section handles section researcher returning an EvidenceCardSet."""
     card_set_dict = {
         "cards": [c.model_dump() for c in sample_evidence_cards]
     }
-    # create_section_researcher returns an agent whose structured_response
-    # is an EvidenceCardSet; research_section also handles dict fallback
     mock_card_set = EvidenceCardSet(**card_set_dict)
 
     with (
-        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
+        patch("app.search_service.search", new_callable=AsyncMock, return_value=mock_search_results),
         patch(
             "app.agent_service.create_section_researcher",
             return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(return_value=mock_tavily_response)
-        mock_tavily_cls.return_value = mock_client
-
         from app.agent_service import research_section
 
-        result = await research_section(mock_research_brief)
+        result = await research_section(
+            mock_research_brief,
+            search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     assert isinstance(result, list)
     assert len(result) == 3

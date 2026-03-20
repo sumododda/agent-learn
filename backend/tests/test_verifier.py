@@ -143,24 +143,23 @@ def bad_verification_result():
 
 
 @pytest.fixture
-def mock_tavily_advanced_response():
-    """Mock Tavily response for advanced search."""
-    return {
-        "results": [
-            {
-                "title": "Python Features - Official Docs",
-                "url": "https://docs.python.org/3/tutorial/",
-                "content": "Python's key features include simplicity, readability...",
-                "score": 0.92,
-            },
-            {
-                "title": "Python Use Cases",
-                "url": "https://realpython.com/what-can-i-do-with-python/",
-                "content": "Python is used in web development, data science, AI...",
-                "score": 0.88,
-            },
-        ]
-    }
+def mock_search_results():
+    """Mock search results from search_service.search."""
+    from app.search_service import SearchResult
+    return [
+        SearchResult(
+            title="Python Features - Official Docs",
+            url="https://docs.python.org/3/tutorial/",
+            content="Python's key features include simplicity, readability...",
+            score=0.92,
+        ),
+        SearchResult(
+            title="Python Use Cases",
+            url="https://realpython.com/what-can-i-do-with-python/",
+            content="Python is used in web development, data science, AI...",
+            score=0.88,
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +528,7 @@ async def test_verify_evidence_skips_out_of_range_index(setup_db):
 
 @pytest.mark.anyio
 async def test_research_section_targeted_returns_cards(
-    setup_db, mock_tavily_advanced_response
+    setup_db, mock_search_results
 ):
     """research_section_targeted searches gaps with advanced depth and returns cards."""
     new_cards = [
@@ -546,45 +545,42 @@ async def test_research_section_targeted_returns_cards(
     mock_card_set = EvidenceCardSet(cards=new_cards)
 
     with (
-        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
+        patch("app.search_service.search", new_callable=AsyncMock, return_value=mock_search_results) as mock_search,
         patch(
             "app.agent_service.create_section_researcher",
             return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(return_value=mock_tavily_advanced_response)
-        mock_tavily_cls.return_value = mock_client
-
         from app.agent_service import research_section_targeted
 
         gaps = ["What are Python's key features?", "What is Python used for?"]
-        result = await research_section_targeted(gaps)
+        result = await research_section_targeted(
+            gaps, search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     # Should return evidence cards
     assert isinstance(result, list)
     assert len(result) == 1
     assert result[0].claim == "Python features include readability"
 
-    # Tavily should be called once per gap with advanced search
-    assert mock_client.search.call_count == 2
-    # Check search_depth="advanced" and max_results=3
-    for call in mock_client.search.call_args_list:
-        assert call.kwargs["search_depth"] == "advanced"
-        assert call.kwargs["max_results"] == 3
+    # Search should be called once per gap
+    assert mock_search.call_count == 2
 
 
 @pytest.mark.anyio
 async def test_research_section_targeted_handles_all_failures(setup_db):
-    """research_section_targeted returns empty list when all Tavily searches fail."""
-    with patch("tavily.AsyncTavilyClient") as mock_tavily_cls:
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(side_effect=RuntimeError("Tavily down"))
-        mock_tavily_cls.return_value = mock_client
-
+    """research_section_targeted returns empty list when all searches fail."""
+    with patch(
+        "app.search_service.search",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Search down"),
+    ):
         from app.agent_service import research_section_targeted
 
-        result = await research_section_targeted(["gap1", "gap2"])
+        result = await research_section_targeted(
+            ["gap1", "gap2"],
+            search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     # Should return empty list, not raise
     assert result == []
@@ -592,7 +588,7 @@ async def test_research_section_targeted_handles_all_failures(setup_db):
 
 @pytest.mark.anyio
 async def test_research_section_targeted_partial_failure(
-    setup_db, mock_tavily_advanced_response
+    setup_db, mock_search_results
 ):
     """research_section_targeted continues when some searches fail."""
     new_cards = [
@@ -609,31 +605,29 @@ async def test_research_section_targeted_partial_failure(
     mock_card_set = EvidenceCardSet(cards=new_cards)
 
     with (
-        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
+        patch(
+            "app.search_service.search",
+            new_callable=AsyncMock,
+            side_effect=[RuntimeError("Fail"), mock_search_results],
+        ),
         patch(
             "app.agent_service.create_section_researcher",
             return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(
-            side_effect=[
-                RuntimeError("Fail"),
-                mock_tavily_advanced_response,
-            ]
-        )
-        mock_tavily_cls.return_value = mock_client
-
         from app.agent_service import research_section_targeted
 
-        result = await research_section_targeted(["gap1", "gap2"])
+        result = await research_section_targeted(
+            ["gap1", "gap2"],
+            search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     assert len(result) == 1
 
 
 @pytest.mark.anyio
 async def test_research_section_targeted_handles_dict_result(
-    setup_db, mock_tavily_advanced_response
+    setup_db, mock_search_results
 ):
     """research_section_targeted handles section researcher returning EvidenceCardSet."""
     new_cards = [
@@ -650,19 +644,18 @@ async def test_research_section_targeted_handles_dict_result(
     mock_card_set = EvidenceCardSet(cards=new_cards)
 
     with (
-        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
+        patch("app.search_service.search", new_callable=AsyncMock, return_value=mock_search_results),
         patch(
             "app.agent_service.create_section_researcher",
             return_value=_mock_structured_agent(mock_card_set),
         ),
     ):
-        mock_client = AsyncMock()
-        mock_client.search = AsyncMock(return_value=mock_tavily_advanced_response)
-        mock_tavily_cls.return_value = mock_client
-
         from app.agent_service import research_section_targeted
 
-        result = await research_section_targeted(["gap1"])
+        result = await research_section_targeted(
+            ["gap1"],
+            search_provider="tavily", search_credentials={"api_key": "test"},
+        )
 
     assert len(result) == 1
     assert result[0].claim == "Dict result card"

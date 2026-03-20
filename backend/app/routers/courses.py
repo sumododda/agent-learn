@@ -61,6 +61,14 @@ async def _get_user_provider(user_id: str, session) -> tuple[str, str, dict, dic
     return provider, model, creds, extra_fields or {}
 
 
+def _get_user_search_provider(user_id: str) -> tuple[str, dict]:
+    """Get (search_provider, search_credentials) from cache. Returns ("", {}) if none configured."""
+    result = key_cache.get_default_search(user_id)
+    if result is None:
+        return ("", {})
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Course CRUD endpoints
 # ---------------------------------------------------------------------------
@@ -82,11 +90,13 @@ async def create_course(
     try:
         # Get provider credentials from cache
         provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+        search_provider, search_creds = _get_user_search_provider(user_id)
 
         # Generate outline via discovery research + planner
         # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
         outline_with_briefs, ungrounded = await generate_outline(
-            body.topic, body.instructions, provider, model, creds, extra_fields
+            body.topic, body.instructions, provider, model, creds, extra_fields,
+            search_provider, search_creds,
         )
 
         # Set ungrounded flag if discovery research failed
@@ -174,9 +184,10 @@ async def generate_course(
 
     # Get provider credentials from cache
     provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+    search_provider, search_creds = _get_user_search_provider(user_id)
 
     # Start the asyncio background pipeline
-    start_pipeline(str(course_id), provider, model, creds, extra_fields)
+    start_pipeline(str(course_id), provider, model, creds, extra_fields, search_provider, search_creds)
 
     # Reload course with sections and return
     result = await session.execute(

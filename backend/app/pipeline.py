@@ -85,12 +85,14 @@ async def _discover_and_plan(
     model: str,
     credentials: dict,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> dict:
     """Run discover-and-plan with retries (3 attempts)."""
     from app.agent_service import run_discover_and_plan
 
     async with async_session() as session:
-        return await run_discover_and_plan(course_id, session, provider, model, credentials, extra_fields)
+        return await run_discover_and_plan(course_id, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
 
 
 @_retry_3
@@ -101,12 +103,14 @@ async def _research_section(
     model: str,
     credentials: dict,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> dict:
     """Run research for one section with retries (3 attempts)."""
     from app.agent_service import run_research_section
 
     async with async_session() as session:
-        return await run_research_section(course_id, position, session, provider, model, credentials, extra_fields)
+        return await run_research_section(course_id, position, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
 
 
 @_retry_2
@@ -117,12 +121,14 @@ async def _verify_section(
     model: str,
     credentials: dict,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> dict:
     """Run verification for one section with retries (2 attempts)."""
     from app.agent_service import run_verify_section
 
     async with async_session() as session:
-        return await run_verify_section(course_id, position, session, provider, model, credentials, extra_fields)
+        return await run_verify_section(course_id, position, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
 
 
 @_retry_3
@@ -168,6 +174,8 @@ async def run_pipeline(
     model: str,
     credentials: dict,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> None:
     """Run the full course generation pipeline.
 
@@ -184,7 +192,7 @@ async def run_pipeline(
     # ------------------------------------------------------------------
     _update_status(course_id, stage="planning")
     try:
-        plan_result = await _discover_and_plan(cid, provider, model, credentials, extra_fields)
+        plan_result = await _discover_and_plan(cid, provider, model, credentials, extra_fields, search_provider, search_credentials)
     except Exception as e:
         logger.error("Pipeline planning failed for course %s: %s", course_id, e)
         _update_status(course_id, stage="failed", error="Planning failed")
@@ -210,7 +218,7 @@ async def run_pipeline(
         section_statuses[pos] = {"stage": "researching"}
 
     research_results = await asyncio.gather(
-        *[_research_section(cid, pos, provider, model, credentials, extra_fields) for pos in positions],
+        *[_research_section(cid, pos, provider, model, credentials, extra_fields, search_provider, search_credentials) for pos in positions],
         return_exceptions=True,
     )
 
@@ -236,7 +244,7 @@ async def run_pipeline(
         section_statuses[pos] = {"stage": "verifying"}
         _update_status(course_id, stage="writing", section=idx + 1, total=total)
         try:
-            await _verify_section(cid, pos, provider, model, credentials, extra_fields)
+            await _verify_section(cid, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
         except Exception as e:
             section_statuses[pos] = {"stage": "failed", "error": "Verification failed"}
             logger.error(
@@ -309,6 +317,8 @@ def start_pipeline(
     model: str,
     credentials: dict,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> None:
     """Start the pipeline as a background asyncio task.
 
@@ -317,7 +327,7 @@ def start_pipeline(
     """
     _jobs[course_id] = PipelineStatus()
     task = asyncio.create_task(
-        run_pipeline(course_id, provider, model, credentials, extra_fields),
+        run_pipeline(course_id, provider, model, credentials, extra_fields, search_provider, search_credentials),
         name=f"pipeline-{course_id}",
     )
     _active_tasks.add(task)

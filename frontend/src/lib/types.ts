@@ -100,9 +100,9 @@ export interface ProviderField {
 
 export interface ProviderDefinition {
   name: string;
-  model_prefix: string;
+  model_prefix?: string;
   fields: ProviderField[];
-  models: { id: string; name: string }[] | "dynamic";
+  models?: { id: string; name: string }[] | "dynamic";
 }
 
 export interface ProviderConfig {

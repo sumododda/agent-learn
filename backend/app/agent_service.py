@@ -26,7 +26,6 @@ from app.agent import (
     BlackboardUpdates,
     EditorResult,
 )
-from app.config import settings
 from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
 # json still used by generate_outline fallback
@@ -128,15 +127,17 @@ async def discover_topic(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> TopicBrief:
-    """Run discovery research on a topic using Tavily + synthesis agent.
+    """Run discovery research on a topic using web search + synthesis agent.
 
     1. Generate broad search queries from the topic
-    2. Call AsyncTavilyClient for each query (max_results=5, search_depth="basic")
+    2. Search via configured search provider for each query
     3. Pass all results to discovery researcher agent for synthesis
     4. Return TopicBrief
     """
-    from tavily import AsyncTavilyClient
+    from app import search_service
 
     credentials = credentials or {}
 
@@ -144,30 +145,27 @@ async def discover_topic(
     queries = _generate_discovery_queries(topic, instructions)
     logger.info("Discovery research: %d queries for topic '%s'", len(queries), topic)
 
-    # Run Tavily searches
-    client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
+    # Run searches via configured provider
     all_search_results = []
     for query in queries:
         try:
-            response = await client.search(
-                query=query,
-                search_depth="basic",
-                max_results=5,
+            results = await search_service.search(
+                search_provider, query, search_credentials or {},
+                max_results=5, search_depth="basic",
             )
-            # Extract structured results (title, url, content, score)
-            for r in response.get("results", []):
+            for r in results:
                 all_search_results.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "content": r.get("content", ""),
-                    "score": r.get("score", 0),
+                    "title": r.title,
+                    "url": r.url,
+                    "content": r.content,
+                    "score": r.score,
                 })
         except Exception as e:
-            logger.warning("Tavily search failed for query '%s': %s", query, e)
+            logger.warning("Search failed for query '%s': %s", query, e)
             continue
 
     if not all_search_results:
-        raise RuntimeError("All Tavily searches failed — no results to synthesize")
+        raise RuntimeError("All searches failed — no results to synthesize")
 
     logger.info("Discovery research: %d total search results collected", len(all_search_results))
 
@@ -198,25 +196,30 @@ async def generate_outline(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
     Returns (CourseOutlineWithBriefs, ungrounded_flag).
     If discovery fails, falls back to ungrounded planning (ungrounded=True).
     """
+    from app import search_service
+
     credentials = credentials or {}
 
     # Step 1: Discovery research (wrapped in try/except for fallback)
     topic_brief = None
     ungrounded = False
     try:
-        if settings.TAVILY_API_KEY:
+        if search_service.is_configured(search_provider, search_credentials):
             topic_brief = await discover_topic(
-                topic, instructions, provider, model, credentials, extra_fields
+                topic, instructions, provider, model, credentials, extra_fields,
+                search_provider, search_credentials,
             )
             logger.info("Discovery research completed successfully")
         else:
-            logger.warning("TAVILY_API_KEY not set — skipping discovery research")
+            logger.warning("No search provider configured — skipping discovery research")
             ungrounded = True
     except Exception as e:
         logger.warning("Discovery research failed, falling back to ungrounded planning: %s", e)
@@ -269,6 +272,8 @@ async def generate_lessons(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> None:
     """Legacy monolithic pipeline: research -> verify -> write -> edit per section.
 
@@ -291,7 +296,7 @@ async def generate_lessons(
         # 1. Parallel section research
         await update_course_status(course_id, "researching", session)
         update_pipeline_status(pipeline_key, None, "researching")
-        await research_all_sections(course_id, briefs, session, provider, model, credentials, extra_fields)
+        await research_all_sections(course_id, briefs, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
 
         # 2. Sequential per section: verify -> write -> edit
         blackboard = await create_blackboard(course_id, session)
@@ -318,7 +323,8 @@ async def generate_lessons(
                 verification = await verify_evidence(cards, brief, session, provider, model, credentials, extra_fields)
                 if verification.needs_more_research:
                     new_card_items = await research_section_targeted(
-                        verification.gaps, provider, model, credentials, extra_fields
+                        verification.gaps, provider, model, credentials, extra_fields,
+                        search_provider, search_credentials,
                     )
                     if new_card_items:
                         await save_evidence_cards(
@@ -432,38 +438,38 @@ async def research_section(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> list[EvidenceCardItem]:
-    """Research a single section by searching each must-answer question via Tavily.
+    """Research a single section by searching each must-answer question.
 
-    1. For each question in the brief, call AsyncTavilyClient.search
+    1. For each question in the brief, search via configured provider
     2. Aggregate all search results
     3. Pass results + questions to the section researcher agent
     4. Return the extracted evidence cards
     """
-    from tavily import AsyncTavilyClient
+    from app import search_service
 
     credentials = credentials or {}
 
-    client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
     all_results: list[dict] = []
 
     for question in brief.questions:
         try:
-            response = await client.search(
-                query=question,
-                search_depth="basic",
-                max_results=5,
+            results = await search_service.search(
+                search_provider, question, search_credentials or {},
+                max_results=5, search_depth="basic",
             )
-            for r in response.get("results", []):
+            for r in results:
                 all_results.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "content": r.get("content", ""),
-                    "score": r.get("score", 0),
+                    "title": r.title,
+                    "url": r.url,
+                    "content": r.content,
+                    "score": r.score,
                 })
         except Exception as e:
             logger.warning(
-                "Tavily search failed for question '%s' (section %s): %s",
+                "Search failed for question '%s' (section %s): %s",
                 question,
                 brief.section_position,
                 e,
@@ -472,7 +478,7 @@ async def research_section(
 
     if not all_results:
         raise RuntimeError(
-            f"All Tavily searches failed for section {brief.section_position}"
+            f"All searches failed for section {brief.section_position}"
         )
 
     logger.info(
@@ -512,6 +518,8 @@ async def research_all_sections(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> None:
     """Run section research in parallel for all section-level briefs.
 
@@ -533,7 +541,7 @@ async def research_all_sections(
     )
 
     results = await asyncio.gather(
-        *[research_section(brief, provider, model, credentials, extra_fields) for brief in section_briefs],
+        *[research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials) for brief in section_briefs],
         return_exceptions=True,
     )
 
@@ -688,33 +696,32 @@ async def research_section_targeted(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> list[EvidenceCardItem]:
     """One retry with targeted queries for specific gaps.
 
-    For each gap, call AsyncTavilyClient.search with search_depth="advanced"
-    (2 credits per query) and max_results=3. Pass results to the section
-    researcher agent for evidence card extraction.
+    For each gap, search with search_depth="advanced" and max_results=3.
+    Pass results to the section researcher agent for evidence card extraction.
     """
-    from tavily import AsyncTavilyClient
+    from app import search_service
 
     credentials = credentials or {}
 
-    client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
     all_results: list[dict] = []
 
     for gap in gaps:
         try:
-            response = await client.search(
-                query=gap,
-                search_depth="advanced",
-                max_results=3,
+            results = await search_service.search(
+                search_provider, gap, search_credentials or {},
+                max_results=3, search_depth="advanced",
             )
-            for r in response.get("results", []):
+            for r in results:
                 all_results.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "content": r.get("content", ""),
-                    "score": r.get("score", 0),
+                    "title": r.title,
+                    "url": r.url,
+                    "content": r.content,
+                    "score": r.score,
                 })
         except Exception as e:
             logger.warning(
@@ -1064,10 +1071,12 @@ async def run_discover_and_plan(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> dict:
     """Run discovery research + planning for a course.
 
-    Reads the course from DB, runs discovery research via Tavily,
+    Reads the course from DB, runs discovery research via search provider,
     runs the planner agent, creates sections + research briefs in DB,
     and returns them.
 
@@ -1094,7 +1103,8 @@ async def run_discover_and_plan(
 
     # Run discovery research + planner
     outline_with_briefs, ungrounded = await generate_outline(
-        course.topic, course.instructions, provider, model, credentials, extra_fields
+        course.topic, course.instructions, provider, model, credentials, extra_fields,
+        search_provider, search_credentials,
     )
 
     # Set ungrounded flag
@@ -1188,11 +1198,13 @@ async def run_research_section(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> dict:
     """Run section researcher for one section.
 
     Reads the research brief from DB, runs the researcher agent
-    (Tavily search + evidence card extraction), saves evidence cards
+    (search + evidence card extraction), saves evidence cards
     to DB, and returns them.
 
     Returns:
@@ -1216,8 +1228,8 @@ async def run_research_section(
             f"section {section_position}"
         )
 
-    # Run section researcher (Tavily search + agent)
-    card_items = await research_section(brief, provider, model, credentials, extra_fields)
+    # Run section researcher (search + agent)
+    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials)
 
     # Save evidence cards to DB
     await save_evidence_cards(course_id, section_position, card_items, session)
@@ -1254,6 +1266,8 @@ async def run_verify_section(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    search_provider: str = "",
+    search_credentials: dict | None = None,
 ) -> dict:
     """Run verifier for one section.
 
@@ -1300,7 +1314,10 @@ async def run_verify_section(
 
     # If verifier says we need more research, do targeted re-research
     if verification.needs_more_research:
-        new_card_items = await research_section_targeted(verification.gaps, provider, model, credentials, extra_fields)
+        new_card_items = await research_section_targeted(
+            verification.gaps, provider, model, credentials, extra_fields,
+            search_provider, search_credentials,
+        )
         if new_card_items:
             await save_evidence_cards(
                 course_id, section_position, new_card_items, session
