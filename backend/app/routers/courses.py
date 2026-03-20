@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app import key_cache
 from app.agent_service import (
     generate_outline,
     get_blackboard,
@@ -14,7 +15,7 @@ from app.agent_service import (
 from app.auth import get_current_user
 from app.database import SessionDep
 from app.limiter import limiter
-from app.models import Course, EvidenceCard, LearnerProgress, Section, ResearchBrief
+from app.models import Course, EvidenceCard, LearnerProgress, ProviderConfig, Section, ResearchBrief
 from app.pipeline import get_pipeline_status, start_pipeline
 from app.schemas import (
     BlackboardResponse,
@@ -32,6 +33,32 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_default_model(provider: str) -> str:
+    from app.provider_service import PROVIDERS
+    models = PROVIDERS.get(provider, {}).get("models", [])
+    if isinstance(models, list) and models:
+        return models[0]["id"]
+    return "gpt-4o-mini"
+
+
+async def _get_user_provider(user_id: str, session) -> tuple[str, str, dict, dict]:
+    """Get (provider, model, credentials, extra_fields) from cache + DB."""
+    default = key_cache.get_default(user_id)
+    if default is None:
+        raise HTTPException(400, detail="no_provider_configured")
+    provider, creds = default
+    result = await session.execute(
+        select(ProviderConfig).where(
+            ProviderConfig.user_id == uuid.UUID(user_id),
+            ProviderConfig.provider == provider,
+        )
+    )
+    pc = result.scalar_one_or_none()
+    extra_fields = pc.extra_fields if pc else {}
+    model = _get_default_model(provider)
+    return provider, model, creds, extra_fields or {}
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +80,13 @@ async def create_course(
     await session.flush()
 
     try:
+        # Get provider credentials from cache
+        provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+
         # Generate outline via discovery research + planner
         # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
         outline_with_briefs, ungrounded = await generate_outline(
-            body.topic, body.instructions
+            body.topic, body.instructions, provider, model, creds, extra_fields
         )
 
         # Set ungrounded flag if discovery research failed
@@ -142,8 +172,11 @@ async def generate_course(
     course.status = "generating"
     await session.commit()
 
+    # Get provider credentials from cache
+    provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+
     # Start the asyncio background pipeline
-    start_pipeline(str(course_id))
+    start_pipeline(str(course_id), provider, model, creds, extra_fields)
 
     # Reload course with sections and return
     result = await session.execute(
@@ -206,8 +239,11 @@ async def regenerate_course(
     await session.flush()
 
     try:
+        # Get provider credentials from cache
+        provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+
         outline_with_briefs, ungrounded = await generate_outline(
-            course.topic, enhanced_instructions
+            course.topic, enhanced_instructions, provider, model, creds, extra_fields
         )
 
         course.ungrounded = ungrounded

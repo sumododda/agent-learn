@@ -3,14 +3,15 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from app import chat_service
+from app import chat_service, key_cache
 from app.auth import get_current_user
 from app.database import SessionDep
-from app.models import ChatMessage
+from app.limiter import limiter
+from app.models import ChatMessage, Course, ProviderConfig
 from app.schemas import ChatMessageResponse, ChatModelInfo, ChatRequest
 
 logger = logging.getLogger(__name__)
@@ -19,14 +20,30 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Model listing (no auth required)
+# Model listing
 # ---------------------------------------------------------------------------
 
 
 @router.get("/chat/models", response_model=list[ChatModelInfo])
-async def list_models():
-    """Return available text-to-text models from OpenRouter."""
-    models = await chat_service.get_models()
+async def list_models(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    """Return available models for the user's default provider."""
+    default = key_cache.get_default(user_id)
+    if default is None:
+        return []
+    provider, creds = default
+    # Fetch extra_fields from DB
+    result = await session.execute(
+        select(ProviderConfig).where(
+            ProviderConfig.user_id == uuid.UUID(user_id),
+            ProviderConfig.provider == provider,
+        )
+    )
+    pc = result.scalar_one_or_none()
+    extra_fields = pc.extra_fields if pc else {}
+    models = await chat_service.get_models(provider, creds, extra_fields or {})
     return models
 
 
@@ -36,7 +53,9 @@ async def list_models():
 
 
 @router.post("/courses/{course_id}/chat")
+@limiter.limit("30/minute")
 async def chat_stream(
+    request: Request,
     course_id: str,
     body: ChatRequest,
     session: SessionDep,
@@ -47,6 +66,32 @@ async def chat_stream(
     Persists the user message immediately, streams the assistant response,
     then persists the assistant message after the stream completes.
     """
+    # Verify course exists and user owns it
+    course_result = await session.execute(
+        select(Course).where(Course.id == uuid.UUID(course_id))
+    )
+    course = course_result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
+
+    # Get provider credentials from cache
+    default = key_cache.get_default(user_id)
+    if default is None:
+        raise HTTPException(status_code=400, detail="no_provider_configured")
+    provider, creds = default
+
+    # Fetch extra_fields from DB
+    pc_result = await session.execute(
+        select(ProviderConfig).where(
+            ProviderConfig.user_id == uuid.UUID(user_id),
+            ProviderConfig.provider == provider,
+        )
+    )
+    pc = pc_result.scalar_one_or_none()
+    extra_fields = pc.extra_fields if pc else {}
+
     # Persist user message
     user_msg = ChatMessage(
         course_id=uuid.UUID(course_id),
@@ -65,12 +110,14 @@ async def chat_stream(
     )
 
     async def wrapper():
-        gen, collected = await chat_service.stream_chat(body.model, messages)
+        gen, collected = await chat_service.stream_chat(
+            provider, body.model, messages, creds, extra_fields or {}
+        )
         try:
             async for chunk in gen:
                 yield chunk
         finally:
-            # Persist assistant response in a fresh session – the request
+            # Persist assistant response in a fresh session -- the request
             # session may already be closed by the time the stream finishes.
             full_content = "".join(collected)
             if full_content:
@@ -118,7 +165,16 @@ async def chat_history(
 
     Supports cursor-based pagination via the `before` parameter (a message UUID).
     """
+    # Verify course exists and user owns it
     cid = uuid.UUID(course_id)
+    course_result = await session.execute(
+        select(Course).where(Course.id == cid)
+    )
+    course = course_result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     query = (
         select(ChatMessage)

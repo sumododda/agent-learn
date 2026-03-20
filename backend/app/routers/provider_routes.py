@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import provider_service
 from app.auth import get_current_user
 from app.config import settings
 from app.crypto import (
@@ -65,10 +66,8 @@ async def _get_or_create_salt(user_id: str, session: AsyncSession) -> tuple[byte
 
 @router.get("/registry")
 async def get_registry(user_id: str = Depends(get_current_user)):
-    """Return provider definitions for frontend form rendering.
-    Full registry will come from provider_service.py in Phase 3.
-    For now, return provider names and valid list."""
-    return {"providers": _PROVIDER_NAMES}
+    """Return provider definitions for frontend form rendering."""
+    return {"providers": provider_service.get_provider_registry()}
 
 
 @router.get("", response_model=list[ProviderConfigResponse])
@@ -254,8 +253,10 @@ async def test_provider(
     body: ProviderTestRequest,
     user_id: str = Depends(get_current_user),
 ):
-    """Test credentials without saving. Placeholder until Phase 3 adds LiteLLM validation."""
+    """Test credentials without saving by making a lightweight LiteLLM call."""
     if provider not in _VALID_PROVIDERS:
         raise HTTPException(400, f"Invalid provider: {provider}")
-    # Phase 3 will add: provider_service.validate_credentials(provider, body.credentials, body.extra_fields)
-    return {"status": "not_implemented", "message": "Credential testing available after LiteLLM integration"}
+    ok = await provider_service.validate_credentials(provider, body.credentials, body.extra_fields)
+    if ok:
+        return {"status": "ok", "message": "Credentials validated successfully"}
+    raise HTTPException(400, "Credential validation failed")
