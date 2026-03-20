@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",
-    "@trigger.dev/react-hooks": "^3.3.14",
     "mermaid": "^11.13.0",
     "next": "16.1.7",
     "react": "19.2.3",
