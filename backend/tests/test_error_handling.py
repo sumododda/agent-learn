@@ -209,9 +209,6 @@ async def test_all_cards_rejected_writer_still_runs(setup_db, error_session):
     await error_session.refresh(course)
     assert course.status == "completed"
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
-
 
 # ---------------------------------------------------------------------------
 # Test: Editor returns bad blackboard update -> blackboard not corrupted
@@ -329,11 +326,6 @@ async def test_pipeline_unhandled_error_sets_failed(setup_db, error_session):
     await error_session.refresh(course)
     assert course.status == "failed"
 
-    from app.agent_service import _pipeline_status
-    course_id_str = str(course.id)
-    assert _pipeline_status.get(course_id_str, {}).get("stage") == "failed"
-    _pipeline_status.pop(course_id_str, None)
-
 
 # ---------------------------------------------------------------------------
 # Test: extract_citations edge cases
@@ -440,9 +432,6 @@ async def test_pipeline_no_section_briefs(setup_db, error_session):
     await error_session.refresh(course)
     assert course.status == "completed"
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
-
 
 # ---------------------------------------------------------------------------
 # Test: generate_outline Tavily error fallback
@@ -497,40 +486,38 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
 # ---------------------------------------------------------------------------
 
 
-def test_update_pipeline_status_creates_entry():
-    """update_pipeline_status creates a new entry if one doesn't exist."""
-    from app.agent_service import update_pipeline_status, _pipeline_status
+def test_update_status_creates_entry():
+    """_update_status creates a new PipelineStatus entry."""
+    from app.pipeline import _update_status, _jobs
 
     test_id = "test-pipeline-status-create"
-    update_pipeline_status(test_id, 1, "researching")
+    _update_status(test_id, stage="researching", section=1, total=3)
 
-    assert test_id in _pipeline_status
-    assert _pipeline_status[test_id]["stage"] == "researching"
-    assert _pipeline_status[test_id]["current_section"] == 1
-    assert _pipeline_status[test_id]["sections"][1] == "researching"
+    assert test_id in _jobs
+    assert _jobs[test_id].stage == "researching"
+    assert _jobs[test_id].section == 1
+    assert _jobs[test_id].total == 3
 
-    _pipeline_status.pop(test_id, None)
+    _jobs.pop(test_id, None)
 
 
-def test_update_pipeline_status_updates_existing():
-    """update_pipeline_status updates an existing entry."""
-    from app.agent_service import update_pipeline_status, _pipeline_status
+def test_update_status_updates_existing():
+    """_update_status updates an existing PipelineStatus entry."""
+    from app.pipeline import _update_status, _jobs
 
     test_id = "test-pipeline-status-update"
-    update_pipeline_status(test_id, 1, "researching")
-    update_pipeline_status(test_id, 1, "verifying")
-    update_pipeline_status(test_id, 2, "researching")
+    _update_status(test_id, stage="researching", section=1, total=3)
+    _update_status(test_id, stage="writing", section=2, total=3)
 
-    assert _pipeline_status[test_id]["stage"] == "researching"
-    assert _pipeline_status[test_id]["current_section"] == 2
-    assert _pipeline_status[test_id]["sections"][1] == "verifying"
-    assert _pipeline_status[test_id]["sections"][2] == "researching"
+    assert _jobs[test_id].stage == "writing"
+    assert _jobs[test_id].section == 2
+    assert _jobs[test_id].total == 3
 
-    _pipeline_status.pop(test_id, None)
+    _jobs.pop(test_id, None)
 
 
 def test_get_pipeline_status_returns_none_for_unknown():
     """get_pipeline_status returns None for unknown course_id."""
-    from app.agent_service import get_pipeline_status
+    from app.pipeline import get_pipeline_status
 
     assert get_pipeline_status("nonexistent-course-id") is None
