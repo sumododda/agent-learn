@@ -1,7 +1,7 @@
 """Tests for Phase 3: Section researcher + evidence cards.
 
 Tests cover:
-- research_section: Tavily mocking, agent invocation, EvidenceCardItem output
+- research_section: Tavily mocking, create_section_researcher, EvidenceCardItem output
 - research_all_sections: parallel execution, error isolation, DB persistence
 - save_evidence_cards: bulk insert, retrieved_date, field mapping
 - get_evidence_cards: query by course_id + section_position
@@ -16,6 +16,16 @@ from sqlalchemy import select
 
 from app.agent import EvidenceCardItem, EvidenceCardSet
 from app.models import EvidenceCard, ResearchBrief
+
+
+def _mock_structured_agent(structured_response):
+    """Create a mock agent whose ainvoke returns a structured_response."""
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "structured_response": structured_response,
+        "messages": [],
+    }
+    return mock_agent
 
 
 # ---------------------------------------------------------------------------
@@ -110,25 +120,16 @@ async def test_research_section_returns_cards(
     mock_card_set = EvidenceCardSet(cards=sample_evidence_cards)
 
     with (
+        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
         patch(
-            "tavily.AsyncTavilyClient"
-        ) as mock_tavily_cls,
-        patch(
-            "app.agent_service.create_section_researcher"
+            "app.agent_service.create_section_researcher",
+            return_value=_mock_structured_agent(mock_card_set),
         ) as mock_create,
-        patch(
-            "app.agent_service._invoke_agent", new_callable=AsyncMock
-        ) as mock_invoke,
     ):
         # Set up Tavily mock
         mock_client = AsyncMock()
         mock_client.search = AsyncMock(return_value=mock_tavily_response)
         mock_tavily_cls.return_value = mock_client
-
-        # Set up agent mock
-        mock_agent = MagicMock()
-        mock_create.return_value = mock_agent
-        mock_invoke.return_value = mock_card_set
 
         from app.agent_service import research_section
 
@@ -142,8 +143,8 @@ async def test_research_section_returns_cards(
     # Tavily should be called once per question
     assert mock_client.search.call_count == 3
 
-    # Agent should be invoked once with all aggregated results
-    mock_invoke.assert_called_once()
+    # create_section_researcher should be called once
+    mock_create.assert_called_once()
 
 
 @pytest.mark.anyio
@@ -154,15 +155,11 @@ async def test_research_section_handles_partial_tavily_failure(
     mock_card_set = EvidenceCardSet(cards=sample_evidence_cards)
 
     with (
+        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
         patch(
-            "tavily.AsyncTavilyClient"
-        ) as mock_tavily_cls,
-        patch(
-            "app.agent_service.create_section_researcher"
-        ) as mock_create,
-        patch(
-            "app.agent_service._invoke_agent", new_callable=AsyncMock
-        ) as mock_invoke,
+            "app.agent_service.create_section_researcher",
+            return_value=_mock_structured_agent(mock_card_set),
+        ),
     ):
         mock_client = AsyncMock()
         # First call succeeds, second fails, third succeeds
@@ -174,10 +171,6 @@ async def test_research_section_handles_partial_tavily_failure(
             ]
         )
         mock_tavily_cls.return_value = mock_client
-
-        mock_agent = MagicMock()
-        mock_create.return_value = mock_agent
-        mock_invoke.return_value = mock_card_set
 
         from app.agent_service import research_section
 
@@ -191,9 +184,7 @@ async def test_research_section_handles_partial_tavily_failure(
 @pytest.mark.anyio
 async def test_research_section_raises_when_all_tavily_fail(mock_research_brief):
     """research_section raises RuntimeError when all Tavily searches fail."""
-    with patch(
-        "tavily.AsyncTavilyClient"
-    ) as mock_tavily_cls:
+    with patch("tavily.AsyncTavilyClient") as mock_tavily_cls:
         mock_client = AsyncMock()
         mock_client.search = AsyncMock(side_effect=RuntimeError("Tavily down"))
         mock_tavily_cls.return_value = mock_client
@@ -208,28 +199,24 @@ async def test_research_section_raises_when_all_tavily_fail(mock_research_brief)
 async def test_research_section_handles_dict_result(
     mock_research_brief, mock_tavily_response, sample_evidence_cards
 ):
-    """research_section handles agent returning a dict (JSON fallback)."""
+    """research_section handles section researcher returning an EvidenceCardSet."""
     card_set_dict = {
         "cards": [c.model_dump() for c in sample_evidence_cards]
     }
+    # create_section_researcher returns an agent whose structured_response
+    # is an EvidenceCardSet; research_section also handles dict fallback
+    mock_card_set = EvidenceCardSet(**card_set_dict)
 
     with (
+        patch("tavily.AsyncTavilyClient") as mock_tavily_cls,
         patch(
-            "tavily.AsyncTavilyClient"
-        ) as mock_tavily_cls,
-        patch(
-            "app.agent_service.create_section_researcher"
-        ) as mock_create,
-        patch(
-            "app.agent_service._invoke_agent", new_callable=AsyncMock
-        ) as mock_invoke,
+            "app.agent_service.create_section_researcher",
+            return_value=_mock_structured_agent(mock_card_set),
+        ),
     ):
         mock_client = AsyncMock()
         mock_client.search = AsyncMock(return_value=mock_tavily_response)
         mock_tavily_cls.return_value = mock_client
-
-        mock_create.return_value = MagicMock()
-        mock_invoke.return_value = card_set_dict
 
         from app.agent_service import research_section
 

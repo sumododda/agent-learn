@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, JSON, Text, Integer, UniqueConstraint, func
+from sqlalchemy import ForeignKey, JSON, Text, Integer, UniqueConstraint, LargeBinary, DateTime, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
@@ -159,3 +159,27 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     course: Mapped["Course"] = relationship(back_populates="chat_messages")
+
+
+class ProviderConfig(Base):
+    __tablename__ = "provider_configs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", name="uq_provider_per_user"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
+    credential_hint: Mapped[str] = mapped_column(Text, nullable=False, default="****")
+    extra_fields: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    is_default: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class UserKeySalt(Base):
+    __tablename__ = "user_key_salts"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    salt: Mapped[bytes] = mapped_column(LargeBinary(16), nullable=False)

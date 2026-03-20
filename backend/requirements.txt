@@ -3,9 +3,9 @@ uvicorn[standard]
 sqlalchemy[asyncio]
 asyncpg
 alembic
+litellm
 deepagents
-langchain
-langchain-openai
+langchain-litellm
 pydantic-settings
 python-dotenv
 httpx
@@ -18,4 +18,5 @@ aiosqlite
 anyio
 tavily-python
 passlib[bcrypt]
+argon2-cffi
 tenacity

@@ -1,13 +1,22 @@
 import pytest
 from unittest.mock import patch, AsyncMock
 
+from tests.conftest import TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS
+
+
+def _mock_get_user_provider():
+    """Return a coroutine mock that resolves to test provider params."""
+    return AsyncMock(return_value=(TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS))
 
 
 @pytest.mark.anyio
 async def test_create_course(client, mock_outline_with_briefs):
     # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         response = await client.post("/api/courses", json={"topic": "Python basics"})
 
     assert response.status_code == 200
@@ -23,7 +32,10 @@ async def test_create_course(client, mock_outline_with_briefs):
 async def test_create_course_ungrounded(client, mock_outline_with_briefs):
     # When discovery research fails, ungrounded=True
     mock_return = (mock_outline_with_briefs, True)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         response = await client.post("/api/courses", json={"topic": "Python basics"})
 
     assert response.status_code == 200
@@ -41,7 +53,10 @@ async def test_get_course_not_found(client):
 @pytest.mark.anyio
 async def test_create_and_get_course(client, mock_outline_with_briefs):
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
@@ -54,13 +69,19 @@ async def test_create_and_get_course(client, mock_outline_with_briefs):
 async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs):
     """POST /generate starts asyncio pipeline and returns 'generating' status."""
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
 
-    # Mock start_pipeline so no real background task is spawned
-    with patch("app.routers.courses.start_pipeline") as mock_start:
+    # Mock start_pipeline and _get_user_provider so no real background task is spawned
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.start_pipeline") as mock_start,
+    ):
         gen_response = await client.post(f"/api/courses/{course_id}/generate")
 
     assert gen_response.status_code == 200
@@ -68,20 +89,28 @@ async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs)
     assert data["status"] == "generating"
     assert "id" in data
     assert "sections" in data
-    mock_start.assert_called_once_with(course_id)
+    mock_start.assert_called_once_with(
+        course_id, TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS
+    )
 
 
 @pytest.mark.anyio
 async def test_generate_course_requires_outline_ready(client, mock_outline_with_briefs):
     """POST /generate rejects courses not in 'outline_ready' status."""
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
 
     # First generate call transitions to "generating"
-    with patch("app.routers.courses.start_pipeline"):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.start_pipeline"),
+    ):
         await client.post(f"/api/courses/{course_id}/generate")
 
     # Second call should fail because status is now "generating"
@@ -92,14 +121,20 @@ async def test_generate_course_requires_outline_ready(client, mock_outline_with_
 @pytest.mark.anyio
 async def test_regenerate_course(client, mock_outline_with_briefs):
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
 
     # Regenerate with feedback
     mock_return_2 = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return_2):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return_2),
+    ):
         regen_response = await client.post(
             f"/api/courses/{course_id}/regenerate",
             json={"overall_comment": "Add more detail", "section_comments": []},
@@ -120,7 +155,10 @@ async def test_regenerate_course(client, mock_outline_with_briefs):
 async def test_get_evidence_empty(client, mock_outline_with_briefs):
     """GET /evidence returns empty list when no evidence cards exist."""
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
@@ -142,7 +180,10 @@ async def test_get_evidence_not_found(client):
 async def test_get_blackboard_none(client, mock_outline_with_briefs):
     """GET /blackboard returns null when no blackboard exists."""
     mock_return = (mock_outline_with_briefs, False)
-    with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]

@@ -3,14 +3,12 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://agentlearn:agentlearn@localhost:5432/agentlearn"
-    OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4"
     TAVILY_API_KEY: str = ""
     JWT_SECRET_KEY: str = ""
     JWT_EXPIRE_MINUTES: int = 1440
-    CHAT_DEFAULT_MODEL: str = "anthropic/claude-sonnet-4"
+    ENCRYPTION_PEPPER: str = ""
 
-    model_config = {"env_file": ".env"}
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

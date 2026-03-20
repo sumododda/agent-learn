@@ -88,3 +88,27 @@ export interface ChatModel {
   pricing_prompt: string;
   pricing_completion: string;
 }
+
+export interface ProviderField {
+  key: string;
+  label: string;
+  type: "password" | "text" | "textarea";
+  required: boolean;
+  secret: boolean;
+  placeholder?: string;
+}
+
+export interface ProviderDefinition {
+  name: string;
+  model_prefix: string;
+  fields: ProviderField[];
+  models: { id: string; name: string }[] | "dynamic";
+}
+
+export interface ProviderConfig {
+  provider: string;
+  name: string;
+  credential_hint: string;
+  extra_fields: Record<string, string>;
+  is_default: boolean;
+}

@@ -1,74 +1,32 @@
-"""Chat service: OpenRouter model listing, context assembly, and streaming."""
+"""Chat service: model listing, context assembly, and streaming via LiteLLM."""
 
-import asyncio
 import json
 import logging
-import time
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
+from app import provider_service
 from app.models import Blackboard, ChatMessage, Course, EvidenceCard
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Model listing with 5-minute TTL cache
+# Model listing
 # ---------------------------------------------------------------------------
 
-_models_cache: list[dict] | None = None
-_models_cache_time: float = 0
-_MODELS_TTL: float = 300.0  # 5 minutes
-_models_lock = asyncio.Lock()
 
-
-async def get_models() -> list[dict]:
-    """Fetch text-to-text models from OpenRouter, cached for 5 minutes."""
-    global _models_cache, _models_cache_time
-    now = time.time()
-    if _models_cache is not None and (now - _models_cache_time) < _MODELS_TTL:
-        return _models_cache
-
-    async with _models_lock:
-        # Double-check after acquiring lock
-        now = time.time()
-        if _models_cache is not None and (now - _models_cache_time) < _MODELS_TTL:
-            return _models_cache
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"},
-                timeout=15.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        models: list[dict] = []
-        for m in data.get("data", []):
-            arch = m.get("architecture") or {}
-            input_mods = arch.get("input_modalities") or []
-            output_mods = arch.get("output_modalities") or []
-            if "text" in input_mods and "text" in output_mods:
-                pricing = m.get("pricing") or {}
-                models.append(
-                    {
-                        "id": m["id"],
-                        "name": m.get("name", m["id"]),
-                        "context_length": m.get("context_length", 0),
-                        "pricing_prompt": pricing.get("prompt", "0"),
-                        "pricing_completion": pricing.get("completion", "0"),
-                    }
-                )
-
-        _models_cache = models
-        _models_cache_time = time.time()
-        return models
+async def get_models(
+    provider: str,
+    credentials: dict | None = None,
+    extra_fields: dict | None = None,
+) -> list[dict]:
+    """Return available models for the given provider."""
+    return await provider_service.list_models(provider, credentials, extra_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -188,14 +146,18 @@ async def assemble_context(
 
 
 # ---------------------------------------------------------------------------
-# Streaming chat via OpenRouter
+# Streaming chat via LiteLLM
 # ---------------------------------------------------------------------------
 
 
 async def stream_chat(
-    model: str, messages: list[dict]
+    provider: str,
+    model: str,
+    messages: list[dict],
+    credentials: dict,
+    extra_fields: dict | None = None,
 ) -> tuple[AsyncGenerator[bytes, None], list[str]]:
-    """Stream a chat completion from OpenRouter.
+    """Stream a chat completion via LiteLLM provider_service.
 
     Returns a tuple of (async byte generator, collected_content list).
     The collected_content list is populated as the stream progresses and
@@ -204,36 +166,20 @@ async def stream_chat(
     collected_content: list[str] = []
 
     async def generate() -> AsyncGenerator[bytes, None]:
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                "https://openrouter.ai/api/v1/chat/completions",
-                json={"model": model, "messages": messages, "stream": True},
-                headers={
-                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(120.0, connect=10.0),
-            ) as response:
-                if response.status_code != 200:
-                    await response.aread()
-                    error_body = response.text
-                    yield f'data: {{"error": "{error_body}"}}\n\n'.encode()
-                    return
-                async for chunk in response.aiter_bytes():
-                    # Parse content for accumulation
-                    try:
-                        for line in chunk.decode("utf-8", errors="replace").split("\n"):
-                            line = line.strip()
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                data = json.loads(line[6:])
-                                delta = (
-                                    data.get("choices", [{}])[0].get("delta", {})
-                                )
-                                if "content" in delta:
-                                    collected_content.append(delta["content"])
-                    except Exception as e:
-                        logger.debug("Failed to parse SSE chunk: %s", e)
-                    yield chunk
+        try:
+            response = await provider_service.stream_completion(
+                provider, model, messages, credentials, extra_fields
+            )
+            async for chunk in response:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                text = delta.content if delta and delta.content else ""
+                if text:
+                    collected_content.append(text)
+                chunk_data = {"choices": [{"delta": {"content": text}}]}
+                yield f"data: {json.dumps(chunk_data)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+        except Exception as e:
+            logger.error("Stream error: %s", e)
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
 
     return generate(), collected_content
