@@ -1,2 +1,126 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+
+/* Learn page: warm editorial typography */
+.learn-content {
+  font-family: Georgia, 'Merriweather', 'Times New Roman', serif;
+  font-size: 17px;
+  line-height: 1.85;
+  color: #d4cfc4;
+}
+
+.learn-content strong {
+  color: #ece7da;
+  font-weight: 600;
+}
+
+.learn-content h2,
+.learn-content h3,
+.learn-content h4 {
+  font-family: -apple-system, 'Inter', 'Segoe UI', sans-serif;
+  color: #e8e4dc;
+  margin-top: 2em;
+  margin-bottom: 0.6em;
+  line-height: 1.3;
+}
+
+.learn-content h2 {
+  font-size: 1.4em;
+  font-weight: 700;
+}
+
+.learn-content h3 {
+  font-size: 1.15em;
+  font-weight: 600;
+  color: #c4b5fd;
+}
+
+.learn-content h4 {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.learn-content p {
+  margin-bottom: 1.25em;
+}
+
+.learn-content ul,
+.learn-content ol {
+  margin-bottom: 1.25em;
+  padding-left: 1.5em;
+}
+
+.learn-content li {
+  margin-bottom: 0.5em;
+}
+
+.learn-content li::marker {
+  color: #7c7568;
+}
+
+.learn-content blockquote {
+  border-left: 3px solid #c4b5fd40;
+  padding-left: 1.2em;
+  margin: 1.5em 0;
+  color: #b8b2a6;
+  font-style: italic;
+}
+
+.learn-content code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Menlo', monospace;
+  font-size: 0.85em;
+  background: #1a1916;
+  border: 1px solid #2a2720;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: #e2d9c8;
+}
+
+.learn-content pre {
+  background: #111110;
+  border: 1px solid #2a2720;
+  border-radius: 8px;
+  padding: 1.2em 1.4em;
+  margin: 1.5em 0;
+  overflow-x: auto;
+}
+
+.learn-content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.88em;
+  line-height: 1.6;
+}
+
+.learn-content a {
+  color: #c4b5fd;
+  text-decoration: underline;
+  text-decoration-color: #c4b5fd40;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.2s;
+}
+
+.learn-content a:hover {
+  text-decoration-color: #c4b5fd;
+}
+
+.learn-content hr {
+  border: none;
+  border-top: 1px solid #2a2720;
+  margin: 2em 0;
+}
+
+.learn-content img {
+  border-radius: 8px;
+  margin: 1.5em 0;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}

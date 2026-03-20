@@ -1,7 +1,7 @@
 """Tests for JWT authentication flow.
 
 Tests cover:
-- Register: creates user, returns JWT and user_id
+- Register + verify: creates user via OTP flow, returns JWT and user_id
 - Login: authenticates user, returns JWT and user_id
 - Protected endpoint with valid token returns 200
 - Protected endpoint without token returns 401
@@ -10,6 +10,7 @@ Tests cover:
 """
 
 import pytest
+from unittest.mock import patch, MagicMock
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -18,6 +19,7 @@ from app.main import app
 from app.config import settings
 from app.database import get_session
 from app.models import Base
+import app.pending_registration_cache as pending_cache
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +58,10 @@ async def auth_db():
     # install the session override -- get_current_user is NOT overridden.
     app.dependency_overrides.clear()
     app.dependency_overrides[get_session] = override_session
+    pending_cache._cache.clear()
     yield session_factory
 
+    pending_cache._cache.clear()
     settings.JWT_SECRET_KEY = original_secret
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -76,12 +80,33 @@ async def client():
 # Helpers
 # ---------------------------------------------------------------------------
 
+_captured_otp = {}
+
+
 async def _register_user(client: AsyncClient, email: str = "test@example.com", password: str = "securepass123"):
-    """Register a user and return the response."""
-    return await client.post(
-        "/api/auth/register",
-        json={"email": email, "password": password},
+    """Register a user via the two-phase OTP flow and return the verify-otp response (with JWT).
+
+    Mocks Turnstile (always passes) and captures the OTP from the email service.
+    """
+    def capture_email(to_email, otp):
+        _captured_otp[to_email] = otp
+
+    with patch("app.routers.auth_routes.verify_turnstile_token", return_value=True), \
+         patch("app.routers.auth_routes.send_verification_email", side_effect=capture_email):
+        reg_resp = await client.post(
+            "/api/auth/register",
+            json={"email": email, "password": password, "turnstile_token": "test-token"},
+        )
+        assert reg_resp.status_code == 200, f"Register failed: {reg_resp.json()}"
+
+    otp = _captured_otp.get(email)
+    assert otp is not None, f"OTP not captured for {email}"
+
+    verify_resp = await client.post(
+        "/api/auth/verify-otp",
+        json={"email": email, "otp": otp},
     )
+    return verify_resp
 
 
 async def _login_user(client: AsyncClient, email: str = "test@example.com", password: str = "securepass123"):
@@ -115,7 +140,12 @@ async def test_register_duplicate_email(auth_db, client):
     resp1 = await _register_user(client, email="dup@example.com")
     assert resp1.status_code == 200
 
-    resp2 = await _register_user(client, email="dup@example.com")
+    with patch("app.routers.auth_routes.verify_turnstile_token", return_value=True), \
+         patch("app.routers.auth_routes.send_verification_email"):
+        resp2 = await client.post(
+            "/api/auth/register",
+            json={"email": "dup@example.com", "password": "securepass123", "turnstile_token": "test"},
+        )
     assert resp2.status_code == 409
 
 
@@ -127,9 +157,9 @@ async def test_register_duplicate_email(auth_db, client):
 @pytest.mark.anyio
 async def test_login_success(auth_db, client):
     """POST /api/auth/login with valid credentials returns JWT + user_id."""
-    await _register_user(client, email="login@example.com", password="mypass")
+    await _register_user(client, email="login@example.com", password="mypass123")
 
-    resp = await _login_user(client, email="login@example.com", password="mypass")
+    resp = await _login_user(client, email="login@example.com", password="mypass123")
     assert resp.status_code == 200
     data = resp.json()
     assert "token" in data
@@ -140,9 +170,9 @@ async def test_login_success(auth_db, client):
 @pytest.mark.anyio
 async def test_login_bad_password(auth_db, client):
     """POST /api/auth/login with wrong password returns 401."""
-    await _register_user(client, email="badpass@example.com", password="right")
+    await _register_user(client, email="badpass@example.com", password="rightpass")
 
-    resp = await _login_user(client, email="badpass@example.com", password="wrong")
+    resp = await _login_user(client, email="badpass@example.com", password="wrongpass")
     assert resp.status_code == 401
 
 
