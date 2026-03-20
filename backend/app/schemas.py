@@ -197,3 +197,44 @@ class LoginRequest(BaseModel):
 class AuthResponse(BaseModel):
     token: str
     user_id: str
+    provider_keys_loaded: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Provider schemas (Phase 2: Multi-provider)
+# ---------------------------------------------------------------------------
+
+
+class ProviderSaveRequest(BaseModel):
+    provider: str
+    credentials: dict
+    extra_fields: dict = {}
+    password: str
+
+
+class ProviderUpdateRequest(BaseModel):
+    credentials: dict | None = None
+    extra_fields: dict | None = None
+    password: str | None = None
+
+
+class ProviderTestRequest(BaseModel):
+    credentials: dict
+    extra_fields: dict = {}
+
+
+class ProviderConfigResponse(BaseModel):
+    provider: str
+    name: str
+    credential_hint: str
+    extra_fields: dict
+    is_default: bool
+
+
+class ProviderDefaultRequest(BaseModel):
+    provider: str
+
+
+class PasswordChangeRequest(BaseModel):
+    old_password: str
+    new_password: str
