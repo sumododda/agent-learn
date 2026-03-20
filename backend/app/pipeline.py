@@ -1,6 +1,6 @@
-"""Asyncio-based pipeline orchestrator replacing Trigger.dev.
+"""Asyncio-based pipeline orchestrator for course generation.
 
-Mirrors the exact orchestration flow from trigger/src/tasks/generate-course.ts:
+Orchestration flow:
 1. discover_and_plan (sequential) — 3 attempts
 2. research all sections (parallel via asyncio.gather) — 3 attempts each
 3. for each section sequentially: verify (2) -> write (3) -> edit (2), skip failed
