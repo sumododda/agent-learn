@@ -169,6 +169,43 @@ async def list_models(provider: str, credentials: dict | None = None, extra_fiel
     return []
 
 
+def build_chat_model(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a LangChain BaseChatModel routed through LiteLLM.
+
+    Uses ChatLiteLLM from langchain-litellm to wrap litellm.acompletion()
+    in a LangChain-compatible interface for use with deepagents.
+    """
+    from langchain_litellm import ChatLiteLLM
+
+    prefix = PROVIDERS[provider]["model_prefix"]
+    ef = extra_fields or {}
+
+    init_kwargs = {
+        "model": f"{prefix}{model}",
+        "api_key": credentials.get("api_key"),
+        "api_base": ef.get("api_base") or credentials.get("api_base"),
+    }
+
+    # Provider-specific params go into model_kwargs
+    model_kwargs = {}
+    if "api_version" in ef or "api_version" in credentials:
+        model_kwargs["api_version"] = ef.get("api_version") or credentials.get("api_version")
+    if "vertex_credentials" in credentials:
+        model_kwargs["vertex_credentials"] = credentials["vertex_credentials"]
+    if "vertex_ai_project" in ef:
+        model_kwargs["vertex_project"] = ef["vertex_ai_project"]
+    if "vertex_ai_location" in ef:
+        model_kwargs["vertex_location"] = ef["vertex_ai_location"]
+
+    if model_kwargs:
+        init_kwargs["model_kwargs"] = model_kwargs
+
+    # Remove None values to avoid overriding env vars with None
+    init_kwargs = {k: v for k, v in init_kwargs.items() if v is not None}
+
+    return ChatLiteLLM(**init_kwargs)
+
+
 async def _fetch_openrouter_models(api_key: str) -> list[dict]:
     """Fetch models from OpenRouter API."""
     async with httpx.AsyncClient() as client:

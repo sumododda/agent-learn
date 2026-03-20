@@ -1,7 +1,10 @@
-"""Agent definitions: schemas, system prompts, and LiteLLM invoke functions."""
+"""Agent definitions: schemas, system prompts, and deepagents creators."""
 import json
 import logging
+
 from pydantic import BaseModel
+from deepagents import create_deep_agent
+from langchain.agents.structured_output import ToolStrategy
 from app import provider_service
 
 logger = logging.getLogger(__name__)
@@ -300,81 +303,92 @@ Output a structured VerificationResult with:
 - gaps: list of unanswered questions or weak areas that need more research"""
 
 
-# --- LiteLLM invoke functions ---
+# --- Subagent dicts (for reference / orchestrator) ---
+
+planner_subagent = {
+    "name": "planner",
+    "description": "Generates a structured course outline from a topic and optional learner instructions.",
+    "system_prompt": PLANNER_PROMPT,
+    "tools": [],
+}
+
+writer_subagent = {
+    "name": "writer",
+    "description": "Generates markdown lesson content for each section of an approved course outline.",
+    "system_prompt": WRITER_PROMPT,
+    "tools": [],
+}
 
 
-async def invoke_planner(message: str, provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Invoke the planner agent to generate a course outline with research briefs."""
-    messages = [
-        {"role": "system", "content": PLANNER_PROMPT + "\n\nRespond with valid JSON matching the CourseOutlineWithBriefs schema."},
-        {"role": "user", "content": message},
-    ]
-    response = await provider_service.completion(
-        provider, model, messages, credentials, extra_fields,
-        response_format={"type": "json_object"},
+# --- Agent creators (deepagents + ChatLiteLLM) ---
+
+
+def create_planner(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a planner agent with structured output, backed by LiteLLM."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
+        system_prompt=PLANNER_PROMPT,
+        response_format=ToolStrategy(CourseOutlineWithBriefs),
+        tools=[],
+        name="agent-learn-planner",
     )
-    return CourseOutlineWithBriefs(**json.loads(response.choices[0].message.content))
 
 
-async def invoke_discovery_researcher(message: str, provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Invoke the discovery researcher to synthesize search results into a topic brief."""
-    messages = [
-        {"role": "system", "content": DISCOVERY_RESEARCHER_PROMPT + "\n\nRespond with valid JSON matching the TopicBrief schema."},
-        {"role": "user", "content": message},
-    ]
-    response = await provider_service.completion(
-        provider, model, messages, credentials, extra_fields,
-        response_format={"type": "json_object"},
+def create_writer(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a writer agent (plain markdown output)."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
+        system_prompt=WRITER_PROMPT,
+        tools=[],
+        name="agent-learn-writer",
     )
-    return TopicBrief(**json.loads(response.choices[0].message.content))
 
 
-async def invoke_section_researcher(message: str, provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Invoke the section researcher to extract evidence cards from search results."""
-    messages = [
-        {"role": "system", "content": SECTION_RESEARCHER_PROMPT + "\n\nRespond with valid JSON matching the EvidenceCardSet schema."},
-        {"role": "user", "content": message},
-    ]
-    response = await provider_service.completion(
-        provider, model, messages, credentials, extra_fields,
-        response_format={"type": "json_object"},
+def create_discovery_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a discovery researcher with structured TopicBrief output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
+        system_prompt=DISCOVERY_RESEARCHER_PROMPT,
+        response_format=ToolStrategy(TopicBrief),
+        tools=[],
+        name="agent-learn-discovery-researcher",
     )
-    return EvidenceCardSet(**json.loads(response.choices[0].message.content))
 
 
-async def invoke_verifier(message: str, provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Invoke the verifier to check evidence card quality."""
-    messages = [
-        {"role": "system", "content": VERIFIER_PROMPT + "\n\nRespond with valid JSON matching the VerificationResult schema."},
-        {"role": "user", "content": message},
-    ]
-    response = await provider_service.completion(
-        provider, model, messages, credentials, extra_fields,
-        response_format={"type": "json_object"},
+def create_section_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a section researcher with structured EvidenceCardSet output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
+        system_prompt=SECTION_RESEARCHER_PROMPT,
+        response_format=ToolStrategy(EvidenceCardSet),
+        tools=[],
+        name="agent-learn-section-researcher",
     )
-    return VerificationResult(**json.loads(response.choices[0].message.content))
 
 
-async def invoke_writer(message: str, provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Invoke the writer to generate markdown lesson content (no JSON mode)."""
-    messages = [
-        {"role": "system", "content": WRITER_PROMPT},
-        {"role": "user", "content": message},
-    ]
-    response = await provider_service.completion(
-        provider, model, messages, credentials, extra_fields,
+def create_verifier(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a verifier with structured VerificationResult output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
+        system_prompt=VERIFIER_PROMPT,
+        response_format=ToolStrategy(VerificationResult),
+        tools=[],
+        name="agent-learn-verifier",
     )
-    return response.choices[0].message.content
 
 
-async def invoke_editor(message: str, provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Invoke the editor to polish a draft and generate blackboard updates."""
-    messages = [
-        {"role": "system", "content": EDITOR_PROMPT + "\n\nRespond with valid JSON matching the EditorResult schema."},
-        {"role": "user", "content": message},
-    ]
-    response = await provider_service.completion(
-        provider, model, messages, credentials, extra_fields,
-        response_format={"type": "json_object"},
+def create_editor(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create an editor with structured EditorResult output."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_deep_agent(
+        model=llm,
+        system_prompt=EDITOR_PROMPT,
+        response_format=ToolStrategy(EditorResult),
+        tools=[],
+        name="agent-learn-editor",
     )
-    return EditorResult(**json.loads(response.choices[0].message.content))

@@ -462,8 +462,17 @@ def test_format_outline_context_objects():
 
 
 # ---------------------------------------------------------------------------
-# Tests: write_section (now uses invoke_writer via LiteLLM)
+# Tests: write_section (deepagents writer via ChatLiteLLM)
 # ---------------------------------------------------------------------------
+
+
+def _mock_writer_agent(content_text):
+    """Create a mock writer agent whose ainvoke returns plain message content."""
+    mock_agent = AsyncMock()
+    mock_msg = MagicMock()
+    mock_msg.content = content_text
+    mock_agent.ainvoke.return_value = {"messages": [mock_msg]}
+    return mock_agent
 
 
 @pytest.mark.anyio
@@ -477,8 +486,9 @@ async def test_write_section_filters_verified_cards(setup_db, db_session, course
     ]
 
     mock_content = "## Introduction\n\nPython was created in 1991 [1]. It uses dynamic typing [2]."
+    mock_agent = _mock_writer_agent(mock_content)
 
-    with patch("app.agent_service.invoke_writer", new_callable=AsyncMock, return_value=mock_content) as mock_invoke:
+    with patch("app.agent_service.create_writer", return_value=mock_agent):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
@@ -486,8 +496,8 @@ async def test_write_section_filters_verified_cards(setup_db, db_session, course
     assert "## Introduction" in result
 
     # Check that the message sent to the writer contains only verified cards
-    call_args = mock_invoke.call_args
-    message = call_args[0][0]  # first positional arg is the message string
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
     assert "Python was created by Guido van Rossum" in message
     assert "Python uses dynamic typing" in message
 
@@ -500,9 +510,9 @@ async def test_write_section_with_empty_blackboard(setup_db, db_session, course_
     section = SimpleNamespace(title="Introduction", summary="Getting started")
     outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
 
-    mock_content = "## Introduction\n\nContent here."
+    mock_agent = _mock_writer_agent("## Introduction\n\nContent here.")
 
-    with patch("app.agent_service.invoke_writer", new_callable=AsyncMock, return_value=mock_content):
+    with patch("app.agent_service.create_writer", return_value=mock_agent):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
@@ -518,9 +528,9 @@ async def test_write_section_with_dict_section(setup_db, db_session, course_with
     section = {"title": "Introduction", "summary": "Getting started", "position": 1}
     outline = [{"position": 1, "title": "Introduction", "summary": "Getting started"}]
 
-    mock_content = "## Introduction\n\nContent here."
+    mock_agent = _mock_writer_agent("## Introduction\n\nContent here.")
 
-    with patch("app.agent_service.invoke_writer", new_callable=AsyncMock, return_value=mock_content):
+    with patch("app.agent_service.create_writer", return_value=mock_agent):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
@@ -529,8 +539,18 @@ async def test_write_section_with_dict_section(setup_db, db_session, course_with
 
 
 # ---------------------------------------------------------------------------
-# Tests: edit_section (now uses invoke_editor via LiteLLM)
+# Tests: edit_section (deepagents editor via ChatLiteLLM)
 # ---------------------------------------------------------------------------
+
+
+def _mock_editor_agent(editor_result):
+    """Create a mock editor agent whose ainvoke returns structured_response."""
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "structured_response": editor_result,
+        "messages": [],
+    }
+    return mock_agent
 
 
 @pytest.mark.anyio
@@ -539,7 +559,9 @@ async def test_edit_section_returns_editor_result(setup_db, db_session, course_w
     course, cards = course_with_cards
     draft = "## Introduction\n\nDraft content."
 
-    with patch("app.agent_service.invoke_editor", new_callable=AsyncMock, return_value=sample_editor_result):
+    mock_agent = _mock_editor_agent(sample_editor_result)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
         from app.agent_service import edit_section
 
         result = await edit_section(draft, None, cards, 1, db_session)
@@ -552,24 +574,24 @@ async def test_edit_section_returns_editor_result(setup_db, db_session, course_w
 
 @pytest.mark.anyio
 async def test_edit_section_handles_dict_result(setup_db, db_session, course_with_cards):
-    """edit_section handles invoke_editor returning a dict (JSON fallback)."""
+    """edit_section handles editor returning a dict (JSON fallback)."""
     course, cards = course_with_cards
     draft = "## Test\n\nContent."
 
-    dict_result = {
-        "edited_content": "## Test\n\nEdited content.",
-        "blackboard_updates": {
-            "new_glossary_terms": {},
-            "new_concept_ownership": {},
-            "topics_covered": ["test topic"],
-            "key_points_summary": "Test summary",
-            "new_sources": [],
-        },
-    }
-    # invoke_editor returns an EditorResult, but edit_section also handles dict fallback
-    editor_result = EditorResult(**dict_result)
+    editor_result = EditorResult(
+        edited_content="## Test\n\nEdited content.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=["test topic"],
+            key_points_summary="Test summary",
+            new_sources=[],
+        ),
+    )
 
-    with patch("app.agent_service.invoke_editor", new_callable=AsyncMock, return_value=editor_result):
+    mock_agent = _mock_editor_agent(editor_result)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
         from app.agent_service import edit_section
 
         result = await edit_section(draft, None, cards, 1, db_session)
@@ -610,14 +632,16 @@ async def test_edit_section_includes_blackboard_in_message(setup_db, db_session,
         ),
     )
 
-    with patch("app.agent_service.invoke_editor", new_callable=AsyncMock, return_value=mock_result) as mock_invoke:
+    mock_agent = _mock_editor_agent(mock_result)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent) as mock_create:
         from app.agent_service import edit_section
 
         result = await edit_section(draft, bb, cards, 2, db_session)
 
     # Verify the message sent to editor includes blackboard context
-    call_args = mock_invoke.call_args
-    message = call_args[0][0]  # first positional arg is the message string
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
     assert "BLACKBOARD" in message
     assert "var" in message  # glossary term should be in the message
     assert "Section position: 2" in message

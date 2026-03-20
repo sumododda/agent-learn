@@ -459,6 +459,14 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
         ],
     )
 
+    def _mock_planner_agent(structured_response):
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {
+            "structured_response": structured_response,
+            "messages": [],
+        }
+        return mock_agent
+
     with (
         patch(
             "app.agent_service.discover_topic",
@@ -466,9 +474,8 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
             side_effect=RuntimeError("Tavily API key invalid"),
         ),
         patch(
-            "app.agent_service.invoke_planner",
-            new_callable=AsyncMock,
-            return_value=mock_outline,
+            "app.agent_service.create_planner",
+            return_value=_mock_planner_agent(mock_outline),
         ),
         patch("app.agent_service.settings") as mock_settings,
     ):
