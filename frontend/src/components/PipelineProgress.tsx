@@ -43,7 +43,7 @@ export default function PipelineProgress({
   sectionTitles,
   onComplete,
 }: PipelineProgressProps) {
-  const { run, error, isLoading } = useRealtimeRun(runId, {
+  const { run, error } = useRealtimeRun(runId, {
     accessToken,
     enabled: !!runId,
   });
@@ -60,7 +60,7 @@ export default function PipelineProgress({
     }
   }, [runStatus, onComplete]);
 
-  if (isLoading) {
+  if (!run && !error) {
     return (
       <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
         <p className="text-gray-400 text-sm">Connecting to pipeline...</p>

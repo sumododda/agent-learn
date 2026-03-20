@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     TRIGGER_API_URL: str = "https://api.trigger.dev"
     CLERK_JWKS_URL: str = ""
     CLERK_ISSUER: str = ""
+    CHAT_DEFAULT_MODEL: str = "anthropic/claude-sonnet-4"
 
     model_config = {"env_file": ".env"}
 

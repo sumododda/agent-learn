@@ -156,6 +156,8 @@ Guidelines:
 - The section should be 400-800 words
 - Make examples practical and concrete, not abstract
 
+Where a concept benefits from a visual aid — process flows, architecture diagrams, state transitions, relationship maps, or decision trees — include a Mermaid diagram using a ```mermaid fenced code block. Prefer flowchart (graph TD/LR), sequence, or entity-relationship diagrams. Keep diagrams simple: under 15 nodes, clear labels, no styling directives. Not every section needs a diagram. Use them only when visual representation genuinely aids understanding.
+
 You will receive the full course outline for context so you can maintain coherence.
 Output ONLY the markdown content for the requested section. Do NOT output JSON or structured data."""
 

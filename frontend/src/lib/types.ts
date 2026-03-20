@@ -77,3 +77,20 @@ export interface ProgressData {
 export interface CourseWithProgress extends Course {
   progress: ProgressData | null;
 }
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  model: string | null;
+  section_context: number;
+  created_at: string;
+}
+
+export interface ChatModel {
+  id: string;
+  name: string;
+  context_length: number;
+  pricing_prompt: string;
+  pricing_completion: string;
+}
