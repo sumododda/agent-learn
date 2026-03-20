@@ -258,3 +258,33 @@ class CourseWithProgressResponse(BaseModel):
     ungrounded: bool = False
     sections: list[SectionFull]
     progress: ProgressResponse | None = None
+
+
+# ---------------------------------------------------------------------------
+# Chat schemas (Phase 2, Milestone 4)
+# ---------------------------------------------------------------------------
+
+
+class ChatRequest(BaseModel):
+    message: str
+    model: str
+    section_context: int
+
+
+class ChatMessageResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    role: str
+    content: str
+    model: str | None
+    section_context: int
+    created_at: datetime
+
+
+class ChatModelInfo(BaseModel):
+    id: str
+    name: str
+    context_length: int
+    pricing_prompt: str
+    pricing_completion: str
