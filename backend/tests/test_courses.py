@@ -77,9 +77,10 @@ async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs)
 
     course_id = create_response.json()["id"]
 
-    # Mock start_pipeline and _get_user_provider so no real background task is spawned
+    # Mock start_pipeline, _get_user_provider, and _get_user_search_provider so no real background task is spawned
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses._get_user_search_provider", return_value=("", {})),
         patch("app.routers.courses.start_pipeline") as mock_start,
     ):
         gen_response = await client.post(f"/api/courses/{course_id}/generate")
@@ -90,7 +91,7 @@ async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs)
     assert "id" in data
     assert "sections" in data
     mock_start.assert_called_once_with(
-        course_id, TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS
+        course_id, TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS, "", {}
     )
 
 

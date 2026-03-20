@@ -273,3 +273,91 @@ export async function setDefaultProvider(provider: string, token: string | null)
   if (!res.ok) throw new Error('Set default failed');
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Search provider API
+// ---------------------------------------------------------------------------
+
+export async function getSearchProviderRegistry(token: string | null): Promise<Record<string, ProviderDefinition>> {
+  const res = await fetch(`${API_BASE}/api/search-providers/registry`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) return {};
+  return res.json();
+}
+
+export async function getSearchProviders(token: string | null): Promise<ProviderConfig[]> {
+  const res = await fetch(`${API_BASE}/api/search-providers`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function saveSearchProvider(
+  data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string>; password: string },
+  token: string | null
+): Promise<ProviderConfig> {
+  const res = await fetch(`${API_BASE}/api/search-providers`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Save failed' }));
+    throw new Error(err.detail || 'Save failed');
+  }
+  return res.json();
+}
+
+export async function updateSearchProvider(
+  provider: string,
+  data: { credentials?: Record<string, string>; extra_fields?: Record<string, string>; password?: string },
+  token: string | null
+): Promise<ProviderConfig> {
+  const res = await fetch(`${API_BASE}/api/search-providers/${provider}`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Update failed' }));
+    throw new Error(err.detail || 'Update failed');
+  }
+  return res.json();
+}
+
+export async function deleteSearchProvider(provider: string, token: string | null): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/search-providers/${provider}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Delete failed');
+}
+
+export async function testSearchProvider(
+  provider: string,
+  data: { credentials: Record<string, string>; extra_fields: Record<string, string> },
+  token: string | null
+): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/api/search-providers/${provider}/test`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Test failed' }));
+    throw new Error(err.detail || 'Test failed');
+  }
+  return res.json();
+}
+
+export async function setDefaultSearchProvider(provider: string, token: string | null): Promise<ProviderConfig> {
+  const res = await fetch(`${API_BASE}/api/search-providers/default`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify({ provider }),
+  });
+  if (!res.ok) throw new Error('Set default failed');
+  return res.json();
+}

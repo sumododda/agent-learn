@@ -11,6 +11,13 @@ import {
   deleteProvider,
   testProvider,
   setDefaultProvider,
+  getSearchProviderRegistry,
+  getSearchProviders,
+  saveSearchProvider,
+  updateSearchProvider,
+  deleteSearchProvider,
+  testSearchProvider,
+  setDefaultSearchProvider,
 } from '@/lib/api';
 import type { ProviderDefinition, ProviderConfig } from '@/lib/types';
 
@@ -69,13 +76,22 @@ function PasswordModal({
   );
 }
 
+type ProviderCategory = 'llm' | 'search';
+
 export default function SettingsPage() {
   const router = useRouter();
   const { getToken, isSignedIn, isLoaded } = useAuth();
 
+  // LLM providers
   const [registry, setRegistry] = useState<Record<string, ProviderDefinition>>({});
   const [configs, setConfigs] = useState<ProviderConfig[]>([]);
+
+  // Search providers
+  const [searchRegistry, setSearchRegistry] = useState<Record<string, ProviderDefinition>>({});
+  const [searchConfigs, setSearchConfigs] = useState<ProviderConfig[]>([]);
+
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<ProviderCategory>('llm');
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [extraFields, setExtraFields] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -90,14 +106,21 @@ export default function SettingsPage() {
 
   const fetchData = useCallback(async () => {
     const token = await getToken();
-    const [reg, cfgs] = await Promise.all([
+    const [reg, cfgs, sReg, sCfgs] = await Promise.all([
       getProviderRegistry(token),
       getProviders(token),
+      getSearchProviderRegistry(token),
+      getSearchProviders(token),
     ]);
-    setRegistry(reg);
+    // Registry endpoints return {providers: {...}} — unwrap if wrapped
+    const llmReg = (reg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
+    setRegistry(llmReg || reg);
     setConfigs(cfgs);
+    const searchRegInner = (sReg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
+    setSearchRegistry(searchRegInner || sReg);
+    setSearchConfigs(sCfgs);
     setLoadingData(false);
-    return { reg, cfgs };
+    return { reg: llmReg || reg, cfgs, sCfgs };
   }, [getToken]);
 
   useEffect(() => {
@@ -106,12 +129,11 @@ export default function SettingsPage() {
       return;
     }
     if (isLoaded && isSignedIn) {
-      fetchData().then(({ reg, cfgs }) => {
+      fetchData().then(({ reg }) => {
         const keys = Object.keys(reg);
         if (keys.length > 0 && !selectedProvider) {
-          // Prefer the first configured provider, else first in registry
-          const firstConfigured = cfgs.find((c) => keys.includes(c.provider));
-          setSelectedProvider(firstConfigured?.provider || keys[0]);
+          setSelectedProvider(keys[0]);
+          setSelectedCategory('llm');
         }
       });
     }
@@ -120,13 +142,14 @@ export default function SettingsPage() {
   // When selectedProvider changes, reset form
   useEffect(() => {
     if (!selectedProvider) return;
-    const def = registry[selectedProvider];
-    const cfg = configs.find((c) => c.provider === selectedProvider);
+    const activeRegistry = selectedCategory === 'llm' ? registry : searchRegistry;
+    const activeConfigs = selectedCategory === 'llm' ? configs : searchConfigs;
+    const def = activeRegistry[selectedProvider];
+    const cfg = activeConfigs.find((c) => c.provider === selectedProvider);
 
     if (def) {
       const vals: Record<string, string> = {};
       for (const field of def.fields) {
-        // For secret fields on existing configs, leave empty (placeholder will show hint)
         vals[field.key] = '';
       }
       setFormValues(vals);
@@ -136,14 +159,24 @@ export default function SettingsPage() {
     setError(null);
     setSuccessMsg(null);
     setConfirmDelete(false);
-  }, [selectedProvider, registry, configs]);
+  }, [selectedProvider, selectedCategory, registry, searchRegistry, configs, searchConfigs]);
 
   const providerKeys = Object.keys(registry);
-  const currentDef = selectedProvider ? registry[selectedProvider] : null;
+  const searchProviderKeys = Object.keys(searchRegistry);
+
+  const activeRegistry = selectedCategory === 'llm' ? registry : searchRegistry;
+  const activeConfigs = selectedCategory === 'llm' ? configs : searchConfigs;
+  const currentDef = selectedProvider ? activeRegistry[selectedProvider] : null;
   const currentConfig = selectedProvider
-    ? configs.find((c) => c.provider === selectedProvider)
+    ? activeConfigs.find((c) => c.provider === selectedProvider)
     : null;
   const isConfigured = !!currentConfig;
+  const hasFields = currentDef ? currentDef.fields.length > 0 : false;
+
+  function selectProvider(key: string, category: ProviderCategory) {
+    setSelectedProvider(key);
+    setSelectedCategory(category);
+  }
 
   function handleFieldChange(key: string, value: string) {
     setFormValues((prev) => ({ ...prev, [key]: value }));
@@ -167,7 +200,8 @@ export default function SettingsPage() {
           credentials[field.key] = formValues[field.key];
         }
       }
-      await testProvider(selectedProvider, { credentials, extra_fields: extraFields }, token);
+      const testFn = selectedCategory === 'llm' ? testProvider : testSearchProvider;
+      await testFn(selectedProvider, { credentials, extra_fields: extraFields }, token);
       setTestResult({ ok: true, message: 'Connection successful' });
     } catch (err) {
       setTestResult({
@@ -201,17 +235,18 @@ export default function SettingsPage() {
         }
       }
 
-      if (pendingAction === 'update') {
-        await updateProvider(
-          selectedProvider,
-          { credentials, extra_fields: extraFields, password },
-          token
-        );
+      if (selectedCategory === 'llm') {
+        if (pendingAction === 'update') {
+          await updateProvider(selectedProvider, { credentials, extra_fields: extraFields, password }, token);
+        } else {
+          await saveProvider({ provider: selectedProvider, credentials, extra_fields: extraFields, password }, token);
+        }
       } else {
-        await saveProvider(
-          { provider: selectedProvider, credentials, extra_fields: extraFields, password },
-          token
-        );
+        if (pendingAction === 'update') {
+          await updateSearchProvider(selectedProvider, { credentials, extra_fields: extraFields, password }, token);
+        } else {
+          await saveSearchProvider({ provider: selectedProvider, credentials, extra_fields: extraFields, password }, token);
+        }
       }
 
       setSuccessMsg('Provider saved successfully');
@@ -235,7 +270,8 @@ export default function SettingsPage() {
     setError(null);
     try {
       const token = await getToken();
-      await deleteProvider(selectedProvider, token);
+      const deleteFn = selectedCategory === 'llm' ? deleteProvider : deleteSearchProvider;
+      await deleteFn(selectedProvider, token);
       setSuccessMsg('Provider removed');
       setConfirmDelete(false);
       await fetchData();
@@ -252,7 +288,8 @@ export default function SettingsPage() {
     setError(null);
     try {
       const token = await getToken();
-      await setDefaultProvider(selectedProvider, token);
+      const setDefaultFn = selectedCategory === 'llm' ? setDefaultProvider : setDefaultSearchProvider;
+      await setDefaultFn(selectedProvider, token);
       setSuccessMsg('Default provider updated');
       await fetchData();
     } catch (err) {
@@ -274,6 +311,44 @@ export default function SettingsPage() {
     );
   }
 
+  function renderSidebarButton(key: string, def: ProviderDefinition, cfg: ProviderConfig | undefined, category: ProviderCategory) {
+    const isActive = selectedProvider === key && selectedCategory === category;
+    return (
+      <button
+        key={`${category}-${key}`}
+        onClick={() => selectProvider(key, category)}
+        className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
+          isActive
+            ? 'bg-gray-800 border-purple-500'
+            : 'bg-gray-900 border-gray-700 hover:border-gray-500'
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-white">
+            {def.name}
+          </span>
+          {cfg?.is_default && (
+            <span className="text-[10px] uppercase tracking-wider bg-purple-600/20 text-purple-300 px-1.5 py-0.5 rounded">
+              Default
+            </span>
+          )}
+        </div>
+        <div className="mt-1">
+          {cfg ? (
+            <span className="text-xs text-green-400">Configured</span>
+          ) : (
+            <span className="text-xs text-gray-500">Not configured</span>
+          )}
+        </div>
+        {cfg?.credential_hint && (
+          <div className="text-xs text-gray-500 mt-0.5 truncate">
+            {cfg.credential_hint}
+          </div>
+        )}
+      </button>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-6">Settings</h1>
@@ -287,42 +362,16 @@ export default function SettingsPage() {
           {providerKeys.map((key) => {
             const def = registry[key];
             const cfg = configs.find((c) => c.provider === key);
-            const isActive = selectedProvider === key;
+            return renderSidebarButton(key, def, cfg, 'llm');
+          })}
 
-            return (
-              <button
-                key={key}
-                onClick={() => setSelectedProvider(key)}
-                className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
-                  isActive
-                    ? 'bg-gray-800 border-purple-500'
-                    : 'bg-gray-900 border-gray-700 hover:border-gray-500'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-white">
-                    {def.name}
-                  </span>
-                  {cfg?.is_default && (
-                    <span className="text-[10px] uppercase tracking-wider bg-purple-600/20 text-purple-300 px-1.5 py-0.5 rounded">
-                      Default
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1">
-                  {cfg ? (
-                    <span className="text-xs text-green-400">Configured</span>
-                  ) : (
-                    <span className="text-xs text-gray-500">Not configured</span>
-                  )}
-                </div>
-                {cfg?.credential_hint && (
-                  <div className="text-xs text-gray-500 mt-0.5 truncate">
-                    {cfg.credential_hint}
-                  </div>
-                )}
-              </button>
-            );
+          <div className="text-gray-500 text-xs uppercase tracking-wider mb-3 mt-6 pt-4 border-t border-gray-800">
+            Search Providers
+          </div>
+          {searchProviderKeys.map((key) => {
+            const def = searchRegistry[key];
+            const cfg = searchConfigs.find((c) => c.provider === key);
+            return renderSidebarButton(key, def, cfg, 'search');
           })}
         </div>
 
@@ -341,9 +390,18 @@ export default function SettingsPage() {
                 )}
               </div>
 
-              <div className="text-xs text-gray-500">
-                Model prefix: <code className="text-gray-400">{currentDef.model_prefix}</code>
-              </div>
+              {currentDef.model_prefix && (
+                <div className="text-xs text-gray-500">
+                  Model prefix: <code className="text-gray-400">{currentDef.model_prefix}</code>
+                </div>
+              )}
+
+              {/* No-fields notice for keyless providers (e.g. DuckDuckGo) */}
+              {!hasFields && (
+                <p className="text-sm text-gray-400 bg-gray-800/50 border border-gray-700 rounded-lg px-4 py-3">
+                  No API key required &mdash; this provider works without authentication.
+                </p>
+              )}
 
               {/* Dynamic fields */}
               {currentDef.fields.map((field) => (
@@ -412,13 +470,15 @@ export default function SettingsPage() {
 
               {/* Action buttons */}
               <div className="flex flex-wrap gap-3 pt-2">
-                <button
-                  onClick={handleTest}
-                  disabled={testing || saving}
-                  className="px-4 py-2 text-sm bg-gray-800 border border-gray-600 hover:border-gray-400 rounded-lg text-gray-300 hover:text-white transition-colors disabled:opacity-50"
-                >
-                  {testing ? 'Testing...' : 'Test Connection'}
-                </button>
+                {hasFields && (
+                  <button
+                    onClick={handleTest}
+                    disabled={testing || saving}
+                    className="px-4 py-2 text-sm bg-gray-800 border border-gray-600 hover:border-gray-400 rounded-lg text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+                  >
+                    {testing ? 'Testing...' : 'Test Connection'}
+                  </button>
+                )}
 
                 <button
                   onClick={handleSaveClick}

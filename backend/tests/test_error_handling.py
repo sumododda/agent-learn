@@ -471,19 +471,19 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
         patch(
             "app.agent_service.discover_topic",
             new_callable=AsyncMock,
-            side_effect=RuntimeError("Tavily API key invalid"),
+            side_effect=RuntimeError("Search API key invalid"),
         ),
         patch(
             "app.agent_service.create_planner",
             return_value=_mock_planner_agent(mock_outline),
         ),
-        patch("app.agent_service.settings") as mock_settings,
     ):
-        mock_settings.TAVILY_API_KEY = "fake-key"
-
         from app.agent_service import generate_outline
 
-        result, ungrounded = await generate_outline("Test Topic")
+        result, ungrounded = await generate_outline(
+            "Test Topic",
+            search_provider="tavily", search_credentials={"api_key": "fake"},
+        )
 
     assert ungrounded is True
     assert isinstance(result, CourseOutlineWithBriefs)
