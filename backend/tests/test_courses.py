@@ -1,18 +1,6 @@
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
-
-def _mock_trigger_httpx_client():
-    """Create a mock httpx.AsyncClient that simulates a Trigger.dev trigger response."""
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"id": "run_test_123"}
-    mock_response.raise_for_status = MagicMock()
-
-    mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=mock_response)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    return mock_client
 
 
 @pytest.mark.anyio
@@ -63,22 +51,24 @@ async def test_create_and_get_course(client, mock_outline_with_briefs):
 
 
 @pytest.mark.anyio
-async def test_generate_course_triggers_and_returns_run_id(client, mock_outline_with_briefs):
-    """POST /generate triggers Trigger.dev task and returns run_id with 'generating' status."""
+async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs):
+    """POST /generate starts asyncio pipeline and returns 'generating' status."""
     mock_return = (mock_outline_with_briefs, False)
     with patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return):
         create_response = await client.post("/api/courses", json={"topic": "Testing"})
 
     course_id = create_response.json()["id"]
 
-    # Mock the httpx call to Trigger.dev REST API
-    with patch("httpx.AsyncClient", return_value=_mock_trigger_httpx_client()):
+    # Mock start_pipeline so no real background task is spawned
+    with patch("app.routers.courses.start_pipeline") as mock_start:
         gen_response = await client.post(f"/api/courses/{course_id}/generate")
 
     assert gen_response.status_code == 200
     data = gen_response.json()
     assert data["status"] == "generating"
-    assert data["run_id"] == "run_test_123"
+    assert "id" in data
+    assert "sections" in data
+    mock_start.assert_called_once_with(course_id)
 
 
 @pytest.mark.anyio
@@ -91,7 +81,7 @@ async def test_generate_course_requires_outline_ready(client, mock_outline_with_
     course_id = create_response.json()["id"]
 
     # First generate call transitions to "generating"
-    with patch("httpx.AsyncClient", return_value=_mock_trigger_httpx_client()):
+    with patch("app.routers.courses.start_pipeline"):
         await client.post(f"/api/courses/{course_id}/generate")
 
     # Second call should fail because status is now "generating"

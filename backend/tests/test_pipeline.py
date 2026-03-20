@@ -325,18 +325,8 @@ async def test_full_pipeline_happy_path(
     assert bb.concept_ownership.get("concept_s2") == 2
     assert bb.concept_ownership.get("concept_s3") == 3
 
-    # 6. Verify pipeline status tracked correctly
-    from app.agent_service import _pipeline_status
-
-    course_id_str = str(course.id)
-    assert course_id_str in _pipeline_status
-    pipeline = _pipeline_status[course_id_str]
-    # All sections should be "completed"
-    for i in range(1, 4):
-        assert pipeline["sections"][i] == "completed"
-
-    # Clean up module-level dict
-    _pipeline_status.pop(course_id_str, None)
+    # Pipeline status is now tracked in app.pipeline (not the legacy generate_lessons)
+    # so we only verify course.status == "completed" above.
 
 
 # ---------------------------------------------------------------------------
@@ -357,8 +347,6 @@ async def test_pipeline_status_updates_per_section(
 
     # Track pipeline status at each stage transition
     status_snapshots = []
-
-    original_update_pipeline_status = None
 
     async def mock_research_all(course_id, briefs, session):
         for b in briefs:
@@ -383,17 +371,14 @@ async def test_pipeline_status_updates_per_section(
         patch("app.agent_service.write_section", new_callable=AsyncMock, side_effect=mock_write),
         patch("app.agent_service.edit_section", new_callable=AsyncMock, side_effect=mock_edit),
     ):
-        from app.agent_service import generate_lessons, _pipeline_status
+        from app.agent_service import generate_lessons
 
         await generate_lessons(course.id, pipeline_session)
 
-    course_id_str = str(course.id)
-    pipeline = _pipeline_status.get(course_id_str, {})
-    # After completion, all sections should be "completed"
-    for i in range(1, 4):
-        assert pipeline["sections"].get(i) == "completed"
-
-    _pipeline_status.pop(course_id_str, None)
+    # Pipeline status tracking moved to app.pipeline; legacy generate_lessons
+    # no longer populates a status dict. Verify course completed successfully.
+    await pipeline_session.refresh(course)
+    assert course.status == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -485,9 +470,6 @@ async def test_blackboard_accumulates_across_sections(
     # Key points have entries from all 3 sections
     assert len(bb.key_points) == 3
 
-    # Clean up pipeline status
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -554,10 +536,6 @@ async def test_partial_failure_write_error(
             assert s.content is None
         else:
             assert s.content is not None
-
-    from app.agent_service import _pipeline_status
-    course_id_str = str(course.id)
-    _pipeline_status.pop(course_id_str, None)
 
 
 # ---------------------------------------------------------------------------
@@ -658,8 +636,6 @@ async def test_re_research_on_verification_gap(
     await pipeline_session.refresh(course)
     assert course.status == "completed"
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -715,8 +691,6 @@ async def test_research_runs_in_parallel(
     # research_all_sections was called exactly once
     assert research_all_called
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -775,8 +749,6 @@ async def test_verify_write_edit_sequential_per_section(
     ]
     assert call_sequence == expected
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -860,8 +832,6 @@ async def test_bad_blackboard_update_doesnt_crash_pipeline(
         await pipeline_session.refresh(section)
         assert section.content is not None
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -890,11 +860,6 @@ async def test_unhandled_error_sets_failed_status(
     # Course status should be "failed"
     await pipeline_session.refresh(course)
     assert course.status == "failed"
-
-    from app.agent_service import _pipeline_status
-    course_id_str = str(course.id)
-    assert _pipeline_status.get(course_id_str, {}).get("stage") == "failed"
-    _pipeline_status.pop(course_id_str, None)
 
 
 # ---------------------------------------------------------------------------
@@ -966,8 +931,6 @@ async def test_course_status_full_transition_sequence(
     assert "editing" in unique_statuses
     assert "completed" in unique_statuses
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -1033,5 +996,3 @@ async def test_writer_runs_with_empty_verified_cards(
     await pipeline_session.refresh(course)
     assert course.status == "completed"
 
-    from app.agent_service import _pipeline_status
-    _pipeline_status.pop(str(course.id), None)

@@ -3,8 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -13,9 +12,10 @@ from app.agent_service import (
     get_blackboard,
 )
 from app.auth import get_current_user
-from app.config import settings
 from app.database import SessionDep
+from app.limiter import limiter
 from app.models import Course, EvidenceCard, LearnerProgress, Section, ResearchBrief
+from app.pipeline import get_pipeline_status, start_pipeline
 from app.schemas import (
     BlackboardResponse,
     CourseCreate,
@@ -23,6 +23,7 @@ from app.schemas import (
     CourseWithProgressResponse,
     EvidenceCardResponse,
     GenerateResponse,
+    PipelineStatusResponse,
     ProgressResponse,
     ProgressUpdateRequest,
     RegenerateRequest,
@@ -39,7 +40,9 @@ router = APIRouter()
 
 
 @router.post("/courses", response_model=CourseResponse)
+@limiter.limit("5/minute")
 async def create_course(
+    request: Request,
     body: CourseCreate,
     session: SessionDep,
     user_id: str = Depends(get_current_user),
@@ -98,7 +101,7 @@ async def create_course(
         course.status = "failed"
         await session.commit()
         raise HTTPException(
-            status_code=500, detail=f"Failed to generate outline: {str(e)}"
+            status_code=500, detail="Internal server error"
         )
 
     # Reload with sections
@@ -125,7 +128,7 @@ async def generate_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id and course.user_id != user_id:
+    if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Status guard: only allow generation when outline is ready
@@ -139,33 +142,10 @@ async def generate_course(
     course.status = "generating"
     await session.commit()
 
-    # Trigger the generate-course task via Trigger.dev REST API
-    run_id: str | None = None
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{settings.TRIGGER_API_URL}/api/v1/tasks/generate-course/trigger",
-                headers={
-                    "Authorization": f"Bearer {settings.TRIGGER_SECRET_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={"payload": {"courseId": str(course_id)}},
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            run_id = data["id"]
-    except Exception as e:
-        logger.error("Failed to trigger Trigger.dev task: %s", e)
-        # Revert status so the user can retry
-        course.status = "outline_ready"
-        await session.commit()
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to trigger generation pipeline: {str(e)}",
-        )
+    # Start the asyncio background pipeline
+    start_pipeline(str(course_id))
 
-    # Reload course with sections and return with run_id
+    # Reload course with sections and return
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
@@ -176,7 +156,6 @@ async def generate_course(
         id=course.id,
         status=course.status,
         sections=course.sections,
-        run_id=run_id,
     )
 
 
@@ -195,7 +174,7 @@ async def regenerate_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id and course.user_id != user_id:
+    if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Build enhanced instructions from comments
@@ -271,7 +250,7 @@ async def regenerate_course(
         course.status = "failed"
         await session.commit()
         raise HTTPException(
-            status_code=500, detail=f"Failed to regenerate outline: {str(e)}"
+            status_code=500, detail="Internal server error"
         )
 
     result = await session.execute(
@@ -311,9 +290,20 @@ async def get_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id and course.user_id != user_id:
+    if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
-    return course
+
+    # Include pipeline status if a pipeline is running/completed
+    pipeline = get_pipeline_status(str(course_id))
+    resp = CourseResponse.model_validate(course)
+    if pipeline is not None:
+        resp.pipeline_status = PipelineStatusResponse(
+            stage=pipeline.stage,
+            section=pipeline.section,
+            total=pipeline.total,
+            error=pipeline.error,
+        )
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +329,7 @@ async def get_evidence(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id and course.user_id != user_id:
+    if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     query = select(EvidenceCard).where(EvidenceCard.course_id == course_id)
@@ -370,7 +360,7 @@ async def get_course_blackboard(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id and course.user_id != user_id:
+    if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     bb = await get_blackboard(course_id, session)
@@ -423,7 +413,7 @@ async def update_progress(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id and course.user_id != user_id:
+    if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Fetch existing progress or create new
