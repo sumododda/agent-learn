@@ -1,21 +1,21 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CourseCreate(BaseModel):
-    topic: str
-    instructions: str | None = None
+    topic: str = Field(max_length=500)
+    instructions: str | None = Field(default=None, max_length=5000)
 
 
 class SectionComment(BaseModel):
     position: int
-    comment: str
+    comment: str = Field(max_length=5000)
 
 
 class RegenerateRequest(BaseModel):
-    overall_comment: str | None = None
+    overall_comment: str | None = Field(default=None, max_length=5000)
     section_comments: list[SectionComment] = []
 
 
@@ -266,8 +266,8 @@ class CourseWithProgressResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
-    model: str
+    message: str = Field(max_length=10000)
+    model: str = Field(max_length=200)
     section_context: int
 
 
@@ -288,3 +288,23 @@ class ChatModelInfo(BaseModel):
     context_length: int
     pricing_prompt: str
     pricing_completion: str
+
+
+# ---------------------------------------------------------------------------
+# Auth schemas (Phase 1: Backend auth replacement)
+# ---------------------------------------------------------------------------
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user_id: str
