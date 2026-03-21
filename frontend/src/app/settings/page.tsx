@@ -538,25 +538,7 @@ function SearchProviderSection({
 // Account Section
 // ---------------------------------------------------------------------------
 
-function AccountSection({ getToken }: { getToken: () => Promise<string | null> }) {
-  const [email, setEmail] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function decodeEmail() {
-      const token = await getToken();
-      if (!token) return;
-      try {
-        const base64 = token.split('.')[1];
-        if (!base64) return;
-        const json = atob(base64.replace(/-/g, '+').replace(/_/g, '/'));
-        const payload = JSON.parse(json);
-        if (payload.sub) setEmail(payload.sub);
-      } catch {
-        // ignore decode errors
-      }
-    }
-    decodeEmail();
-  }, [getToken]);
+function AccountSection({ email }: { email: string | null }) {
 
   return (
     <div className="space-y-5">
@@ -584,7 +566,7 @@ function AccountSection({ getToken }: { getToken: () => Promise<string | null> }
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { getToken, isSignedIn, isLoaded } = useAuth();
+  const { getToken, isSignedIn, isLoaded, userEmail } = useAuth();
 
   const [llmConfigs, setLlmConfigs] = useState<ProviderConfig[]>([]);
   const [searchRegistry, setSearchRegistry] = useState<Record<string, ProviderDefinition>>({});
@@ -642,7 +624,7 @@ export default function SettingsPage() {
             <SearchProviderSection registry={searchRegistry} configs={searchConfigs} getToken={getToken} onRefresh={fetchData} />
           </TabsContent>
           <TabsContent value={2} className="pt-6">
-            <AccountSection getToken={getToken} />
+            <AccountSection email={userEmail} />
           </TabsContent>
         </Tabs>
       </div>
