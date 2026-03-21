@@ -1,110 +1,212 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { Trash2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { listMyCoursesWithProgress } from '@/lib/api';
+import { listMyCoursesWithProgress, deleteCourse } from '@/lib/api';
 import { CourseWithProgress } from '@/lib/types';
+import { Navbar } from '@/components/Navbar';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '@/components/ui/alert-dialog';
+
+const TAB_ALL = 0;
+const TAB_IN_PROGRESS = 1;
+const TAB_COMPLETED = 2;
 
 export default function LibraryPage() {
-  const { getToken } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   const [courses, setCourses] = useState<CourseWithProgress[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [tab, setTab] = useState<number>(TAB_ALL);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const token = await getToken();
-        const data = await listMyCoursesWithProgress(token);
-        setCourses(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load courses');
-      } finally {
-        setLoading(false);
-      }
+  const load = useCallback(async () => {
+    try {
+      const token = await getToken();
+      const data = await listMyCoursesWithProgress(token);
+      setCourses(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load courses');
+    } finally {
+      setLoading(false);
     }
-    load();
   }, [getToken]);
 
-  if (loading) return <div className="text-center text-gray-400 mt-20">Loading your courses...</div>;
-  if (error) return <div className="text-center text-red-400 mt-20">{error}</div>;
+  useEffect(() => {
+    if (isLoaded && isSignedIn) load();
+  }, [isLoaded, isSignedIn, load]);
+
+  async function handleDelete(courseId: string) {
+    setDeleting(courseId);
+    try {
+      const token = await getToken();
+      await deleteCourse(courseId, token);
+      setCourses((prev) => prev.filter((c) => c.id !== courseId));
+    } catch {
+      setError('Failed to delete course');
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  const filtered = courses.filter((c) => {
+    if (tab === TAB_IN_PROGRESS)
+      return c.progress && c.progress.completed_sections.length < c.sections.length;
+    if (tab === TAB_COMPLETED)
+      return c.progress && c.progress.completed_sections.length === c.sections.length;
+    return true;
+  });
+
+  const statusBadge: Record<string, { text: string; className: string }> = {
+    outline_ready: { text: 'Outline Ready', className: 'bg-warning/15 text-warning' },
+    generating: { text: 'Generating...', className: 'bg-primary/15 text-primary' },
+    completed: { text: 'Completed', className: 'bg-emerald-500/15 text-emerald-500' },
+    failed: { text: 'Failed', className: 'bg-destructive/15 text-destructive' },
+  };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-bold">My Courses</h1>
-        <Link
-          href="/"
-          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm font-medium transition-colors"
+    <>
+      <Navbar />
+      <div className="max-w-[960px] mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-semibold">My Courses</h1>
+        </div>
+
+        {/* Tab filters */}
+        <Tabs
+          defaultValue={TAB_ALL}
+          onValueChange={(val: number) => setTab(val)}
         >
-          New Course
-        </Link>
-      </div>
+          <TabsList className="mb-6">
+            <TabsTrigger value={TAB_ALL}>All</TabsTrigger>
+            <TabsTrigger value={TAB_IN_PROGRESS}>In Progress</TabsTrigger>
+            <TabsTrigger value={TAB_COMPLETED}>Completed</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-      {courses.length === 0 ? (
-        <div className="text-center text-gray-500 mt-20">
-          <p className="mb-4">No courses yet.</p>
-          <Link href="/" className="text-purple-400 hover:text-purple-300">
-            Create your first course
-          </Link>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {courses.map((course) => {
-            const href =
-              course.status === 'completed'
-                ? `/courses/${course.id}/learn`
-                : `/courses/${course.id}`;
+        {/* Loading state */}
+        {loading && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="animate-pulse bg-muted rounded-lg h-32" />
+            ))}
+          </div>
+        )}
 
-            const statusLabel: Record<string, { text: string; color: string }> = {
-              outline_ready: { text: 'Outline Ready', color: 'text-yellow-400' },
-              generating: { text: 'Generating...', color: 'text-blue-400' },
-              completed: { text: 'Completed', color: 'text-green-400' },
-              failed: { text: 'Failed', color: 'text-red-400' },
-            };
+        {/* Error state */}
+        {!loading && error && (
+          <div className="text-center text-destructive mt-20">{error}</div>
+        )}
 
-            const status = statusLabel[course.status] || { text: course.status, color: 'text-gray-400' };
+        {/* Empty state */}
+        {!loading && !error && filtered.length === 0 && (
+          <div className="text-center text-muted-foreground mt-20">
+            <p className="mb-4">No courses yet</p>
+            <Link href="/" className="text-primary hover:underline">
+              Create your first course
+            </Link>
+          </div>
+        )}
 
-            const totalSections = course.sections.length;
-            const completedCount = course.progress?.completed_sections?.length || 0;
-            const hasProgress = course.progress !== null && course.progress !== undefined;
-            const progressPct = totalSections > 0 ? Math.round((completedCount / totalSections) * 100) : 0;
+        {/* Course grid */}
+        {!loading && !error && filtered.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {filtered.map((course) => {
+              const href =
+                course.status === 'completed'
+                  ? `/courses/${course.id}/learn`
+                  : `/courses/${course.id}`;
 
-            return (
-              <Link
-                key={course.id}
-                href={href}
-                className="block p-4 bg-gray-900 border border-gray-800 rounded-lg hover:border-gray-600 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-white font-medium">{course.topic}</div>
-                    <div className="text-gray-500 text-sm">
+              const totalSections = course.sections.length;
+              const completedCount = course.progress?.completed_sections?.length || 0;
+              const progressPct = totalSections > 0 ? Math.round((completedCount / totalSections) * 100) : 0;
+              const isComplete = totalSections > 0 && completedCount === totalSections;
+
+              const badge = statusBadge[course.status] || {
+                text: course.status,
+                className: 'bg-muted text-muted-foreground',
+              };
+
+              return (
+                <Card key={course.id} className="p-5">
+                  <CardHeader>
+                    <CardTitle className="text-base font-semibold">
+                      <Link href={href} className="hover:underline">
+                        {course.topic}
+                      </Link>
+                    </CardTitle>
+                    <CardDescription>
                       {totalSections} sections
-                      {hasProgress && (
-                        <span className="ml-2 text-gray-400">
-                          &middot; {completedCount}/{totalSections} completed
-                        </span>
-                      )}
+                    </CardDescription>
+                    <CardAction>
+                      <AlertDialog>
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="h-7 w-7"
+                              disabled={deleting === course.id}
+                            />
+                          }
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete course?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This will permanently delete &ldquo;{course.topic}&rdquo;.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              variant="destructive"
+                              onClick={() => handleDelete(course.id)}
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </CardAction>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <Progress value={progressPct} className="[&_[data-slot=progress-track]]:h-1" />
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">
+                        {isComplete ? 'Completed' : `${progressPct}%`}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}
+                      >
+                        {badge.text}
+                      </span>
                     </div>
-                    {/* Progress bar */}
-                    {hasProgress && totalSections > 0 && (
-                      <div className="mt-2 w-full bg-gray-800 rounded-full h-1.5">
-                        <div
-                          className="bg-purple-500 h-1.5 rounded-full transition-all"
-                          style={{ width: `${progressPct}%` }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <span className={`text-sm ml-4 flex-shrink-0 ${status.color}`}>{status.text}</span>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
