@@ -123,7 +123,7 @@ function HomePageInner() {
         <p className="text-muted-foreground mb-6">
           Before creating courses, you need to configure at least one AI provider.
         </p>
-        <Button render={<Link href="/settings" />}>
+        <Button nativeButton={false} render={<Link href="/settings" />}>
           Configure Providers
         </Button>
       </div>

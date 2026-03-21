@@ -79,7 +79,7 @@ export function Navbar() {
           )}
 
           {!isSignedIn && (
-            <Button variant="ghost" size="sm" render={<Link href="/login" />}>
+            <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/login" />}>
               Sign in
             </Button>
           )}
