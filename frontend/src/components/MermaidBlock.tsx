@@ -7,6 +7,7 @@ import mermaid from 'mermaid';
 mermaid.initialize({
   startOnLoad: false,
   theme: 'dark',
+  securityLevel: 'loose',
 });
 
 let diagramCounter = 0;
@@ -40,7 +41,7 @@ export default function MermaidBlock({ definition }: { definition: string }) {
 
   if (error) {
     return (
-      <pre className="text-red-400 text-sm bg-gray-900 p-3 rounded-lg overflow-x-auto">
+      <pre className="text-destructive text-sm bg-card p-3 rounded-lg overflow-x-auto">
         {`Diagram error: ${error}\n\n${definition}`}
       </pre>
     );
@@ -48,7 +49,7 @@ export default function MermaidBlock({ definition }: { definition: string }) {
 
   if (!svg) {
     return (
-      <div className="flex items-center justify-center p-4 text-gray-500 text-sm">
+      <div className="flex items-center justify-center p-4 text-muted-foreground text-sm">
         Rendering diagram...
       </div>
     );

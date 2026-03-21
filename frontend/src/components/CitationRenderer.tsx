@@ -4,6 +4,14 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Citation } from '@/lib/types';
 
+function safeHref(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
+  } catch {}
+  return '#';
+}
+
 interface CitationRendererProps {
   content: string;
   citations: Citation[];
@@ -19,7 +27,7 @@ function transformCitations(text: string): React.ReactNode[] {
         <a
           key={i}
           href={`#citation-${num}`}
-          className="text-purple-400 hover:text-purple-300 text-xs align-super no-underline font-semibold ml-0.5"
+          className="text-primary hover:text-primary/80 text-xs align-super no-underline font-semibold ml-0.5"
           title={`Source ${num}`}
           onClick={(e) => {
             e.preventDefault();
@@ -66,8 +74,8 @@ export default function CitationRenderer({ content, citations }: CitationRendere
       </div>
 
       {citations.length > 0 && (
-        <div className="mt-8 pt-6 border-t border-gray-800">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Sources</h3>
+        <div className="mt-8 pt-6 border-t border-border">
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Sources</h3>
           <ol className="space-y-3">
             {citations.map((citation) => (
               <li
@@ -75,19 +83,19 @@ export default function CitationRenderer({ content, citations }: CitationRendere
                 id={`citation-${citation.number}`}
                 className="flex gap-3 text-sm scroll-mt-4"
               >
-                <span className="flex-shrink-0 text-purple-400 font-semibold w-6 text-right">
+                <span className="flex-shrink-0 text-primary font-semibold w-6 text-right">
                   [{citation.number}]
                 </span>
                 <div className="min-w-0">
                   <a
-                    href={citation.source_url}
+                    href={safeHref(citation.source_url)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-purple-400 hover:text-purple-300 underline break-all"
+                    className="text-primary hover:text-primary/80 underline break-all"
                   >
                     {citation.source_title}
                   </a>
-                  <p className="text-gray-500 mt-0.5 text-xs">{citation.claim}</p>
+                  <p className="text-muted-foreground mt-0.5 text-xs">{citation.claim}</p>
                 </div>
               </li>
             ))}
