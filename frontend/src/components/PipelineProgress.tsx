@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Check } from 'lucide-react';
 import { getCourse } from '@/lib/api';
 import { Course, PipelineStatus } from '@/lib/types';
 
@@ -13,21 +14,30 @@ const STAGE_LABELS: Record<string, string> = {
   failed: 'Failed',
 };
 
-function stageBadgeColor(stage: string): string {
-  switch (stage) {
-    case 'completed':
-      return 'text-green-400';
-    case 'failed':
-      return 'text-red-400';
-    case 'writing':
-    case 'editing':
-      return 'text-purple-400';
-    case 'researching':
-    case 'verifying':
-      return 'text-blue-400';
-    default:
-      return 'text-gray-400';
-  }
+const STAGES = ['research', 'verify', 'write', 'edit', 'complete'];
+
+const STAGE_DISPLAY: Record<string, string> = {
+  research: 'Research',
+  verify: 'Verify',
+  write: 'Write',
+  edit: 'Edit',
+  complete: 'Complete',
+};
+
+function getStageStatus(currentStage: string, stage: string): 'completed' | 'active' | 'pending' {
+  const stageMap: Record<string, string> = {
+    researching: 'research',
+    verifying: 'verify',
+    writing: 'write',
+    editing: 'edit',
+    completed: 'complete',
+  };
+  const normalizedCurrent = stageMap[currentStage] || currentStage;
+  const currentIdx = STAGES.indexOf(normalizedCurrent);
+  const stageIdx = STAGES.indexOf(stage);
+  if (stageIdx < currentIdx) return 'completed';
+  if (stageIdx === currentIdx) return 'active';
+  return 'pending';
 }
 
 interface PipelineProgressProps {
@@ -69,7 +79,7 @@ export default function PipelineProgress({
           setError(data.pipeline_status?.error || 'Pipeline failed');
           if (intervalRef.current) clearInterval(intervalRef.current);
         }
-      } catch (err) {
+      } catch {
         // Poll failure is non-critical, will retry
       }
     }
@@ -84,16 +94,16 @@ export default function PipelineProgress({
 
   if (error) {
     return (
-      <div className="mt-6 p-4 bg-gray-900 border border-red-800 rounded-lg">
-        <p className="text-red-400 text-sm">Pipeline error: {error}</p>
+      <div className="mt-6 p-4 bg-destructive/10 border border-destructive rounded-lg">
+        <p className="text-destructive text-sm">Pipeline error: {error}</p>
       </div>
     );
   }
 
   if (!pipelineStatus) {
     return (
-      <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
-        <p className="text-gray-400 text-sm">Waiting for pipeline to start...</p>
+      <div className="mt-6 p-4 bg-card border border-border rounded-lg">
+        <p className="text-muted-foreground text-sm">Waiting for pipeline to start...</p>
       </div>
     );
   }
@@ -105,94 +115,102 @@ export default function PipelineProgress({
   const isComplete = course?.status === 'completed' || course?.status === 'completed_partial';
   const isFailed = course?.status === 'failed';
 
-  // Estimate completed sections from current section and stage
-  const completedSections = overallStage === 'completed'
-    ? totalSections
-    : Math.max(0, currentSection - 1);
-
   const sortedSections = course
     ? [...course.sections].sort((a, b) => a.position - b.position)
     : [];
 
+  // Build log entries from course data
+  const logs: { timestamp: string; message: string }[] = [];
+
+  // For each section that has content, add a "completed" log
+  sortedSections.forEach(section => {
+    if (section.content && section.content.trim().length > 0) {
+      logs.push({ timestamp: '', message: `\u2713 Section ${section.position}: ${section.title}` });
+    }
+  });
+
+  // Add current activity
+  if (!isComplete && !isFailed && currentSection > 0) {
+    const currentSectionObj = sortedSections.find(s => s.position === currentSection);
+    const stageName = STAGE_LABELS[overallStage] || overallStage;
+    logs.push({ timestamp: '', message: `\u25b8 ${stageName} section ${currentSection}: ${currentSectionObj?.title || ''}` });
+  }
+
   return (
-    <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
-      {/* Overall status */}
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <span className="text-gray-500 text-xs uppercase tracking-wider">
-            Pipeline
-          </span>
-          <span
-            className={`ml-2 text-sm font-medium ${
-              isFailed ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-purple-400'
-            }`}
-          >
-            {isFailed
-              ? 'Failed'
-              : isComplete
-              ? 'Complete'
-              : STAGE_LABELS[overallStage] || overallStage}
-          </span>
-        </div>
-        {totalSections > 0 && (
-          <span className="text-gray-500 text-sm">
-            {completedSections} / {totalSections} sections
-          </span>
-        )}
+    <div className="mt-6 space-y-4">
+      {/* Horizontal pipeline nodes */}
+      <div className="flex items-center justify-between px-2">
+        {STAGES.map((stage, idx) => {
+          const status = getStageStatus(overallStage, stage);
+          return (
+            <div key={stage} className="flex items-center flex-1 last:flex-none">
+              {/* Node + label */}
+              <div className="flex flex-col items-center gap-1.5">
+                <div
+                  className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                    status === 'completed'
+                      ? 'bg-green-500'
+                      : status === 'active'
+                      ? 'bg-primary'
+                      : 'border border-border'
+                  }`}
+                >
+                  {status === 'completed' && (
+                    <Check className="w-4 h-4 text-white" />
+                  )}
+                  {status === 'active' && (
+                    <div className="w-2 h-2 rounded-full bg-white" />
+                  )}
+                </div>
+                <span
+                  className={`text-xs font-medium ${
+                    status === 'completed'
+                      ? 'text-green-500'
+                      : status === 'active'
+                      ? 'text-primary'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  {STAGE_DISPLAY[stage]}
+                </span>
+              </div>
+
+              {/* Connecting line */}
+              {idx < STAGES.length - 1 && (
+                <div className="flex-1 mx-2 mb-6">
+                  {(() => {
+                    const nextStatus = getStageStatus(overallStage, STAGES[idx + 1]);
+                    if (status === 'completed' && nextStatus === 'completed') {
+                      return <div className="h-0.5 bg-green-500 w-full" />;
+                    }
+                    if (status === 'completed' && nextStatus === 'active') {
+                      return <div className="h-0.5 bg-primary w-full" />;
+                    }
+                    return <div className="w-full border-t border-dashed border-border" />;
+                  })()}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {/* Progress bar */}
-      {totalSections > 0 && (
-        <div className="w-full bg-gray-800 rounded-full h-2 mb-4">
-          <div
-            className={`h-2 rounded-full transition-all duration-500 ${
-              isFailed ? 'bg-red-500' : isComplete ? 'bg-green-500' : 'bg-purple-500'
-            }`}
-            style={{
-              width: `${(completedSections / totalSections) * 100}%`,
-            }}
-          />
+      {/* Activity log */}
+      {logs.length > 0 && (
+        <div className="bg-card border border-border rounded-lg p-4 font-mono text-sm max-h-60 overflow-y-auto">
+          {logs.map((log, i) => (
+            <div key={i} className={i === logs.length - 1 ? 'text-foreground' : 'text-muted-foreground'}>
+              {log.message}
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Per-section status */}
-      {sortedSections.length > 0 && (
-        <div className="space-y-1">
-          {sortedSections.map((section) => {
-            const pos = section.position;
-            const hasContent = section.content && section.content.trim().length > 0;
-            const isActive = currentSection === pos;
-
-            return (
-              <div
-                key={section.id}
-                className={`flex items-center justify-between px-3 py-1.5 rounded text-sm ${
-                  isActive ? 'bg-gray-800' : ''
-                }`}
-              >
-                <span
-                  className={
-                    hasContent
-                      ? 'text-green-400'
-                      : isActive
-                      ? 'text-white'
-                      : 'text-gray-500'
-                  }
-                >
-                  {pos}. {section.title}
-                </span>
-                {hasContent && (
-                  <span className="text-xs text-green-400">Done</span>
-                )}
-                {isActive && !hasContent && (
-                  <span className={`text-xs ${stageBadgeColor(overallStage)}`}>
-                    {STAGE_LABELS[overallStage] || overallStage}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
+      {/* Footer */}
+      {totalSections > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Section {currentSection} of {totalSections}
+        </p>
       )}
     </div>
   );
