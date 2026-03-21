@@ -6,6 +6,11 @@ import { useAuth } from '@/context/AuthContext';
 import { getCourse, generateCourse, regenerateCourse } from '@/lib/api';
 import { Course } from '@/lib/types';
 import PipelineProgress from '@/components/PipelineProgress';
+import { Navbar } from '@/components/Navbar';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@/components/ui/button';
 
 export default function OutlineReviewPage() {
   const params = useParams();
@@ -91,9 +96,24 @@ export default function OutlineReviewPage() {
   const hasComments = overallComment.trim() || Object.values(sectionComments).some(c => c.trim());
   const busy = generating || regenerating;
 
-  if (loading) return <div className="text-center text-gray-400 mt-20">Loading course...</div>;
-  if (error && !course) return <div className="text-center text-red-400 mt-20">{error}</div>;
-  if (!course) return <div className="text-center text-gray-400 mt-20">Course not found</div>;
+  if (loading) return (
+    <>
+      <Navbar />
+      <div className="text-center text-muted-foreground mt-20">Loading course...</div>
+    </>
+  );
+  if (error && !course) return (
+    <>
+      <Navbar />
+      <div className="text-center text-destructive mt-20">{error}</div>
+    </>
+  );
+  if (!course) return (
+    <>
+      <Navbar />
+      <div className="text-center text-muted-foreground mt-20">Course not found</div>
+    </>
+  );
 
   if (course.status === 'completed') {
     router.push(`/courses/${courseId}/learn`);
@@ -105,74 +125,68 @@ export default function OutlineReviewPage() {
   const totalSections = sortedSections.length;
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold mb-1">{course.topic}</h1>
-      <p className="text-gray-400 mb-6">{totalSections} sections · Review your course outline</p>
+    <>
+      <Navbar />
+      <div className="max-w-[720px] mx-auto px-4 py-8">
+        <h1 className="text-2xl font-semibold">{course.topic}</h1>
+        <p className="text-sm text-muted-foreground mb-6">{totalSections} sections · Review your course outline</p>
 
-      {/* Pipeline progress via polling */}
-      {isGenerating && (
-        <PipelineProgress
-          courseId={courseId}
-          token={token}
-          onComplete={handlePipelineComplete}
-        />
-      )}
+        {/* Pipeline progress via polling */}
+        {isGenerating && (
+          <PipelineProgress
+            courseId={courseId}
+            token={token}
+            onComplete={handlePipelineComplete}
+          />
+        )}
 
-      {/* Only show outline review UI when not generating */}
-      {!isGenerating && (
-        <>
-          {/* Overall comment */}
-          <div className="mb-6">
-            <textarea
-              value={overallComment}
-              onChange={(e) => setOverallComment(e.target.value)}
-              placeholder="Overall feedback on the outline... (optional)"
-              rows={2}
-              disabled={busy}
-              className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none text-sm"
-            />
-          </div>
+        {/* Only show outline review UI when not generating */}
+        {!isGenerating && (
+          <>
+            {/* Overall comment */}
+            <div className="mb-6">
+              <Textarea
+                value={overallComment}
+                onChange={(e) => setOverallComment(e.target.value)}
+                placeholder="Overall feedback on the outline... (optional)"
+                rows={2}
+                disabled={busy}
+                className="resize-none text-sm"
+              />
+            </div>
 
-          {/* Sections with per-section comments */}
-          <div className="space-y-4 mb-8">
-            {sortedSections.map((section) => (
-              <div key={section.id} className="border-l-2 border-gray-700 pl-4 py-2">
-                <div className="text-white font-medium">{section.position}. {section.title}</div>
-                <div className="text-gray-400 text-sm mb-2">{section.summary}</div>
-                <input
-                  type="text"
-                  value={sectionComments[section.position] || ''}
-                  onChange={(e) =>
-                    setSectionComments((prev) => ({ ...prev, [section.position]: e.target.value }))
-                  }
-                  placeholder="Comment on this section..."
-                  disabled={busy}
-                  className="w-full px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-purple-500"
-                />
-              </div>
-            ))}
-          </div>
+            {/* Section cards */}
+            <div className="space-y-3 mb-8">
+              {sortedSections.map((section) => (
+                <Card key={section.id} className="p-4">
+                  <div className="font-medium text-foreground">{section.position}. {section.title}</div>
+                  <p className="text-sm text-muted-foreground mt-1">{section.summary}</p>
+                  <Input
+                    className="mt-2"
+                    value={sectionComments[section.position] || ''}
+                    onChange={(e) =>
+                      setSectionComments((prev) => ({ ...prev, [section.position]: e.target.value }))
+                    }
+                    placeholder="Comment on this section..."
+                    disabled={busy}
+                  />
+                </Card>
+              ))}
+            </div>
 
-          {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
+            {error && <p className="text-sm text-destructive mb-4">{error}</p>}
 
-          <div className="flex gap-3">
-            <button
-              onClick={handleApprove}
-              disabled={busy}
-              className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
-            >
-              {generating ? 'Generating lessons...' : 'Approve & Generate'}
-            </button>
-            <button
-              onClick={handleRegenerate}
-              disabled={busy}
-              className="px-6 py-3 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-gray-300 transition-colors disabled:opacity-50"
-            >
-              {regenerating ? 'Regenerating...' : hasComments ? 'Regenerate with Feedback' : 'Regenerate'}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
+            <div className="flex gap-3">
+              <Button className="flex-1" onClick={handleApprove} disabled={busy}>
+                {generating ? 'Generating lessons...' : 'Approve & Generate'}
+              </Button>
+              <Button variant="outline" onClick={handleRegenerate} disabled={busy}>
+                {regenerating ? 'Regenerating...' : hasComments ? 'Regenerate with Feedback' : 'Regenerate'}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
