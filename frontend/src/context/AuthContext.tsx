@@ -14,6 +14,7 @@ interface AuthContextValue {
   isSignedIn: boolean;
   isLoaded: boolean;
   providerKeysLoaded: number;
+  userEmail: string | null;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -40,13 +41,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [providerKeysLoaded, setProviderKeysLoaded] = useState(0);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem('token');
     if (stored && !isTokenExpired(stored)) {
       setToken(stored);
+      setUserEmail(localStorage.getItem('userEmail'));
     } else if (stored) {
       localStorage.removeItem('token');
+      localStorage.removeItem('userEmail');
     }
     setIsLoaded(true);
   }, []);
@@ -73,7 +77,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const data: { token: string; user_id: string; provider_keys_loaded?: number } = await res.json();
     localStorage.setItem('token', data.token);
+    localStorage.setItem('userEmail', email);
     setToken(data.token);
+    setUserEmail(email);
     if (typeof data.provider_keys_loaded === 'number') {
       setProviderKeysLoaded(data.provider_keys_loaded);
     }
@@ -105,7 +111,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const data: { token: string; user_id: string; provider_keys_loaded?: number } = await res.json();
     localStorage.setItem('token', data.token);
+    localStorage.setItem('userEmail', email);
     setToken(data.token);
+    setUserEmail(email);
     if (typeof data.provider_keys_loaded === 'number') {
       setProviderKeysLoaded(data.provider_keys_loaded);
     }
@@ -126,13 +134,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     localStorage.removeItem('token');
+    localStorage.removeItem('userEmail');
     setToken(null);
+    setUserEmail(null);
   }, []);
 
   const isSignedIn = token !== null && !isTokenExpired(token);
 
   return (
-    <AuthContext.Provider value={{ getToken, login, register, verifyOtp, resendOtp, logout, isSignedIn, isLoaded, providerKeysLoaded }}>
+    <AuthContext.Provider value={{ getToken, login, register, verifyOtp, resendOtp, logout, isSignedIn, isLoaded, providerKeysLoaded, userEmail }}>
       {children}
     </AuthContext.Provider>
   );
