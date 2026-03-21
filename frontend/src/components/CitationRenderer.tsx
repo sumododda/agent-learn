@@ -46,7 +46,7 @@ function transformCitations(text: string): React.ReactNode[] {
 export default function CitationRenderer({ content, citations }: CitationRendererProps) {
   return (
     <div>
-      <div className="prose prose-invert prose-purple max-w-none">
+      <div className="prose dark:prose-invert max-w-none">
         <ReactMarkdown
           components={{
             p: ({ children }) => {
