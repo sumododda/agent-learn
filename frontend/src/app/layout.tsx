@@ -1,7 +1,19 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { Inter, JetBrains_Mono } from 'next/font/google';
 import { AuthProvider } from '@/context/AuthContext';
-import { AuthHeader } from '@/components/AuthHeader';
+import { ThemeProvider } from '@/components/ThemeProvider';
+import { cn } from '@/lib/utils';
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-mono',
+});
 
 export const metadata: Metadata = {
   title: 'agent-learn',
@@ -10,14 +22,13 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="bg-gray-950 text-gray-100 min-h-screen">
-        <AuthProvider>
-          <AuthHeader />
-          <main className="max-w-7xl mx-auto px-6 py-8">
+    <html lang="en" className={cn(inter.variable, jetbrainsMono.variable)} suppressHydrationWarning>
+      <body className="font-sans bg-background text-foreground min-h-screen antialiased">
+        <ThemeProvider>
+          <AuthProvider>
             {children}
-          </main>
-        </AuthProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
