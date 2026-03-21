@@ -2,9 +2,14 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
+import { Check } from 'lucide-react';
 import MermaidBlock from '@/components/MermaidBlock';
-import ChatDrawer from '@/components/ChatDrawer';
+import EvidencePanel from '@/components/EvidencePanel';
+import { ChatPanel } from '@/components/ChatDrawer';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { getCourse, getProgress, updateProgress } from '@/lib/api';
 import { Course, Section } from '@/lib/types';
@@ -20,6 +25,22 @@ export default function LearnPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const initialLoadDone = useRef(false);
+
+  // Scroll progress tracking
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollProgress, setScrollProgress] = useState(0);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    function handleScroll() {
+      const { scrollTop, scrollHeight, clientHeight } = el!;
+      const progress = scrollHeight > clientHeight ? (scrollTop / (scrollHeight - clientHeight)) * 100 : 0;
+      setScrollProgress(progress);
+    }
+    el.addEventListener('scroll', handleScroll);
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [currentIndex]);
 
   useEffect(() => {
     async function loadCourse() {
@@ -43,7 +64,7 @@ export default function LearnPage() {
             setCompletedSections(progress.completed_sections || []);
           }
         } catch {
-          // Progress fetch failed — start from section 0
+          // Progress fetch failed -- start from section 0
         }
         initialLoadDone.current = true;
       } catch (err) {
@@ -71,6 +92,7 @@ export default function LearnPage() {
   const handleSectionClick = useCallback(
     (index: number, sectionPosition: number) => {
       setCurrentIndex(index);
+      setScrollProgress(0);
       if (initialLoadDone.current) {
         trackProgress({ current_section: sectionPosition });
       }
@@ -81,6 +103,7 @@ export default function LearnPage() {
   const handleNext = useCallback(
     (currentPosition: number, nextIndex: number, nextPosition: number) => {
       setCurrentIndex(nextIndex);
+      setScrollProgress(0);
       trackProgress({
         current_section: nextPosition,
         completed_section: currentPosition,
@@ -92,121 +115,141 @@ export default function LearnPage() {
   const handlePrev = useCallback(
     (prevIndex: number, prevPosition: number) => {
       setCurrentIndex(prevIndex);
+      setScrollProgress(0);
       trackProgress({ current_section: prevPosition });
     },
     [trackProgress]
   );
 
-  if (loading) return <div className="text-center text-gray-400 mt-20">Loading lessons...</div>;
-  if (error) return <div className="text-center text-red-400 mt-20">{error}</div>;
-  if (!course) return <div className="text-center text-gray-400 mt-20">Course not found</div>;
+  if (loading) return <div className="text-center text-muted-foreground mt-20">Loading lessons...</div>;
+  if (error) return <div className="text-center text-destructive mt-20">{error}</div>;
+  if (!course) return <div className="text-center text-muted-foreground mt-20">Course not found</div>;
 
   const sections = [...course.sections].sort((a: Section, b: Section) => a.position - b.position);
   const currentSection = sections[currentIndex];
 
-  if (!currentSection) return <div className="text-center text-gray-400 mt-20">No sections available</div>;
+  if (!currentSection) return <div className="text-center text-muted-foreground mt-20">No sections available</div>;
+
+  const markdownComponents = {
+    code({ className, children }: { className?: string; children?: React.ReactNode }) {
+      if (/language-mermaid/.test(className || '')) {
+        return <MermaidBlock definition={String(children).replace(/\n$/, '')} />;
+      }
+      return <code className={className}>{children}</code>;
+    },
+  };
 
   return (
-    <div className="flex">
-      {/* Sidebar nav — pinned left */}
-      <nav className="fixed left-0 top-[73px] bottom-0 w-64 border-r border-gray-800/50 overflow-y-auto px-4 py-6">
-        <div className="text-gray-600 text-[10px] uppercase tracking-widest font-semibold mb-4 px-2">Sections</div>
-        <div className="flex flex-col gap-1">
-          {sections.map((section: Section, index: number) => {
-            const isActive = index === currentIndex;
-            const isCompleted = completedSections.includes(section.position);
-            return (
-              <button
-                key={section.id}
-                onClick={() => handleSectionClick(index, section.position)}
-                className={`flex items-center gap-3 px-2 py-2.5 rounded-lg text-left transition-colors ${
-                  isActive
-                    ? 'bg-purple-600/10 text-purple-300'
-                    : 'text-gray-500'
-                }`}
+    <div className="h-screen flex flex-col">
+      {/* Top bar: breadcrumb + progress */}
+      <div className="h-10 border-b border-border flex items-center px-4 shrink-0">
+        <span className="text-xs text-muted-foreground">
+          <Link href="/library" className="hover:text-foreground transition-colors">Library</Link>
+          {' / '}
+          <span className="text-foreground">{course.topic}</span>
+          {' / '}
+          <span>{currentSection.title}</span>
+        </span>
+      </div>
+
+      {/* Reading progress bar */}
+      <div className="h-0.5 bg-muted shrink-0">
+        <div className="h-full bg-primary transition-all" style={{ width: `${scrollProgress}%` }} />
+      </div>
+
+      {/* 3-panel body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: Section nav */}
+        <aside className="w-60 border-r border-border bg-card overflow-y-auto shrink-0">
+          <div className="p-4">
+            <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-3">Sections</div>
+            {sections.map((section, index) => {
+              const isActive = index === currentIndex;
+              const isCompleted = completedSections.includes(section.position);
+              return (
+                <button
+                  key={section.id}
+                  onClick={() => handleSectionClick(index, section.position)}
+                  className={`w-full text-left flex items-center gap-2 px-2 py-2 rounded-md text-sm transition-colors mb-0.5 ${
+                    isActive
+                      ? 'bg-muted border-l-2 border-primary text-foreground font-medium'
+                      : isCompleted
+                      ? 'text-muted-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {isCompleted && !isActive && <Check className="h-3 w-3 text-green-500 shrink-0" />}
+                  <span className="truncate">{section.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* Center: Content */}
+        <main className="flex-1 overflow-y-auto" ref={contentRef}>
+          <div className="max-w-[680px] mx-auto px-10 py-12">
+            <div className="mb-6">
+              <p className="text-xs text-muted-foreground mb-1">
+                Section {currentSection.position} of {sections.length}
+              </p>
+              <h1 className="text-2xl font-semibold text-foreground">
+                {currentSection.title}
+              </h1>
+            </div>
+
+            <div className="learn-content">
+              <ReactMarkdown components={markdownComponents}>
+                {(currentSection.content || 'Content not yet generated.').replace(/^##?\s+.+\n+/, '')}
+              </ReactMarkdown>
+            </div>
+
+            {/* Prev/Next navigation */}
+            <div className="flex justify-between mt-12 pt-6 border-t border-border">
+              <Button
+                variant="ghost"
+                onClick={() => handlePrev(currentIndex - 1, sections[currentIndex - 1].position)}
+                disabled={currentIndex === 0}
               >
-                <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
-                  isActive
-                    ? 'bg-purple-600 text-white'
-                    : isCompleted
-                    ? 'bg-green-900/40 text-green-400 border border-green-700/50'
-                    : 'bg-gray-800/60 text-gray-500 border border-gray-700/50'
-                }`}>
-                  {isCompleted && !isActive ? (
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    section.position
-                  )}
-                </span>
-                <span className={`text-sm leading-snug ${
-                  isActive ? 'text-purple-200 font-medium' : 'text-gray-400'
-                }`}>
-                  {section.title}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
-
-      {/* Content */}
-      <article className="flex-1 min-w-0 max-w-[820px] mx-auto ml-72">
-        <div className="mb-8">
-          <p className="text-purple-400 text-sm font-medium tracking-wide mb-2">
-            Section {currentSection.position} of {sections.length}
-          </p>
-          <h1 className="text-2xl font-bold text-white leading-tight">
-            {currentSection.title}
-          </h1>
-        </div>
-
-        <div className="learn-content">
-          <ReactMarkdown
-            components={{
-              code({ className, children }) {
-                if (/language-mermaid/.test(className || '')) {
-                  return <MermaidBlock definition={String(children).replace(/\n$/, '')} />;
+                &larr; Previous
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  handleNext(
+                    currentSection.position,
+                    currentIndex + 1,
+                    sections[currentIndex + 1].position
+                  )
                 }
-                return <code className={className}>{children}</code>;
-              },
-            }}
-          >
-            {(currentSection.content || 'Content not yet generated.').replace(/^##?\s+.+\n+/, '')}
-          </ReactMarkdown>
-        </div>
+                disabled={currentIndex === sections.length - 1}
+              >
+                Next &rarr;
+              </Button>
+            </div>
+          </div>
+        </main>
 
-        {/* Prev/Next navigation */}
-        <div className="flex justify-between mt-12 pt-6 border-t border-gray-800/60">
-          <button
-            onClick={() => handlePrev(currentIndex - 1, sections[currentIndex - 1].position)}
-            disabled={currentIndex === 0}
-            className="text-sm text-gray-500 hover:text-gray-300 disabled:text-gray-800 disabled:cursor-default transition-colors"
-          >
-            &larr; {currentIndex > 0 ? sections[currentIndex - 1].title : 'Previous'}
-          </button>
-          <button
-            onClick={() =>
-              handleNext(
-                currentSection.position,
-                currentIndex + 1,
-                sections[currentIndex + 1].position
-              )
-            }
-            disabled={currentIndex === sections.length - 1}
-            className="text-sm text-purple-400 hover:text-purple-300 disabled:text-gray-800 disabled:cursor-default transition-colors"
-          >
-            {currentIndex < sections.length - 1 ? sections[currentIndex + 1].title : 'Next'} &rarr;
-          </button>
-        </div>
-      </article>
-
-      <ChatDrawer
-        courseId={courseId}
-        currentSectionPosition={sections[currentIndex].position}
-        currentSectionTitle={sections[currentIndex].title}
-      />
+        {/* Right: Evidence + Chat tabs */}
+        <aside className="w-[300px] border-l border-border shrink-0 flex flex-col">
+          <Tabs defaultValue={0} className="flex flex-col h-full">
+            <TabsList className="w-full shrink-0">
+              <TabsTrigger value={0} className="flex-1">Sources</TabsTrigger>
+              <TabsTrigger value={1} className="flex-1">Chat</TabsTrigger>
+            </TabsList>
+            <TabsContent value={0} className="overflow-y-auto flex-1">
+              <EvidencePanel courseId={courseId} sectionPosition={currentSection.position} />
+            </TabsContent>
+            <TabsContent value={1} className="flex-1 flex flex-col overflow-hidden">
+              <ChatPanel
+                courseId={courseId}
+                currentSectionPosition={currentSection.position}
+                currentSectionTitle={currentSection.title}
+              />
+            </TabsContent>
+          </Tabs>
+        </aside>
+      </div>
     </div>
   );
 }
