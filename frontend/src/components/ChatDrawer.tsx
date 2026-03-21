@@ -7,18 +7,17 @@ import MermaidBlock from '@/components/MermaidBlock';
 import { getChatModels, getChatHistory, sendChatMessage } from '@/lib/api';
 import { ChatMessage, ChatModel } from '@/lib/types';
 
-interface ChatDrawerProps {
+interface ChatPanelProps {
   courseId: string;
   currentSectionPosition: number;
   currentSectionTitle: string;
 }
 
-export default function ChatDrawer({
+export function ChatPanel({
   courseId,
   currentSectionPosition,
   currentSectionTitle,
-}: ChatDrawerProps) {
-  const [open, setOpen] = useState(false);
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -45,9 +44,9 @@ export default function ChatDrawer({
     loadModels();
   }, []);
 
-  // Load history when drawer opens
+  // Auto-load history on mount (always visible, not toggled)
   useEffect(() => {
-    if (open && !historyLoaded) {
+    if (!historyLoaded) {
       async function loadHistory() {
         const token = await getToken();
         const history = await getChatHistory(courseId, token);
@@ -56,7 +55,7 @@ export default function ChatDrawer({
       }
       loadHistory();
     }
-  }, [open, historyLoaded, courseId, getToken]);
+  }, [historyLoaded, courseId, getToken]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -219,130 +218,26 @@ export default function ChatDrawer({
     },
   };
 
-  // Collapsed state — floating pill button
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-full shadow-lg hover:bg-gray-800 transition-colors"
-      >
-        <svg
-          className="w-4 h-4 text-purple-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-          />
-        </svg>
-        <span className="text-sm text-white font-medium">Ask AI</span>
-        <span className="text-xs text-gray-500">
-          {formatModelName(selectedModel)}
-        </span>
-      </button>
-    );
-  }
-
-  // Expanded state — bottom drawer
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 h-[40vh] bg-gray-950 border-t border-gray-800 flex flex-col">
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-white">Assistant</span>
-          <span className="text-xs text-gray-500">
-            reading section {currentSectionPosition}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Model chip */}
-          <div ref={modelPickerRef} className="relative">
-            <button
-              onClick={() => {
-                setModelPickerOpen(!modelPickerOpen);
-                setModelSearch('');
-              }}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-gray-800 border border-gray-700 rounded-full hover:bg-gray-700 transition-colors"
-            >
-              <span className="text-gray-300">
-                {formatModelName(selectedModel)}
-              </span>
-              <svg
-                className="w-3 h-3 text-gray-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 9l-7 7-7-7"
-                />
-              </svg>
-            </button>
-
-            {/* Model picker dropdown */}
-            {modelPickerOpen && (
-              <div className="absolute bottom-full right-0 mb-2 w-80 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden">
-                <div className="p-2 border-b border-gray-800">
-                  <input
-                    type="text"
-                    value={modelSearch}
-                    onChange={(e) => setModelSearch(e.target.value)}
-                    placeholder="Search models..."
-                    className="w-full px-3 py-1.5 text-sm bg-gray-800 border border-gray-700 rounded text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    autoFocus
-                  />
-                </div>
-                <div className="max-h-60 overflow-y-auto">
-                  {filteredModels.length === 0 ? (
-                    <div className="px-3 py-4 text-sm text-gray-500 text-center">
-                      No models found
-                    </div>
-                  ) : (
-                    filteredModels.map((model) => (
-                      <button
-                        key={model.id}
-                        onClick={() => {
-                          setSelectedModel(model.id);
-                          setModelPickerOpen(false);
-                          setModelSearch('');
-                        }}
-                        className={`w-full text-left px-3 py-2 hover:bg-gray-800 transition-colors ${
-                          model.id === selectedModel ? 'bg-gray-800' : ''
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-white">
-                            {formatModelName(model.id)}
-                          </span>
-                          <span className="text-xs text-gray-500">
-                            {formatContextLength(model.context_length)} ctx
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          ${model.pricing_prompt} / ${model.pricing_completion}
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Close button */}
+    <div className="flex-1 flex flex-col min-h-0">
+      {/* Header bar with model picker */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0">
+        <span className="text-xs text-muted-foreground">
+          Section {currentSectionPosition}
+        </span>
+        <div ref={modelPickerRef} className="relative">
           <button
-            onClick={() => setOpen(false)}
-            className="p-1 text-gray-500 hover:text-white transition-colors"
+            onClick={() => {
+              setModelPickerOpen(!modelPickerOpen);
+              setModelSearch('');
+            }}
+            className="flex items-center gap-1 px-2 py-0.5 text-xs bg-muted border border-border rounded-md hover:bg-accent transition-colors"
           >
+            <span className="text-foreground">
+              {formatModelName(selectedModel)}
+            </span>
             <svg
-              className="w-4 h-4"
+              className="w-3 h-3 text-muted-foreground"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -355,14 +250,63 @@ export default function ChatDrawer({
               />
             </svg>
           </button>
+
+          {/* Model picker dropdown */}
+          {modelPickerOpen && (
+            <div className="absolute bottom-full right-0 mb-2 w-72 bg-popover border border-border rounded-lg shadow-xl overflow-hidden z-50">
+              <div className="p-2 border-b border-border">
+                <input
+                  type="text"
+                  value={modelSearch}
+                  onChange={(e) => setModelSearch(e.target.value)}
+                  placeholder="Search models..."
+                  className="w-full px-2.5 py-1.5 text-sm bg-muted border border-border rounded text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
+                  autoFocus
+                />
+              </div>
+              <div className="max-h-60 overflow-y-auto">
+                {filteredModels.length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-muted-foreground text-center">
+                    No models found
+                  </div>
+                ) : (
+                  filteredModels.map((model) => (
+                    <button
+                      key={model.id}
+                      onClick={() => {
+                        setSelectedModel(model.id);
+                        setModelPickerOpen(false);
+                        setModelSearch('');
+                      }}
+                      className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
+                        model.id === selectedModel ? 'bg-muted' : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-foreground">
+                          {formatModelName(model.id)}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatContextLength(model.context_length)} ctx
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        ${model.pricing_prompt} / ${model.pricing_completion}
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
         {messages.length === 0 && !streaming && (
           <div className="flex items-center justify-center h-full">
-            <p className="text-gray-600 text-sm">
+            <p className="text-muted-foreground text-sm text-center px-4">
               Ask a question about &ldquo;{currentSectionTitle}&rdquo;
             </p>
           </div>
@@ -374,13 +318,13 @@ export default function ChatDrawer({
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {msg.role === 'user' ? (
-              <div className="max-w-[80%] px-3 py-2 bg-gray-800 rounded-lg rounded-br-sm">
-                <p className="text-sm text-white whitespace-pre-wrap">
+              <div className="max-w-[85%] px-3 py-2 bg-muted rounded-lg rounded-br-sm">
+                <p className="text-sm text-foreground whitespace-pre-wrap">
                   {msg.content}
                 </p>
               </div>
             ) : (
-              <div className="max-w-[80%] prose prose-invert prose-sm prose-purple max-w-none">
+              <div className="max-w-[85%] prose prose-sm dark:prose-invert max-w-none text-foreground">
                 <ReactMarkdown components={markdownComponents}>
                   {msg.content}
                 </ReactMarkdown>
@@ -392,20 +336,20 @@ export default function ChatDrawer({
         {/* Streaming message */}
         {streaming && (
           <div className="flex justify-start">
-            <div className="max-w-[80%] prose prose-invert prose-sm prose-purple max-w-none">
+            <div className="max-w-[85%] prose prose-sm dark:prose-invert max-w-none text-foreground">
               {streamingContent ? (
                 <ReactMarkdown components={markdownComponents}>
                   {streamingContent}
                 </ReactMarkdown>
               ) : (
                 <div className="flex items-center gap-1 py-2">
-                  <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse" />
-                  <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse [animation-delay:0.2s]" />
-                  <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+                  <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+                  <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse [animation-delay:0.2s]" />
+                  <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse [animation-delay:0.4s]" />
                 </div>
               )}
               {streamingContent && (
-                <span className="inline-block w-1.5 h-4 bg-purple-400 animate-pulse ml-0.5 -mb-0.5" />
+                <span className="inline-block w-1.5 h-4 bg-primary animate-pulse ml-0.5 -mb-0.5" />
               )}
             </div>
           </div>
@@ -415,7 +359,7 @@ export default function ChatDrawer({
       </div>
 
       {/* Input bar */}
-      <div className="flex-shrink-0 px-4 py-3 border-t border-gray-800">
+      <div className="shrink-0 px-3 py-2 border-t border-border">
         <div className="flex items-end gap-2">
           <textarea
             value={input}
@@ -423,12 +367,12 @@ export default function ChatDrawer({
             onKeyDown={handleKeyDown}
             placeholder="Ask about this section..."
             rows={1}
-            className="flex-1 resize-none px-3 py-2 text-sm bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 max-h-24"
+            className="flex-1 resize-none px-3 py-2 text-sm bg-muted border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring max-h-24"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || streaming}
-            className="px-3 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-2 bg-primary text-primary-foreground text-sm rounded-lg hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <svg
               className="w-4 h-4"
@@ -449,3 +393,6 @@ export default function ChatDrawer({
     </div>
   );
 }
+
+// Backwards compatibility alias
+export default ChatPanel;
