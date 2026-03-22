@@ -464,10 +464,9 @@ async def test_progress_per_user_isolation(progress_db, progress_client):
     # Now switch to user B
     app.dependency_overrides[get_current_user] = lambda: "user-b"
 
-    # user B should not see user A's progress
+    # user B should be denied access to user A's course
     resp_b = await progress_client.get(f"/api/courses/{course_id}/progress")
-    assert resp_b.status_code == 200
-    assert resp_b.json() is None  # No progress for user B
+    assert resp_b.status_code == 403
 
     # Restore override
     app.dependency_overrides[get_current_user] = lambda: "test-user-id"

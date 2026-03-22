@@ -3,9 +3,17 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { getDiscoverStreamUrl, getCourse } from '@/lib/api';
+import { getDiscoverStreamUrl, getCourse, getSseTicket } from '@/lib/api';
 import { Navbar } from '@/components/Navbar';
 import { Card, CardContent } from '@/components/ui/card';
+
+function safeHref(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
+  } catch {}
+  return '#';
+}
 
 interface SourceItem {
   url: string;
@@ -82,7 +90,16 @@ export default function DiscoverPage() {
       const token = await getToken();
       if (!token || cancelled) return;
 
-      const url = getDiscoverStreamUrl(courseId, token);
+      let ticket: string;
+      try {
+        ticket = await getSseTicket(token);
+      } catch {
+        fallbackToStatic();
+        return;
+      }
+      if (cancelled) return;
+
+      const url = getDiscoverStreamUrl(courseId, ticket);
       const es = new EventSource(url);
       eventSourceRef.current = es;
 
@@ -267,7 +284,7 @@ export default function DiscoverPage() {
                           {q.sources.map((s, j) => (
                             <div key={j} className="text-sm">
                               <a
-                                href={s.url}
+                                href={safeHref(s.url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-primary hover:underline"

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { Settings, Moon, Sun, LogOut } from 'lucide-react';
+import { UserAvatar } from '@/components/UserAvatar';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,7 +16,7 @@ import {
 
 export function Navbar() {
   const pathname = usePathname();
-  const { isSignedIn, logout } = useAuth();
+  const { isSignedIn, logout, userEmail } = useAuth();
   const { theme, setTheme } = useTheme();
 
   return (
@@ -61,9 +62,14 @@ export function Navbar() {
               <DropdownMenuTrigger
                 render={<Button variant="ghost" size="icon" className="h-8 w-8" />}
               >
-                <div className="h-6 w-6 rounded-full bg-muted" />
+                <UserAvatar email={userEmail} />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {userEmail && (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground truncate max-w-[200px]">
+                    {userEmail}
+                  </div>
+                )}
                 <DropdownMenuItem
                   render={<Link href="/settings" />}
                 >

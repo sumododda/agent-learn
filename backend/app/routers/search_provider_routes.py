@@ -3,11 +3,12 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import key_cache, search_service
+from app.limiter import limiter
 from app.auth import get_current_user
 from app.config import settings
 from app.crypto import (
@@ -243,7 +244,9 @@ async def delete_search_provider(
 
 
 @router.post("/{provider}/test")
+@limiter.limit("10/minute")
 async def test_search_provider(
+    request: Request,
     provider: str,
     body: ProviderTestRequest,
     user_id: str = Depends(get_current_user),

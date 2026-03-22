@@ -208,7 +208,7 @@ class TestRegisterEndpoint:
         assert "Turnstile" in resp.json()["detail"]
 
     async def test_register_duplicate_email(self, client):
-        """Registration with existing email returns 409."""
+        """Registration with existing email returns 200 (no enumeration)."""
         # First, complete a full registration so user exists in DB
         otp = await _register_and_get_otp(client)
         await client.post("/api/auth/verify-otp", json={
@@ -216,10 +216,10 @@ class TestRegisterEndpoint:
             "otp": otp,
         })
 
-        # Now try to register again with the same email
+        # Now try to register again — returns same 200 to prevent enumeration
         resp = await _register(client, email="alice@example.com")
-        assert resp.status_code == 409
-        assert "already registered" in resp.json()["detail"]
+        assert resp.status_code == 200
+        assert resp.json()["email"] == "alice@example.com"
 
     async def test_register_pending_email_idempotent(self, client):
         """Registration with pending email returns 200 (same response)."""
@@ -380,14 +380,14 @@ class TestResendOtp:
                 "email": "alice@example.com",
             })
         assert resp.status_code == 200
-        assert resp.json()["message"] == "New verification code sent"
+        assert "code has been sent" in resp.json()["message"]
         mock_send.assert_called_once()
         # OTP arg should be 6 digits
         sent_otp = mock_send.call_args[0][1]
         assert len(sent_otp) == 6 and sent_otp.isdigit()
 
     async def test_resend_otp_limit(self, client):
-        """4th resend returns 429 (MAX_RESENDS=3)."""
+        """4th resend returns 200 but does not send email (anti-enumeration)."""
         await _register_and_get_otp(client)
 
         for i in range(pending_cache.MAX_RESENDS):
@@ -397,20 +397,20 @@ class TestResendOtp:
                 })
                 assert resp.status_code == 200, f"Resend #{i+1} should succeed"
 
-        # Next resend should be rejected
-        with patch("app.routers.auth_routes.send_verification_email"):
+        # Next resend returns same 200 (anti-enumeration) but email is NOT sent
+        with patch("app.routers.auth_routes.send_verification_email") as mock_send:
             resp = await client.post("/api/auth/resend-otp", json={
                 "email": "alice@example.com",
             })
-        assert resp.status_code == 429
-        assert "limit" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        mock_send.assert_not_called()
 
     async def test_resend_otp_no_pending(self, client):
-        """Resend with no pending registration returns 410."""
+        """Resend with no pending registration returns 200 (anti-enumeration)."""
         resp = await client.post("/api/auth/resend-otp", json={
             "email": "nobody@example.com",
         })
-        assert resp.status_code == 410
+        assert resp.status_code == 200
 
     async def test_resend_updates_otp(self, client):
         """After resend, the old OTP should no longer work but the new one should."""

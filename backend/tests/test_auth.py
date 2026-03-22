@@ -136,7 +136,7 @@ async def test_register_success(auth_db, client):
 
 @pytest.mark.anyio
 async def test_register_duplicate_email(auth_db, client):
-    """POST /api/auth/register with existing email returns 409."""
+    """POST /api/auth/register with existing email returns 200 (no enumeration)."""
     resp1 = await _register_user(client, email="dup@example.com")
     assert resp1.status_code == 200
 
@@ -146,7 +146,9 @@ async def test_register_duplicate_email(auth_db, client):
             "/api/auth/register",
             json={"email": "dup@example.com", "password": "securepass123", "turnstile_token": "test"},
         )
-    assert resp2.status_code == 409
+    # Returns same 200 response to prevent email enumeration
+    assert resp2.status_code == 200
+    assert resp2.json()["email"] == "dup@example.com"
 
 
 # ---------------------------------------------------------------------------

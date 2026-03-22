@@ -34,7 +34,9 @@ async def _ensure_cache(user_id: str, session) -> None:
 
 
 @router.get("/chat/models", response_model=list[ChatModelInfo])
+@limiter.limit("30/minute")
 async def list_models(
+    request: Request,
     session: SessionDep,
     user_id: str = Depends(get_current_user),
 ):

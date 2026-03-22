@@ -26,10 +26,24 @@ class _PendingEntry:
 
 
 _cache: dict[str, _PendingEntry] = {}
+_MAX_ENTRIES = 500
+
+
+def _evict_expired() -> None:
+    """Remove expired entries when cache is at capacity."""
+    now = datetime.now(timezone.utc)
+    expired = [k for k, v in _cache.items() if now > v.expires_at]
+    for k in expired:
+        del _cache[k]
 
 
 def store(email: str, password_hash: str, otp_hash: str) -> None:
     """Store a pending registration entry, keyed by email."""
+    if email not in _cache and len(_cache) >= _MAX_ENTRIES:
+        _evict_expired()
+        if len(_cache) >= _MAX_ENTRIES:
+            oldest_key = next(iter(_cache))
+            del _cache[oldest_key]
     _cache[email] = _PendingEntry(
         email=email,
         password_hash=password_hash,

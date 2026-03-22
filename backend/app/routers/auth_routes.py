@@ -7,7 +7,7 @@ import uuid as uuid_mod
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 
-from app.auth import create_access_token, get_current_user, pwd_context
+from app.auth import create_access_token, create_sse_token, get_current_user, pwd_context
 from app.config import settings
 from app.crypto import decrypt_credentials, derive_key
 from app.database import SessionDep
@@ -89,12 +89,12 @@ async def register(request: Request, body: RegisterRequest, session: SessionDep)
     if not await verify_turnstile_token(body.turnstile_token):
         raise HTTPException(status_code=400, detail="Turnstile verification failed")
 
-    # 2. Check email not already registered
+    # 2. Check email not already registered (return same response to prevent enumeration)
     existing = await session.execute(
         select(User).where(User.email == body.email)
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already registered")
+        return RegisterResponse(message="Verification code sent", email=body.email)
 
     # 3. Check if email already has pending registration
     pending = pending_cache.get(body.email)
@@ -152,26 +152,25 @@ async def verify_otp(request: Request, body: OtpVerifyRequest, session: SessionD
 @router.post("/resend-otp", response_model=OtpResendResponse)
 @limiter.limit("10/minute")
 async def resend_otp(request: Request, body: OtpResendRequest):
-    # 1. Look up pending registration
+    # Return same response regardless of state to prevent enumeration
     pending = pending_cache.get(body.email)
     if pending is None:
-        raise HTTPException(status_code=410, detail="No pending registration found")
+        return OtpResendResponse(message="If a pending registration exists, a new code has been sent")
 
-    # 2. Generate new OTP and replace
     otp = _generate_otp()
     otp_hash = pwd_context.hash(otp)
 
     if not pending_cache.replace_otp(body.email, otp_hash):
-        raise HTTPException(status_code=429, detail="Resend limit reached")
+        return OtpResendResponse(message="If a pending registration exists, a new code has been sent")
 
-    # 3. Send new email
     send_verification_email(body.email, otp)
 
-    return OtpResendResponse(message="New verification code sent")
+    return OtpResendResponse(message="If a pending registration exists, a new code has been sent")
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(body: LoginRequest, session: SessionDep):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, session: SessionDep):
     result = await session.execute(
         select(User).where(User.email == body.email)
     )
@@ -188,7 +187,9 @@ async def login(body: LoginRequest, session: SessionDep):
 
 
 @router.put("/password")
+@limiter.limit("5/minute")
 async def change_password(
+    request: Request,
     body: PasswordChangeRequest,
     session: SessionDep,
     user_id: str = Depends(get_current_user),
@@ -206,3 +207,10 @@ async def change_password(
     await session.commit()
 
     return {"message": "Password changed successfully"}
+
+
+@router.post("/sse-ticket")
+@limiter.limit("60/minute")
+async def get_sse_ticket(request: Request, user_id: str = Depends(get_current_user)):
+    """Issue a short-lived (60s) SSE-scoped token for stream endpoints."""
+    return {"ticket": create_sse_token(user_id)}

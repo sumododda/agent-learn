@@ -41,6 +41,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 _feed_events: dict[str, list[dict]] = {}
 _feed_queues: dict[str, asyncio.Queue] = {}
+_MAX_FEED_ENTRIES = 200  # max concurrent course feeds
 
 
 async def _ensure_cache(user_id: str, session) -> None:
@@ -164,6 +165,11 @@ async def create_course(
     course_id = course.id
     course_id_str = str(course_id)
 
+    if len(_feed_events) >= _MAX_FEED_ENTRIES:
+        stale = [k for k in _feed_events if k not in _feed_queues]
+        for k in stale:
+            _feed_events.pop(k, None)
+
     queue: asyncio.Queue = asyncio.Queue()
     _feed_queues[course_id_str] = queue
     _feed_events[course_id_str] = []
@@ -285,7 +291,9 @@ async def create_course(
 
 
 @router.post("/courses/{course_id}/generate")
+@limiter.limit("3/hour")
 async def generate_course(
+    request: Request,
     course_id: uuid.UUID,
     session: SessionDep,
     user_id: str = Depends(get_current_user),
@@ -412,7 +420,9 @@ async def resume_course(
 
 
 @router.post("/courses/{course_id}/regenerate", response_model=CourseResponse)
+@limiter.limit("5/hour")
 async def regenerate_course(
+    request: Request,
     course_id: uuid.UUID,
     body: RegenerateRequest,
     session: SessionDep,
@@ -879,6 +889,15 @@ async def get_progress(
     user_id: str = Depends(get_current_user),
 ):
     """Get the current user's progress for a course. Returns null if no progress exists."""
+    course_result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = course_result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
+
     result = await session.execute(
         select(LearnerProgress).where(
             LearnerProgress.user_id == user_id,

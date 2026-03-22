@@ -74,7 +74,7 @@ async def assemble_context(
     parts.append(f'You are a learning assistant for a course on "{course.topic}".')
     parts.append(f'The learner is currently reading Section {section_context}: "{section_title}".')
     if course.instructions:
-        parts.append(course.instructions)
+        parts.append(f"<user_instructions>\n{course.instructions}\n</user_instructions>")
 
     parts.append("\n--- COURSE OUTLINE ---")
     for s in course.sections:
@@ -133,6 +133,7 @@ async def stream_chat(
                 api_key=api_key,
                 model=model,
                 streaming=True,
+                request_timeout=120,
             )
             lc_messages = [
                 {"role": m["role"], "content": m["content"]} for m in messages
@@ -146,6 +147,6 @@ async def stream_chat(
             yield b"data: [DONE]\n\n"
         except Exception as e:
             logger.error("Stream error: %s", e)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            yield f"data: {json.dumps({'error': 'An error occurred while streaming the response'})}\n\n".encode()
 
     return generate(), collected_content

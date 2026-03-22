@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Check } from 'lucide-react';
-import { getCourse, resumeCourse, getPipelineStreamUrl } from '@/lib/api';
+import { getCourse, resumeCourse, getPipelineStreamUrl, getSseTicket } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 
 const STAGES = ['plan', 'research', 'verify', 'write', 'edit', 'complete'];
@@ -98,74 +98,91 @@ export default function PipelineProgress({
       return;
     }
 
-    const url = getPipelineStreamUrl(courseId, token);
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
+    let cancelled = false;
 
-    es.onopen = () => {
-      setConnected(true);
-    };
-
-    es.addEventListener('status', (e: MessageEvent) => {
+    async function connect() {
+      if (!token || cancelled) return;
+      let ticket: string;
       try {
-        const data = JSON.parse(e.data);
-        setCurrentStage(data.stage || 'planning');
-        if (data.section !== undefined) setCurrentSection(data.section);
-        if (data.total !== undefined) setTotalSections(data.total);
-        if (data.message) addLog(data.message);
+        ticket = await getSseTicket(token);
       } catch {
-        // Ignore parse errors
+        fallbackFetch();
+        return;
       }
-    });
+      if (cancelled) return;
 
-    es.addEventListener('complete', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setCurrentStage('completed');
-        if (data.message) addLog(data.message);
-      } catch {
-        // Ignore parse errors
-      }
-      if (!completeCalled.current) {
-        completeCalled.current = true;
-        onComplete();
-      }
-      es.close();
-    });
+      const url = getPipelineStreamUrl(courseId, ticket);
+      const es = new EventSource(url);
+      eventSourceRef.current = es;
 
-    es.addEventListener('stale', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.message) addLog(data.message);
-      } catch {
-        // Ignore parse errors
-      }
-      setIsStale(true);
-      es.close();
-    });
+      es.onopen = () => {
+        setConnected(true);
+      };
 
-    es.addEventListener('error', (e: MessageEvent) => {
-      // This is a named 'error' event from the server (not an EventSource error)
-      try {
-        const data = JSON.parse(e.data);
-        setError(data.message || data.error || 'Pipeline error');
-        if (data.message) addLog(data.message);
-      } catch {
-        // Ignore parse errors
-      }
-      es.close();
-    });
+      es.addEventListener('status', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          setCurrentStage(data.stage || 'planning');
+          if (data.section !== undefined) setCurrentSection(data.section);
+          if (data.total !== undefined) setTotalSections(data.total);
+          if (data.message) addLog(data.message);
+        } catch {
+          // Ignore parse errors
+        }
+      });
 
-    es.onerror = () => {
-      // EventSource connection error — fall back to single fetch
-      setConnected(false);
-      es.close();
-      fallbackFetch();
-    };
+      es.addEventListener('complete', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          setCurrentStage('completed');
+          if (data.message) addLog(data.message);
+        } catch {
+          // Ignore parse errors
+        }
+        if (!completeCalled.current) {
+          completeCalled.current = true;
+          onComplete();
+        }
+        es.close();
+      });
+
+      es.addEventListener('stale', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.message) addLog(data.message);
+        } catch {
+          // Ignore parse errors
+        }
+        setIsStale(true);
+        es.close();
+      });
+
+      es.addEventListener('error', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          setError(data.message || data.error || 'Pipeline error');
+          if (data.message) addLog(data.message);
+        } catch {
+          // Ignore parse errors
+        }
+        es.close();
+      });
+
+      es.onerror = () => {
+        setConnected(false);
+        es.close();
+        fallbackFetch();
+      };
+    }
+
+    connect();
 
     return () => {
-      es.close();
-      eventSourceRef.current = null;
+      cancelled = true;
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
   }, [courseId, token, onComplete, addLog, fallbackFetch]);
 
@@ -183,7 +200,8 @@ export default function PipelineProgress({
         eventSourceRef.current = null;
       }
       if (token) {
-        const url = getPipelineStreamUrl(courseId, token);
+        const ticket = await getSseTicket(token);
+        const url = getPipelineStreamUrl(courseId, ticket);
         const es = new EventSource(url);
         eventSourceRef.current = es;
 
