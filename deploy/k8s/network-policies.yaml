@@ -19,6 +19,7 @@ spec:
                 values:
                   - backend-api
                   - backend-worker
+                  - alembic-migrate
       ports:
         - protocol: TCP
           port: 5432

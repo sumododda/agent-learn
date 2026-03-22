@@ -5,6 +5,8 @@ metadata:
   namespace: agent-learn
   annotations:
     kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: "agent-learn-cert"
+    kubernetes.io/ingress.allow-http: "false"
 spec:
   rules:
     - host: learn.blekcipher.com
