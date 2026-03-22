@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { createCourse, getProviders } from '@/lib/api';
+import { createCourseStream, getProviders } from '@/lib/api';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -106,8 +106,8 @@ function HomePageInner() {
 
     try {
       const token = await getToken();
-      const course = await createCourse(topic.trim(), buildInstructions(), token);
-      router.push(`/courses/${course.id}`);
+      const courseId = await createCourseStream(topic.trim(), buildInstructions(), token);
+      router.push(`/courses/${courseId}/discover`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {

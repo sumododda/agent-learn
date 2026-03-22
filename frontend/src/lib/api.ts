@@ -47,6 +47,52 @@ export async function resumeCourse(id: string, token?: string | null): Promise<{
   return res.json();
 }
 
+export async function createCourseStream(
+  topic: string,
+  instructions?: string,
+  token?: string | null,
+): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/courses?stream=true`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ topic, instructions: instructions || null }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Failed to create course' }));
+    throw new Error(error.detail || 'Failed to create course');
+  }
+
+  // Read SSE stream to find the 'created' event with course_id
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) throw new Error('Stream ended before course was created');
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.course_id) {
+            reader.cancel(); // Don't need the rest, discover page reconnects
+            return data.course_id;
+          }
+        } catch {}
+      }
+    }
+    // Keep unprocessed partial line
+    buffer = lines[lines.length - 1];
+  }
+}
+
+export function getDiscoverStreamUrl(courseId: string, token: string): string {
+  return `${API_BASE}/api/courses/${courseId}/discover/stream?token=${encodeURIComponent(token)}`;
+}
+
 export function getPipelineStreamUrl(courseId: string, token: string): string {
   return `${API_BASE}/api/courses/${courseId}/pipeline/stream?token=${encodeURIComponent(token)}`;
 }
