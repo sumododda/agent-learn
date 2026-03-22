@@ -1,4 +1,4 @@
-.PHONY: dev-db dev-backend dev-frontend dev-worker dev migrate install
+.PHONY: dev-db dev-backend dev-frontend dev-worker dev migrate install cert-check
 
 dev-db:
 	docker compose up -d db
@@ -18,6 +18,9 @@ migrate:
 install:
 	cd backend && uv pip install -r requirements.txt
 	cd frontend && npm install
+
+cert-check:
+	./deploy/cert-check.sh
 
 dev:
 	$(MAKE) dev-db
