@@ -1,4 +1,4 @@
-import { ChatMessage, ChatModel, Course, CourseWithProgress, EvidenceCard, GenerateResponse, ProgressData, ProviderConfig, ProviderDefinition } from './types';
+import { ChatMessage, ChatModel, Course, CourseWithProgress, EvidenceCard, ProgressData, ProviderConfig, ProviderDefinition } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -23,7 +23,7 @@ export async function createCourse(topic: string, instructions?: string, token?:
   return res.json();
 }
 
-export async function generateCourse(id: string, token?: string | null): Promise<GenerateResponse> {
+export async function generateCourse(id: string, token?: string | null): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/api/courses/${id}/generate`, {
     method: 'POST',
     headers: authHeaders(token),
@@ -33,6 +33,22 @@ export async function generateCourse(id: string, token?: string | null): Promise
     throw new Error(error.detail || 'Failed to generate course');
   }
   return res.json();
+}
+
+export async function resumeCourse(id: string, token?: string | null): Promise<{ job_id: string; checkpoint: number }> {
+  const res = await fetch(`${API_BASE}/api/courses/${id}/resume`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Failed to resume course' }));
+    throw new Error(error.detail || 'Failed to resume course');
+  }
+  return res.json();
+}
+
+export function getPipelineStreamUrl(courseId: string, token: string): string {
+  return `${API_BASE}/api/courses/${courseId}/pipeline/stream?token=${encodeURIComponent(token)}`;
 }
 
 export async function regenerateCourse(
