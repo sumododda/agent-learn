@@ -71,6 +71,14 @@ export async function listCourses(token?: string | null): Promise<Course[]> {
   return res.json();
 }
 
+export async function deleteCourse(id: string, token?: string | null): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/courses/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Delete failed');
+}
+
 export async function getCourse(id: string, token?: string | null): Promise<Course> {
   const headers: Record<string, string> = {};
   if (token) {
@@ -153,12 +161,16 @@ export async function getEvidence(
   return res.json();
 }
 
-export async function getChatModels(): Promise<ChatModel[]> {
-  const res = await fetch(`${API_BASE}/api/chat/models`);
-  if (!res.ok) {
+export async function getChatModels(token?: string | null): Promise<ChatModel[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/chat/models`, {
+      headers: authHeaders(token ?? null),
+    });
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
     return [];
   }
-  return res.json();
 }
 
 export async function getChatHistory(
@@ -207,7 +219,7 @@ export async function getProviders(token: string | null): Promise<ProviderConfig
 }
 
 export async function saveProvider(
-  data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string>; password: string },
+  data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string> },
   token: string | null
 ): Promise<ProviderConfig> {
   const res = await fetch(`${API_BASE}/api/providers`, {
@@ -224,7 +236,7 @@ export async function saveProvider(
 
 export async function updateProvider(
   provider: string,
-  data: { credentials?: Record<string, string>; extra_fields?: Record<string, string>; password?: string },
+  data: { credentials?: Record<string, string>; extra_fields?: Record<string, string> },
   token: string | null
 ): Promise<ProviderConfig> {
   const res = await fetch(`${API_BASE}/api/providers/${provider}`, {
@@ -295,7 +307,7 @@ export async function getSearchProviders(token: string | null): Promise<Provider
 }
 
 export async function saveSearchProvider(
-  data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string>; password: string },
+  data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string> },
   token: string | null
 ): Promise<ProviderConfig> {
   const res = await fetch(`${API_BASE}/api/search-providers`, {
@@ -312,7 +324,7 @@ export async function saveSearchProvider(
 
 export async function updateSearchProvider(
   provider: string,
-  data: { credentials?: Record<string, string>; extra_fields?: Record<string, string>; password?: string },
+  data: { credentials?: Record<string, string>; extra_fields?: Record<string, string> },
   token: string | null
 ): Promise<ProviderConfig> {
   const res = await fetch(`${API_BASE}/api/search-providers/${provider}`, {

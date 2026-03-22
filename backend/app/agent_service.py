@@ -10,15 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import (
     create_planner,
-    create_writer,
     create_editor,
     create_discovery_researcher,
     create_section_researcher,
     create_verifier,
-    CourseOutline,
     CourseOutlineWithBriefs,
-    CourseContent,
-    SectionContent,
     TopicBrief,
     EvidenceCardItem,
     EvidenceCardSet,
@@ -26,6 +22,7 @@ from app.agent import (
     BlackboardUpdates,
     EditorResult,
 )
+from app import provider_service
 from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
 # json still used by generate_outline fallback
@@ -34,30 +31,37 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Deep Agents invocation helper
+# Agent invocation helper
 # ---------------------------------------------------------------------------
 
 
 async def _invoke_agent(agent, message: str):
-    """Invoke a Deep Agents agent with async/sync fallback."""
+    """Invoke a langchain agent and return structured response or parsed output."""
+    msg_preview = message[:120].replace("\n", " ")
+    logger.info("[invoke_agent] Calling agent with message: %s...", msg_preview)
     try:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": message}]}
         )
     except AttributeError:
+        logger.debug("[invoke_agent] ainvoke not available, falling back to sync invoke")
         result = await asyncio.to_thread(
             agent.invoke,
             {"messages": [{"role": "user", "content": message}]},
         )
     if "structured_response" in result and result["structured_response"] is not None:
+        resp_type = type(result["structured_response"]).__name__
+        logger.info("[invoke_agent] Got structured_response of type %s", resp_type)
         return result["structured_response"]
     last_message = result["messages"][-1]
     content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    logger.debug("[invoke_agent] No structured_response, parsing last message (%d chars)", len(content))
     try:
         data = json.loads(content)
+        logger.info("[invoke_agent] Parsed JSON from message content")
         return data
     except (json.JSONDecodeError, ValueError):
-        logger.error("Failed to parse agent output: %s", content[:500])
+        logger.error("[invoke_agent] Failed to parse agent output: %s", content[:500])
         raise ValueError(f"Failed to parse agent output: {content[:500]}")
 
 
@@ -147,12 +151,14 @@ async def discover_topic(
 
     # Run searches via configured provider
     all_search_results = []
-    for query in queries:
+    for i, query in enumerate(queries):
+        logger.debug("[discover] Searching query %d/%d: '%s'", i + 1, len(queries), query)
         try:
             results = await search_service.search(
                 search_provider, query, search_credentials or {},
                 max_results=5, search_depth="basic",
             )
+            logger.debug("[discover] Query %d returned %d results", i + 1, len(results))
             for r in results:
                 all_search_results.append({
                     "title": r.title,
@@ -161,13 +167,14 @@ async def discover_topic(
                     "score": r.score,
                 })
         except Exception as e:
-            logger.warning("Search failed for query '%s': %s", query, e)
+            logger.warning("[discover] Search failed for query '%s': %s", query, e)
             continue
 
     if not all_search_results:
+        logger.error("[discover] All %d searches failed — no results to synthesize", len(queries))
         raise RuntimeError("All searches failed — no results to synthesize")
 
-    logger.info("Discovery research: %d total search results collected", len(all_search_results))
+    logger.info("[discover] Collected %d search results from %d queries", len(all_search_results), len(queries))
 
     # Pass results to discovery researcher agent for synthesis
     message = (
@@ -177,14 +184,18 @@ async def discover_topic(
         message += f"Learner instructions: {instructions}\n"
     message += f"\nSearch results:\n{json.dumps(all_search_results, indent=2)}"
 
+    logger.info("[discover] Invoking discovery researcher agent...")
     researcher = create_discovery_researcher(provider, model, credentials, extra_fields)
     result = await _invoke_agent(researcher, message)
 
     # Ensure we have a TopicBrief
     if isinstance(result, TopicBrief):
+        logger.info("[discover] Discovery complete: %d key concepts, %d subtopics", len(result.key_concepts), len(result.subtopics))
         return result
     elif isinstance(result, dict):
-        return TopicBrief(**result)
+        brief = TopicBrief(**result)
+        logger.info("[discover] Discovery complete (from dict): %d key concepts, %d subtopics", len(brief.key_concepts), len(brief.subtopics))
+        return brief
     else:
         raise ValueError(f"Discovery researcher returned unexpected type: {type(result)}")
 
@@ -209,6 +220,7 @@ async def generate_outline(
     credentials = credentials or {}
 
     # Step 1: Discovery research (wrapped in try/except for fallback)
+    logger.info("[outline] Starting outline generation for topic='%s' (search_provider=%s)", topic, search_provider or "none")
     topic_brief = None
     ungrounded = False
     try:
@@ -217,15 +229,16 @@ async def generate_outline(
                 topic, instructions, provider, model, credentials, extra_fields,
                 search_provider, search_credentials,
             )
-            logger.info("Discovery research completed successfully")
+            logger.info("[outline] Discovery research completed successfully")
         else:
-            logger.warning("No search provider configured — skipping discovery research")
+            logger.warning("[outline] No search provider configured — skipping discovery, will be ungrounded")
             ungrounded = True
     except Exception as e:
-        logger.warning("Discovery research failed, falling back to ungrounded planning: %s", e)
+        logger.warning("[outline] Discovery research failed, falling back to ungrounded planning: %s", e)
         ungrounded = True
 
     # Step 2: Plan with topic brief context
+    logger.info("[outline] Invoking planner agent (ungrounded=%s)...", ungrounded)
     message = f"Generate a course outline for the topic: {topic}"
     if instructions:
         message += f"\n\nLearner instructions: {instructions}"
@@ -242,27 +255,6 @@ async def generate_outline(
         return CourseOutlineWithBriefs(**result), ungrounded
     else:
         raise ValueError(f"Planner returned unexpected type: {type(result)}")
-
-
-def _split_markdown_sections(markdown: str, expected_count: int) -> list[SectionContent]:
-    """Split writer markdown output by ## headings into per-section content."""
-    import re
-
-    # Split on ## headings
-    parts = re.split(r"^##\s+", markdown, flags=re.MULTILINE)
-
-    # parts[0] is any text before the first ## (usually empty), skip it
-    section_texts = [p.strip() for p in parts[1:] if p.strip()]
-
-    sections = []
-    for i, text in enumerate(section_texts):
-        # Re-add the ## heading
-        sections.append(SectionContent(
-            position=i + 1,
-            content=f"## {text}",
-        ))
-
-    return sections
 
 
 async def generate_lessons(
@@ -452,14 +444,17 @@ async def research_section(
 
     credentials = credentials or {}
 
+    logger.info("[research] Section %s: researching %d questions", brief.section_position, len(brief.questions))
     all_results: list[dict] = []
 
-    for question in brief.questions:
+    for i, question in enumerate(brief.questions):
+        logger.debug("[research] Section %s: searching question %d/%d: '%s'", brief.section_position, i + 1, len(brief.questions), question[:80])
         try:
             results = await search_service.search(
                 search_provider, question, search_credentials or {},
                 max_results=5, search_depth="basic",
             )
+            logger.debug("[research] Section %s: question %d returned %d results", brief.section_position, i + 1, len(results))
             for r in results:
                 all_results.append({
                     "title": r.title,
@@ -468,25 +463,14 @@ async def research_section(
                     "score": r.score,
                 })
         except Exception as e:
-            logger.warning(
-                "Search failed for question '%s' (section %s): %s",
-                question,
-                brief.section_position,
-                e,
-            )
+            logger.warning("[research] Section %s: search failed for question '%s': %s", brief.section_position, question[:60], e)
             continue
 
     if not all_results:
-        raise RuntimeError(
-            f"All searches failed for section {brief.section_position}"
-        )
+        logger.error("[research] Section %s: all %d searches failed", brief.section_position, len(brief.questions))
+        raise RuntimeError(f"All searches failed for section {brief.section_position}")
 
-    logger.info(
-        "Section %s: collected %d search results from %d questions",
-        brief.section_position,
-        len(all_results),
-        len(brief.questions),
-    )
+    logger.info("[research] Section %s: collected %d search results, invoking researcher agent...", brief.section_position, len(all_results))
 
     # Pass to section researcher agent for evidence card extraction
     message = (
@@ -500,14 +484,14 @@ async def research_section(
 
     # Ensure we have an EvidenceCardSet
     if isinstance(result, EvidenceCardSet):
+        logger.info("[research] Section %s: extracted %d evidence cards", brief.section_position, len(result.cards))
         return result.cards
     elif isinstance(result, dict):
         card_set = EvidenceCardSet(**result)
+        logger.info("[research] Section %s: extracted %d evidence cards (from dict)", brief.section_position, len(card_set.cards))
         return card_set.cards
     else:
-        raise ValueError(
-            f"Section researcher returned unexpected type: {type(result)}"
-        )
+        raise ValueError(f"Section researcher returned unexpected type: {type(result)}")
 
 
 async def research_all_sections(
@@ -660,6 +644,7 @@ async def verify_evidence(
     4. Return VerificationResult
     """
     credentials = credentials or {}
+    logger.info("[verify] Verifying %d evidence cards against %d questions", len(cards), len(brief.questions))
     message = (
         f"Research brief questions:\n{json.dumps(brief.questions)}\n\n"
         f"Evidence cards:\n{_format_cards_for_verifier(cards)}"
@@ -673,19 +658,22 @@ async def verify_evidence(
         result = VerificationResult(**result)
 
     # Update card verified status in DB
+    verified_count = 0
     for v in result.card_verifications:
         if 0 <= v.card_index < len(cards):
             cards[v.card_index].verified = v.verified
             cards[v.card_index].verification_note = v.note
+            if v.verified:
+                verified_count += 1
 
     await _update_card_verification(cards, session)
 
     logger.info(
-        "Verification complete: %d/%d cards verified, needs_more_research=%s",
-        sum(1 for v in result.card_verifications if v.verified),
-        len(result.card_verifications),
-        result.needs_more_research,
+        "[verify] Verification complete: %d/%d cards verified, needs_more_research=%s, gaps=%d",
+        verified_count, len(result.card_verifications), result.needs_more_research, len(result.gaps),
     )
+    if result.gaps:
+        logger.debug("[verify] Gaps: %s", result.gaps)
 
     return result
 
@@ -952,6 +940,9 @@ async def write_section(
         sec_title = section.title
         sec_summary = section.summary
 
+    logger.info("[write] Writing section '%s' with %d verified cards (of %d total), blackboard=%s",
+                sec_title, len(verified_cards), len(cards), "present" if blackboard else "empty")
+
     # Build the message
     outline_text = _format_outline_context(outline)
     cards_text = _format_cards_for_writer(verified_cards)
@@ -967,16 +958,22 @@ async def write_section(
         f"Write the section now. Start with ## {sec_title}"
     )
 
-    # Invoke writer — returns plain markdown string (no structured output)
-    writer = create_writer(provider, model, credentials, extra_fields)
-    try:
-        result = await writer.ainvoke({"messages": [{"role": "user", "content": message}]})
-    except AttributeError:
-        result = await asyncio.to_thread(writer.invoke, {"messages": [{"role": "user", "content": message}]})
-    last_message = result["messages"][-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    # Invoke LLM directly — the writer needs plain markdown, not structured
+    # output via an agent framework. Direct call avoids tool distractions.
+    from app.agent import WRITER_PROMPT
+    from langchain_core.messages import SystemMessage, HumanMessage
 
-    logger.info("Writer produced draft for section '%s'", sec_title)
+    logger.info("[write] Invoking LLM for section '%s'...", sec_title)
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    messages = [SystemMessage(content=WRITER_PROMPT), HumanMessage(content=message)]
+    response = await llm.ainvoke(messages)
+    content = response.content if hasattr(response, "content") else str(response)
+
+    content_len = len(content.strip()) if content else 0
+    if content_len > 0:
+        logger.info("[write] Writer produced %d chars for section '%s'", content_len, sec_title)
+    else:
+        logger.warning("[write] Writer returned EMPTY content for section '%s'", sec_title)
     return content
 
 
@@ -999,10 +996,13 @@ async def edit_section(
     """Invoke the editor agent to polish a draft and generate blackboard updates.
 
     1. Build message with draft, blackboard state, evidence cards, section position
-    2. Invoke editor (JSON mode via LiteLLM)
+    2. Invoke editor agent (structured output via ToolStrategy)
     3. Return EditorResult
     """
     credentials = credentials or {}
+
+    logger.info("[edit] Editing section %d (draft=%d chars, cards=%d, blackboard=%s)",
+                section_position, len(draft), len(cards), "present" if blackboard else "empty")
 
     cards_text = _format_cards_for_writer(cards)
     blackboard_text = _format_blackboard_for_agent(blackboard)
@@ -1016,14 +1016,27 @@ async def edit_section(
         f"Polish the draft, check citations, and generate blackboard updates."
     )
 
+    logger.info("[edit] Invoking editor agent for section %d...", section_position)
     editor = create_editor(provider, model, credentials, extra_fields)
     result = await _invoke_agent(editor, message)
 
     # Ensure we have an EditorResult
     if isinstance(result, EditorResult):
+        edited_len = len(result.edited_content.strip()) if result.edited_content else 0
+        logger.info("[edit] Section %d: editor returned %d chars, %d glossary terms, %d topics covered",
+                    section_position, edited_len,
+                    len(result.blackboard_updates.new_glossary_terms),
+                    len(result.blackboard_updates.topics_covered))
+        if edited_len == 0:
+            logger.warning("[edit] Section %d: editor returned EMPTY edited_content", section_position)
         return result
     elif isinstance(result, dict):
-        return EditorResult(**result)
+        er = EditorResult(**result)
+        edited_len = len(er.edited_content.strip()) if er.edited_content else 0
+        logger.info("[edit] Section %d: editor returned %d chars (from dict)", section_position, edited_len)
+        if edited_len == 0:
+            logger.warning("[edit] Section %d: editor returned EMPTY edited_content", section_position)
+        return er
     else:
         raise ValueError(f"Editor returned unexpected type: {type(result)}")
 
@@ -1073,6 +1086,8 @@ async def run_discover_and_plan(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    *,
+    skip_status_update: bool = False,
 ) -> dict:
     """Run discovery research + planning for a course.
 
@@ -1158,7 +1173,8 @@ async def run_discover_and_plan(
         session.add(research_brief)
         new_briefs.append(research_brief)
 
-    course.status = "outline_ready"
+    if not skip_status_update:
+        course.status = "outline_ready"
     await session.commit()
 
     # Refresh to get IDs

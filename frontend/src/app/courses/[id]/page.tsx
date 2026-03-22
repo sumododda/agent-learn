@@ -37,8 +37,8 @@ export default function OutlineReviewPage() {
         const data = await getCourse(courseId, t);
         setCourse(data);
 
-        // If course is already generating, show progress
-        if (data.status === 'generating') {
+        // If course is in any active pipeline state, show progress
+        if (['generating', 'researching', 'writing', 'verifying', 'editing'].includes(data.status)) {
           setGenerating(true);
         }
       } catch (err) {
@@ -115,7 +115,7 @@ export default function OutlineReviewPage() {
     </>
   );
 
-  if (course.status === 'completed') {
+  if (course.status === 'completed' || course.status === 'completed_partial') {
     router.push(`/courses/${courseId}/learn`);
     return null;
   }

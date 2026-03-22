@@ -24,12 +24,22 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
+async def _ensure_cache(user_id: str, session) -> None:
+    """Lazy-load provider credentials into cache if not already present."""
+    if key_cache.get_default(user_id) is not None:
+        return
+    from app.routers.auth_routes import _load_provider_keys
+    uid = uuid.UUID(user_id)
+    await _load_provider_keys(user_id, uid, session)
+
+
 @router.get("/chat/models", response_model=list[ChatModelInfo])
 async def list_models(
     session: SessionDep,
     user_id: str = Depends(get_current_user),
 ):
     """Return available models for the user's default provider."""
+    await _ensure_cache(user_id, session)
     default = key_cache.get_default(user_id)
     if default is None:
         return []
@@ -76,7 +86,8 @@ async def chat_stream(
     if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
-    # Get provider credentials from cache
+    # Get provider credentials from cache (lazy-load if needed)
+    await _ensure_cache(user_id, session)
     default = key_cache.get_default(user_id)
     if default is None:
         raise HTTPException(status_code=400, detail="no_provider_configured")
@@ -110,8 +121,9 @@ async def chat_stream(
     )
 
     async def wrapper():
+        api_key = creds.get("api_key", "")
         gen, collected = await chat_service.stream_chat(
-            provider, body.model, messages, creds, extra_fields or {}
+            body.model, messages, api_key
         )
         try:
             async for chunk in gen:

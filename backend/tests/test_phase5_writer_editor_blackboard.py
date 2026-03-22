@@ -462,17 +462,17 @@ def test_format_outline_context_objects():
 
 
 # ---------------------------------------------------------------------------
-# Tests: write_section (deepagents writer via ChatLiteLLM)
+# Tests: write_section (direct LLM call)
 # ---------------------------------------------------------------------------
 
 
-def _mock_writer_agent(content_text):
-    """Create a mock writer agent whose ainvoke returns plain message content."""
-    mock_agent = AsyncMock()
-    mock_msg = MagicMock()
-    mock_msg.content = content_text
-    mock_agent.ainvoke.return_value = {"messages": [mock_msg]}
-    return mock_agent
+def _mock_writer_llm(content_text):
+    """Create a mock LLM whose ainvoke returns a message with .content."""
+    mock_llm = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.content = content_text
+    mock_llm.ainvoke.return_value = mock_response
+    return mock_llm
 
 
 @pytest.mark.anyio
@@ -486,20 +486,21 @@ async def test_write_section_filters_verified_cards(setup_db, db_session, course
     ]
 
     mock_content = "## Introduction\n\nPython was created in 1991 [1]. It uses dynamic typing [2]."
-    mock_agent = _mock_writer_agent(mock_content)
+    mock_llm = _mock_writer_llm(mock_content)
 
-    with patch("app.agent_service.create_writer", return_value=mock_agent):
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
 
     assert "## Introduction" in result
 
-    # Check that the message sent to the writer contains only verified cards
-    call_args = mock_agent.ainvoke.call_args
-    message = call_args[0][0]["messages"][0]["content"]
-    assert "Python was created by Guido van Rossum" in message
-    assert "Python uses dynamic typing" in message
+    # Check that the message sent to the LLM contains only verified cards
+    call_args = mock_llm.ainvoke.call_args
+    messages = call_args[0][0]
+    user_message = messages[1].content  # SystemMessage, HumanMessage
+    assert "Python was created by Guido van Rossum" in user_message
+    assert "Python uses dynamic typing" in user_message
 
 
 @pytest.mark.anyio
@@ -510,9 +511,9 @@ async def test_write_section_with_empty_blackboard(setup_db, db_session, course_
     section = SimpleNamespace(title="Introduction", summary="Getting started")
     outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
 
-    mock_agent = _mock_writer_agent("## Introduction\n\nContent here.")
+    mock_llm = _mock_writer_llm("## Introduction\n\nContent here.")
 
-    with patch("app.agent_service.create_writer", return_value=mock_agent):
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
@@ -528,9 +529,9 @@ async def test_write_section_with_dict_section(setup_db, db_session, course_with
     section = {"title": "Introduction", "summary": "Getting started", "position": 1}
     outline = [{"position": 1, "title": "Introduction", "summary": "Getting started"}]
 
-    mock_agent = _mock_writer_agent("## Introduction\n\nContent here.")
+    mock_llm = _mock_writer_llm("## Introduction\n\nContent here.")
 
-    with patch("app.agent_service.create_writer", return_value=mock_agent):
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
         from app.agent_service import write_section
 
         result = await write_section(cards, None, section, outline, db_session)
@@ -539,7 +540,7 @@ async def test_write_section_with_dict_section(setup_db, db_session, course_with
 
 
 # ---------------------------------------------------------------------------
-# Tests: edit_section (deepagents editor via ChatLiteLLM)
+# Tests: edit_section (langchain create_agent with ToolStrategy)
 # ---------------------------------------------------------------------------
 
 

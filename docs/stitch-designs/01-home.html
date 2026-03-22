@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>agent-learn | Home</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary-fixed-dim": "#d1d0ff",
+                        "primary-dim": "#b0b2ff",
+                        "primary-fixed": "#e1e0ff",
+                        "secondary-fixed": "#e5e1e6",
+                        "on-error-container": "#ff97a3",
+                        "tertiary": "#dee5ff",
+                        "surface-dim": "#0e0e10",
+                        "error-dim": "#b95463",
+                        "on-secondary-container": "#c1bec3",
+                        "on-secondary": "#202023",
+                        "error": "#ec7c8a",
+                        "background": "#0e0e10",
+                        "on-primary-fixed-variant": "#4647d3",
+                        "on-tertiary": "#4a536c",
+                        "on-surface-variant": "#acaab1",
+                        "surface-container": "#19191d",
+                        "outline-variant": "#47474e",
+                        "error-container": "#7f2737",
+                        "primary-container": "#2f2ebe",
+                        "on-tertiary-fixed": "#2f384f",
+                        "secondary-container": "#3c3b3f",
+                        "secondary-dim": "#9f9da1",
+                        "on-primary-fixed": "#2622b7",
+                        "surface-bright": "#2b2c32",
+                        "secondary": "#9f9da1",
+                        "on-surface": "#e7e4ec",
+                        "on-secondary-fixed-variant": "#5c5b5f",
+                        "surface-container-low": "#131316",
+                        "surface-container-lowest": "#000000",
+                        "on-primary-container": "#ccccff",
+                        "tertiary-fixed-dim": "#c0c9e6",
+                        "on-background": "#e7e4ec",
+                        "on-error": "#490013",
+                        "inverse-surface": "#fcf8fb",
+                        "on-primary": "#2724b8",
+                        "on-secondary-fixed": "#403f43",
+                        "surface-variant": "#25252b",
+                        "on-tertiary-container": "#424a63",
+                        "inverse-on-surface": "#565457",
+                        "primary": "#c0c1ff",
+                        "surface-container-highest": "#25252b",
+                        "tertiary-container": "#ced6f5",
+                        "inverse-primary": "#494bd7",
+                        "secondary-fixed-dim": "#d6d3d8",
+                        "tertiary-fixed": "#ced6f5",
+                        "on-tertiary-fixed-variant": "#4b546d",
+                        "surface": "#0e0e10",
+                        "tertiary-dim": "#c0c9e6",
+                        "outline": "#75757c",
+                        "surface-tint": "#c0c1ff",
+                        "surface-container-high": "#1f1f24"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            background-color: #09090b;
+            font-family: 'Inter', sans-serif;
+            color: #e7e4ec;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="antialiased">
+<!-- TopNavBar Component -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 bg-[#09090b] h-[48px] border-b border-[#27272a]">
+<div class="flex items-center gap-8">
+<span class="text-lg font-semibold text-slate-50 tracking-tight">agent-learn</span>
+<nav class="hidden md:flex items-center gap-6 h-full">
+<a class="text-indigo-500 font-semibold border-b-2 border-indigo-500 pb-3 mt-4 text-sm tracking-tight" href="#">Create</a>
+<a class="text-slate-400 hover:text-slate-200 transition-colors text-sm tracking-tight pb-3 mt-4" href="#">Library</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="w-8 h-8 rounded-full bg-[#27272a] flex items-center justify-center overflow-hidden border border-[#27272a]">
+<span class="material-symbols-outlined text-slate-400 text-lg" data-icon="account_circle">account_circle</span>
+</div>
+</div>
+</header>
+<!-- SideNavBar (Suppressed on Home per Shell Logic Filter, but kept as hidden trigger if needed) -->
+<aside class="hidden lg:flex flex-col fixed left-0 top-0 h-full w-64 bg-slate-950 border-r border-slate-800 z-40 transform -translate-x-full transition-transform duration-300">
+<div class="p-6">
+<h2 class="text-slate-50 font-bold">agent-learn</h2>
+<p class="text-xs text-slate-500">Sovereign Console</p>
+</div>
+<nav class="flex-1 px-4 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 bg-slate-900 text-indigo-400 border-l-2 border-indigo-500 text-sm font-medium" href="#">
+<span class="material-symbols-outlined" data-icon="home">home</span> Home
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:text-slate-300 text-sm font-medium" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span> Projects
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:text-slate-300 text-sm font-medium" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span> Settings
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:text-slate-300 text-sm font-medium" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span> Help
+            </a>
+</nav>
+</aside>
+<!-- Main Content Canvas -->
+<main class="relative pt-[120px] pb-24 px-6 flex flex-col items-center">
+<div class="w-full max-width-[640px] max-w-[640px] flex flex-col items-start">
+<!-- Heading -->
+<h1 class="text-[31px] font-semibold text-[#f8fafc] leading-tight tracking-[-0.02em] mb-4">
+                What will you learn?
+            </h1>
+<!-- Input Container -->
+<div class="w-full mb-6">
+<div class="relative group">
+<input class="w-full h-[48px] bg-[#18181b] border border-[#27272a] rounded-lg px-4 text-base text-[#e7e4ec] placeholder-[#71717a] focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all" placeholder="e.g. Kubernetes networking, Spanish for travel..." type="text"/>
+</div>
+</div>
+<!-- Suggestions chips row -->
+<div class="w-full flex flex-wrap gap-2 mb-12">
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-3 py-1.5 text-sm text-[#a1a1aa] hover:border-indigo-500/50 hover:text-slate-200 transition-colors">
+                    Machine Learning
+                </button>
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-3 py-1.5 text-sm text-[#a1a1aa] hover:border-indigo-500/50 hover:text-slate-200 transition-colors">
+                    React Hooks
+                </button>
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-3 py-1.5 text-sm text-[#a1a1aa] hover:border-indigo-500/50 hover:text-slate-200 transition-colors">
+                    System Design
+                </button>
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-3 py-1.5 text-sm text-[#a1a1aa] hover:border-indigo-500/50 hover:text-slate-200 transition-colors">
+                    Data Structures
+                </button>
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-3 py-1.5 text-sm text-[#a1a1aa] hover:border-indigo-500/50 hover:text-slate-200 transition-colors">
+                    Spanish
+                </button>
+</div>
+<!-- Footer Section with Progress and CTA -->
+<div class="w-full flex flex-col items-start gap-6 border-t border-[#27272a]/30 pt-12">
+<div class="flex flex-col gap-2">
+<div class="flex gap-2 items-center">
+<div class="w-2 h-2 rounded-full bg-indigo-500"></div>
+<div class="w-2 h-2 rounded-full border border-[#27272a]"></div>
+<div class="w-2 h-2 rounded-full border border-[#27272a]"></div>
+</div>
+<span class="text-xs text-[#71717a] font-medium uppercase tracking-wider">Step 1 of 3</span>
+</div>
+<div class="w-full flex justify-end">
+<button class="bg-indigo-500 text-white rounded-lg px-6 py-2.5 font-medium text-sm hover:bg-indigo-600 active:scale-[0.98] transition-all">
+                        Continue
+                    </button>
+</div>
+</div>
+</div>
+</main>
+<!-- Visual Anchor for Density (Optional Data Grid Preview) -->
+<section class="max-w-[640px] mx-auto px-6 mt-12 opacity-40">
+<div class="border-t border-[#27272a] pt-4">
+<p class="text-[10px] text-[#71717a] font-mono tracking-widest uppercase mb-4">Recent Sessions</p>
+<div class="space-y-0.5">
+<div class="flex justify-between items-center py-2 border-b border-[#27272a] border-opacity-30">
+<span class="text-sm font-mono text-[#a1a1aa]">LLM_ARCHITECTURES_01</span>
+<span class="text-[10px] text-[#52525b]">2H AGO</span>
+</div>
+<div class="flex justify-between items-center py-2 border-b border-[#27272a] border-opacity-30">
+<span class="text-sm font-mono text-[#a1a1aa]">RUST_MEMORY_SAFETY</span>
+<span class="text-[10px] text-[#52525b]">YESTERDAY</span>
+</div>
+</div>
+</div>
+</section>
+</body></html>

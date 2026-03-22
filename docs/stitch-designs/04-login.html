@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Login - agent-learn</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-secondary-container": "#b2b3f2",
+                        "outline": "#27272a",
+                        "on-error": "#690005",
+                        "on-error-container": "#ffdad6",
+                        "surface-bright": "#39393b",
+                        "on-primary": "#1000a9",
+                        "surface-container-highest": "#353437",
+                        "inverse-on-surface": "#313032",
+                        "surface-tint": "#c0c1ff",
+                        "on-tertiary-fixed": "#301400",
+                        "tertiary": "#ffb783",
+                        "on-secondary-fixed": "#13144a",
+                        "background": "#09090b",
+                        "inverse-surface": "#e5e1e4",
+                        "secondary-fixed": "#e1e0ff",
+                        "primary-fixed": "#e1e0ff",
+                        "tertiary-fixed": "#ffdcc5",
+                        "tertiary-container": "#d97721",
+                        "on-secondary-fixed-variant": "#404178",
+                        "error": "#ffb4ab",
+                        "surface": "#18181b",
+                        "primary": "#6366f1",
+                        "on-secondary": "#292a60",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "surface-container-high": "#2a2a2c",
+                        "on-primary-fixed-variant": "#2f2ebe",
+                        "surface-variant": "#353437",
+                        "inverse-primary": "#494bd6",
+                        "on-primary-container": "#0d0096",
+                        "primary-fixed-dim": "#c0c1ff",
+                        "error-container": "#93000a",
+                        "on-tertiary": "#4f2500",
+                        "tertiary-fixed-dim": "#ffb783",
+                        "on-surface-variant": "#a1a1aa",
+                        "surface-container": "#201f22",
+                        "on-surface": "#fafafa",
+                        "secondary": "#c0c1ff",
+                        "secondary-container": "#42447b",
+                        "on-tertiary-fixed-variant": "#703700",
+                        "primary-container": "#8083ff",
+                        "on-background": "#fafafa",
+                        "outline-variant": "#464554",
+                        "surface-container-lowest": "#0e0e10",
+                        "surface-container-low": "#1c1b1d",
+                        "on-primary-fixed": "#07006c",
+                        "surface-dim": "#131315",
+                        "on-tertiary-container": "#452000"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.375rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #09090b;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        input:focus {
+            outline: none;
+            border-color: #6366f1 !important;
+            ring: 0 !important;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen text-on-surface antialiased p-4">
+<!-- Brand Logo Anchor -->
+<div class="mb-8 select-none">
+<h1 class="text-[20px] font-semibold tracking-tighter text-on-background">agent-learn</h1>
+</div>
+<!-- Main Login Canvas -->
+<main class="w-full max-w-[380px] bg-surface border border-outline rounded-xl p-8 shadow-none">
+<!-- Header -->
+<header class="mb-6">
+<h2 class="text-[20px] font-semibold text-on-surface leading-tight">Sign in</h2>
+<p class="text-sm text-on-surface-variant mt-1">Welcome back</p>
+</header>
+<!-- Form Logic -->
+<form class="space-y-4" onsubmit="return false;">
+<!-- Email Field -->
+<div class="flex flex-col gap-1">
+<label class="text-xs font-medium uppercase tracking-wider text-on-surface-variant" for="email">Email</label>
+<input class="h-10 bg-surface-container-lowest border border-outline rounded-lg px-3 text-sm text-on-surface placeholder:text-[#52525b] transition-all duration-200" id="email" placeholder="name@company.com" type="email"/>
+</div>
+<!-- Password Field -->
+<div class="flex flex-col gap-1">
+<label class="text-xs font-medium uppercase tracking-wider text-on-surface-variant" for="password">Password</label>
+<div class="relative group">
+<input class="w-full h-10 bg-surface-container-lowest border border-outline rounded-lg px-3 pr-12 text-sm text-on-surface placeholder:text-[#52525b] transition-all duration-200" id="password" placeholder="••••••••" type="password"/>
+<button class="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-medium text-[#71717a] hover:text-on-surface transition-colors uppercase tracking-tighter cursor-pointer" type="button">
+                        Show
+                    </button>
+</div>
+</div>
+<!-- Action Area -->
+<div class="pt-2">
+<button class="w-full h-10 bg-primary hover:bg-[#4f46e5] active:opacity-90 text-white text-sm font-medium rounded-lg transition-colors duration-200 cursor-pointer" type="submit">
+                    Sign in
+                </button>
+</div>
+</form>
+<!-- Contextual Footer -->
+<footer class="mt-6 text-center">
+<p class="text-sm text-on-surface-variant">
+                Don't have an account? 
+                <a class="text-[#818cf8] hover:underline font-medium transition-all" href="#">Sign up</a>
+</p>
+</footer>
+</main>
+<!-- Tactical Information Anchor (Suppressed Shell Reference) -->
+<div class="fixed bottom-6 text-[10px] text-[#27272a] font-mono uppercase tracking-[0.2em] pointer-events-none">
+        Precision Learning Environment v1.0.4
+    </div>
+</body></html>

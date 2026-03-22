@@ -94,6 +94,11 @@ async def test_tavily_failure_creates_ungrounded_course(setup_db, client):
             return_value=("anthropic", "claude-sonnet-4-20250514", {"api_key": "sk-test"}, {}),
         ),
         patch(
+            "app.routers.courses._get_user_search_provider",
+            new_callable=AsyncMock,
+            return_value=("", {}),
+        ),
+        patch(
             "app.routers.courses.generate_outline",
             new_callable=AsyncMock,
             return_value=mock_return,

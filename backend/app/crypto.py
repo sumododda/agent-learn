@@ -1,27 +1,17 @@
-"""Password-based encryption for user API keys.
+"""Server-side encryption for user API keys.
 
-Uses Argon2id for key derivation (OWASP recommended) and AES-256-GCM
-for authenticated encryption. A server-side HMAC pepper adds defense
-against DB-only breaches.
+Uses HMAC-SHA256 for key derivation (pepper + per-user salt) and AES-256-GCM
+for authenticated encryption. Decryptable by the server anytime without
+user password — credentials are available immediately after any restart.
 """
 import base64
 import hmac
 import json
 import os
-from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-# KDF parameters (OWASP 2025 / RFC 9106 recommended for Argon2id)
-_TIME_COST = 3
-_MEMORY_COST = 65536  # 64 MiB in KiB
-_PARALLELISM = 4
-_HASH_LEN = 32  # 256-bit key
 _SALT_LEN = 16  # 128-bit salt
 _NONCE_LEN = 12  # 96-bit GCM nonce
-
-# Test-friendly overrides (set by conftest.py to speed up tests)
-_test_time_cost = None
-_test_memory_cost = None
 
 
 def generate_salt() -> bytes:
@@ -29,26 +19,14 @@ def generate_salt() -> bytes:
     return os.urandom(_SALT_LEN)
 
 
-def derive_key(password: str, salt: bytes, pepper: bytes) -> bytearray:
-    """Derive a 256-bit encryption key from password + salt + pepper.
+def derive_key(salt: bytes, pepper: bytes) -> bytearray:
+    """Derive a 256-bit encryption key from server pepper + per-user salt.
 
-    Steps:
-    1. HMAC-SHA256(pepper, password) — pre-mix pepper before KDF
-    2. Argon2id(peppered_password, salt) — memory-hard KDF
-
-    Returns a bytearray (mutable, can be zeroed after use).
+    HMAC-SHA256(pepper, salt) gives a unique 256-bit key per user.
+    No password needed — decryptable by the server anytime.
     """
-    peppered = hmac.digest(pepper, password.encode("utf-8"), "sha256")
-    raw_key = hash_secret_raw(
-        secret=peppered,
-        salt=salt,
-        time_cost=_test_time_cost or _TIME_COST,
-        memory_cost=_test_memory_cost or _MEMORY_COST,
-        parallelism=_PARALLELISM,
-        hash_len=_HASH_LEN,
-        type=Type.ID,
-    )
-    return bytearray(raw_key)
+    raw = hmac.digest(pepper, salt, "sha256")
+    return bytearray(raw)
 
 
 def encrypt_credentials(key: bytearray, plaintext: str) -> str:
@@ -96,9 +74,3 @@ def generate_credential_hint(provider: str, credentials: dict) -> str:
     if len(api_key) >= 4:
         return f"****{api_key[-4:]}"
     return "****"
-
-
-def zero_buffer(buf: bytearray) -> None:
-    """Best-effort secure zeroing of a bytearray (CPython)."""
-    for i in range(len(buf)):
-        buf[i] = 0

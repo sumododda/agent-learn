@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Learn — Course Generation Flow</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3348;
+    --text: #e2e8f0;
+    --text-dim: #8892b0;
+    --accent: #7c3aed;
+    --accent-light: #a78bfa;
+    --green: #10b981;
+    --green-dim: #065f46;
+    --blue: #3b82f6;
+    --blue-dim: #1e3a5f;
+    --orange: #f59e0b;
+    --orange-dim: #78350f;
+    --red: #ef4444;
+    --red-dim: #7f1d1d;
+    --pink: #ec4899;
+    --cyan: #06b6d4;
+    --parallel: #f59e0b;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 2rem;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(135deg, var(--accent-light), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    margin-bottom: 2.5rem;
+    font-size: 0.95rem;
+  }
+
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+  }
+
+  .flow {
+    max-width: 1100px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  /* Vertical connector line */
+  .connector {
+    display: flex;
+    justify-content: center;
+    padding: 0.5rem 0;
+  }
+
+  .connector .line {
+    width: 3px;
+    height: 40px;
+    background: var(--border);
+    position: relative;
+  }
+
+  .connector .line::after {
+    content: '▼';
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: var(--text-dim);
+    font-size: 0.6rem;
+  }
+
+  .connector.short .line { height: 24px; }
+
+  /* Phase wrapper */
+  .phase {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface);
+    padding: 1.5rem;
+    position: relative;
+    margin-bottom: 0;
+  }
+
+  .phase-label {
+    position: absolute;
+    top: -12px;
+    left: 24px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 2px 12px;
+    border-radius: 6px;
+    color: #fff;
+  }
+
+  .phase-label.frontend { background: var(--accent); }
+  .phase-label.backend { background: var(--blue); }
+  .phase-label.trigger { background: var(--orange); }
+  .phase-label.agent { background: var(--green); }
+  .phase-label.parallel { background: var(--pink); }
+
+  /* Node */
+  .node {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    background: var(--surface2);
+    margin-bottom: 0.75rem;
+    transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+    cursor: default;
+  }
+
+  .node:hover {
+    border-color: var(--accent-light);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(124, 58, 237, 0.15);
+  }
+
+  .node:last-child { margin-bottom: 0; }
+
+  .node-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .node-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+  }
+
+  .node-icon.user { background: var(--accent); }
+  .node-icon.api { background: var(--blue); }
+  .node-icon.db { background: var(--green); }
+  .node-icon.trigger { background: var(--orange); }
+  .node-icon.llm { background: var(--pink); }
+  .node-icon.search { background: var(--cyan); }
+  .node-icon.check { background: var(--green); }
+
+  .node-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  .node-desc {
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    margin-left: 2.6rem;
+  }
+
+  .node-meta {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    margin-left: 2.6rem;
+    flex-wrap: wrap;
+  }
+
+  .tag {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  .tag.endpoint { background: var(--blue-dim); color: var(--blue); }
+  .tag.model { background: var(--red-dim); color: #fca5a5; }
+  .tag.db-write { background: var(--green-dim); color: var(--green); }
+  .tag.retry { background: var(--orange-dim); color: var(--orange); }
+  .tag.parallel-tag { background: rgba(236,72,153,0.15); color: var(--pink); }
+  .tag.sequential { background: rgba(6,182,212,0.15); color: var(--cyan); }
+  .tag.file { background: rgba(124,58,237,0.15); color: var(--accent-light); }
+
+  /* Parallel container */
+  .parallel-container {
+    border: 2px dashed var(--pink);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    position: relative;
+  }
+
+  .parallel-label {
+    position: absolute;
+    top: -10px;
+    right: 16px;
+    background: var(--surface);
+    padding: 0 8px;
+    font-size: 0.7rem;
+    color: var(--pink);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .parallel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .parallel-grid .node { margin-bottom: 0; }
+
+  /* Sequential pipeline */
+  .seq-pipeline {
+    border: 2px solid var(--cyan);
+    border-radius: 12px;
+    padding: 1rem;
+    position: relative;
+  }
+
+  .seq-label {
+    position: absolute;
+    top: -10px;
+    right: 16px;
+    background: var(--surface);
+    padding: 0 8px;
+    font-size: 0.7rem;
+    color: var(--cyan);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .seq-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .seq-step:last-child { margin-bottom: 0; }
+
+  .seq-number {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--cyan);
+    color: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+    margin-top: 0.8rem;
+  }
+
+  .seq-step .node { flex: 1; margin-bottom: 0; }
+
+  .seq-arrow {
+    display: flex;
+    justify-content: flex-start;
+    padding: 0.25rem 0 0.25rem 0.8rem;
+    color: var(--text-dim);
+    font-size: 0.6rem;
+  }
+
+  /* Status decision */
+  .decision {
+    background: var(--surface2);
+    border: 2px solid var(--orange);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    text-align: center;
+  }
+
+  .decision-title {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+
+  .decision-options {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .decision-opt {
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .decision-opt.success { background: var(--green-dim); color: var(--green); }
+  .decision-opt.partial { background: var(--orange-dim); color: var(--orange); }
+  .decision-opt.fail { background: var(--red-dim); color: var(--red); }
+
+  /* Section header within phases */
+  .section-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 1rem 0 0.75rem;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .section-divider::before,
+  .section-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Expand details */
+  .expandable {
+    cursor: pointer;
+  }
+
+  .expand-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+  }
+
+  .expandable.open .expand-content {
+    max-height: 600px;
+  }
+
+  .expand-toggle {
+    margin-left: 2.6rem;
+    margin-top: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--accent-light);
+    cursor: pointer;
+  }
+
+  .expand-toggle:hover { text-decoration: underline; }
+
+  .detail-list {
+    margin-top: 0.5rem;
+    margin-left: 2.6rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+
+  .detail-list li {
+    margin-bottom: 0.15rem;
+    list-style: none;
+    padding-left: 1rem;
+    position: relative;
+  }
+
+  .detail-list li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--accent-light);
+  }
+
+  .highlight { color: var(--text); font-weight: 500; }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    body { padding: 1rem; }
+    .parallel-grid { grid-template-columns: 1fr; }
+    .phase { padding: 1rem; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Agent Learn — Course Generation Flow</h1>
+<p class="subtitle">Complete system flow from user input to finished course content</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div> User Action</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div> API / Backend</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--orange)"></div> Trigger.dev</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--pink)"></div> LLM Agent</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--cyan)"></div> Web Search</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Database</div>
+</div>
+
+<div class="flow">
+
+  <!-- ─── PHASE 1: COURSE CREATION ─── -->
+  <div class="phase">
+    <div class="phase-label frontend">Phase 1 — Course Creation (Synchronous)</div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon user">👤</div>
+        <div class="node-title">User Enters Topic + Instructions</div>
+      </div>
+      <div class="node-desc">Home page form: topic (required), instructions (optional)</div>
+      <div class="node-meta">
+        <span class="tag file">frontend/src/app/page.tsx</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Topic field: <span class="highlight">"What do you want to learn?"</span></li>
+          <li>Instructions field: <span class="highlight">"Keep it practical, assume I know Docker basics..."</span></li>
+          <li>Submit triggers <span class="highlight">createCourse()</span> API call</li>
+          <li>Loading state shows "Generating outline..." on button</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connector short"><div class="line"></div></div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon api">⚡</div>
+        <div class="node-title">POST /api/courses</div>
+      </div>
+      <div class="node-desc">Creates course record, triggers synchronous outline generation</div>
+      <div class="node-meta">
+        <span class="tag endpoint">courses.py:41-111</span>
+        <span class="tag db-write">DB: Course row</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Request body: <span class="highlight">{ topic, instructions }</span></li>
+          <li>Creates <span class="highlight">Course</span> with status=<span class="highlight">"researching"</span></li>
+          <li>Calls <span class="highlight">generate_outline()</span> synchronously (blocks HTTP response)</li>
+          <li>Returns <span class="highlight">CourseResponse</span> with sections once complete</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connector short"><div class="line"></div></div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon search">🔎</div>
+        <div class="node-title">Discovery Research — Tavily Web Search</div>
+      </div>
+      <div class="node-desc">Generates 3-5 search queries, performs web searches for topic fundamentals, concepts, roadmap</div>
+      <div class="node-meta">
+        <span class="tag file">agent_service.py:165-223</span>
+        <span class="tag model">Tavily API</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Query categories: <span class="highlight">fundamentals, concepts, roadmap, instructions-specific, best practices</span></li>
+          <li>Search config: <span class="highlight">search_depth="basic", max_results=5</span> per query</li>
+          <li>Aggregates all search results into a single context</li>
+          <li>If Tavily fails → sets <span class="highlight">ungrounded=true</span> (continues without sources)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connector short"><div class="line"></div></div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon llm">🧠</div>
+        <div class="node-title">Discovery Researcher Agent</div>
+      </div>
+      <div class="node-desc">LLM synthesizes search results into a structured TopicBrief</div>
+      <div class="node-meta">
+        <span class="tag model">OpenRouter / Gemini 3.1 Pro</span>
+        <span class="tag file">agent_service.py:191-213</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Output: <span class="highlight">TopicBrief</span> schema</li>
+          <li>Fields: key_concepts, subtopics, authoritative_sources</li>
+          <li>Fields: learning_progression, open_debates, raw_search_results</li>
+          <li>Identifies natural learning order and prerequisite chains</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connector short"><div class="line"></div></div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon llm">📋</div>
+        <div class="node-title">Planner Agent — Generate Outline + Research Briefs</div>
+      </div>
+      <div class="node-desc">Creates 5-10 sections ordered by dependency, each with 3-5 must-answer research questions and source policy</div>
+      <div class="node-meta">
+        <span class="tag model">OpenRouter / Gemini 3.1 Pro</span>
+        <span class="tag db-write">DB: Sections, ResearchBriefs</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Output: <span class="highlight">CourseOutlineWithBriefs</span> schema</li>
+          <li>Each section: position, title, summary</li>
+          <li>Each research brief: questions[], source_policy (preferred_tiers, scope, out_of_scope)</li>
+          <li>Source tiers: <span class="highlight">1=official docs, 2=reputable blogs, 3=forums/repos</span></li>
+          <li>DB writes: Section rows + ResearchBrief rows (including discovery brief)</li>
+          <li>Sets course status → <span class="highlight">"outline_ready"</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- ─── PHASE 2: OUTLINE REVIEW ─── -->
+  <div class="phase">
+    <div class="phase-label frontend">Phase 2 — Outline Review (User Decision)</div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon user">👁️</div>
+        <div class="node-title">User Reviews Course Outline</div>
+      </div>
+      <div class="node-desc">Displays sections with titles and summaries. User can add overall feedback or per-section comments.</div>
+      <div class="node-meta">
+        <span class="tag file">frontend/src/app/courses/[id]/page.tsx</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Overall feedback textarea (optional)</li>
+          <li>Per-section comment fields (optional)</li>
+          <li>Two actions: <span class="highlight">"Approve & Generate"</span> or <span class="highlight">"Regenerate with Feedback"</span></li>
+          <li>Regenerate → <span class="highlight">POST /api/courses/{id}/regenerate</span> → reruns planner with feedback</li>
+          <li>Regenerate stays on outline page for re-review (loop)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connector short"><div class="line"></div></div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon user">✅</div>
+        <div class="node-title">User Clicks "Approve & Generate"</div>
+      </div>
+      <div class="node-desc">Triggers full course content generation via Trigger.dev</div>
+      <div class="node-meta">
+        <span class="tag endpoint">POST /api/courses/{id}/generate</span>
+        <span class="tag file">courses.py:114-180</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Backend sets course status → <span class="highlight">"generating"</span></li>
+          <li>HTTP POST to Trigger.dev REST API: <span class="highlight">/api/v1/tasks/generate-course/trigger</span></li>
+          <li>Payload: <span class="highlight">{ courseId }</span></li>
+          <li>Auth: <span class="highlight">Bearer TRIGGER_SECRET_KEY</span></li>
+          <li>Returns <span class="highlight">run_id</span> for real-time progress tracking</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- ─── PHASE 3: TRIGGER.DEV ORCHESTRATION ─── -->
+  <div class="phase">
+    <div class="phase-label trigger">Phase 3 — Trigger.dev Orchestration</div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon trigger">🎯</div>
+        <div class="node-title">generate-course Task (Master Orchestrator)</div>
+      </div>
+      <div class="node-desc">Coordinates entire pipeline: discover → research → verify → write → edit. Reports real-time progress via metadata.</div>
+      <div class="node-meta">
+        <span class="tag file">trigger/src/tasks/generate-course.ts</span>
+        <span class="tag retry">maxAttempts: 1</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Uses <span class="highlight">metadata.set("pipeline", {...})</span> for real-time progress</li>
+          <li>Frontend consumes via <span class="highlight">useRealtimeRun(runId)</span> hook</li>
+          <li>Progress stages: planning → researching → writing → completed</li>
+          <li>Per-section tracking: stage of each section independently</li>
+          <li>Max duration: <span class="highlight">300 seconds</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section-divider">Step 1 — Discover & Plan</div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon trigger">📡</div>
+        <div class="node-title">discover-and-plan Task</div>
+      </div>
+      <div class="node-desc">Calls backend internal API. Backend runs discovery researcher + planner agents (same as Phase 1 but via Trigger.dev).</div>
+      <div class="node-meta">
+        <span class="tag endpoint">POST /api/internal/discover-and-plan</span>
+        <span class="tag retry">maxAttempts: 3</span>
+        <span class="tag sequential">triggerAndWait</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Auth header: <span class="highlight">X-Internal-Token</span></li>
+          <li>Returns: <span class="highlight">sections[], research_briefs[], ungrounded</span></li>
+          <li>If fails after 3 retries → entire pipeline aborts with "failed" status</li>
+          <li>Backend handler: <span class="highlight">internal.py:73-92</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section-divider">Step 2 — Research (Parallel)</div>
+
+    <div class="parallel-container">
+      <div class="parallel-label">⚡ All Sections in Parallel — batch.triggerAndWait()</div>
+      <div class="parallel-grid">
+
+        <div class="node expandable" onclick="this.classList.toggle('open')">
+          <div class="node-header">
+            <div class="node-icon search">🔬</div>
+            <div class="node-title">research-section [1]</div>
+          </div>
+          <div class="node-desc">Tavily searches per question → section researcher agent extracts evidence cards</div>
+          <div class="node-meta">
+            <span class="tag retry">×3</span>
+            <span class="tag parallel-tag">parallel</span>
+          </div>
+          <div class="expand-toggle">▸ details</div>
+          <div class="expand-content">
+            <ul class="detail-list">
+              <li>Searches each must-answer question via Tavily</li>
+              <li>LLM extracts <span class="highlight">EvidenceCards</span>: claim, source_url, passage, confidence, tier</li>
+              <li>DB writes: <span class="highlight">EvidenceCard</span> rows per section</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="node expandable" onclick="this.classList.toggle('open')">
+          <div class="node-header">
+            <div class="node-icon search">🔬</div>
+            <div class="node-title">research-section [2]</div>
+          </div>
+          <div class="node-desc">Same pipeline, different section questions and sources</div>
+          <div class="node-meta">
+            <span class="tag retry">×3</span>
+            <span class="tag parallel-tag">parallel</span>
+          </div>
+        </div>
+
+        <div class="node expandable" onclick="this.classList.toggle('open')">
+          <div class="node-header">
+            <div class="node-icon search">🔬</div>
+            <div class="node-title">research-section [N]</div>
+          </div>
+          <div class="node-desc">One task per section — all execute simultaneously</div>
+          <div class="node-meta">
+            <span class="tag retry">×3</span>
+            <span class="tag parallel-tag">parallel</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="section-divider">Step 3 — Per-Section Pipeline (Sequential)</div>
+
+    <div class="seq-pipeline" style="margin-bottom: 0.75rem">
+      <div class="seq-label">🔄 For each section — Sequential within, iterates all sections</div>
+
+      <div class="seq-step">
+        <div class="seq-number">A</div>
+        <div class="node expandable" onclick="this.classList.toggle('open')">
+          <div class="node-header">
+            <div class="node-icon check">🔍</div>
+            <div class="node-title">verify-section Task</div>
+          </div>
+          <div class="node-desc">Verifier agent checks each evidence card: Is claim specific? Does passage support it? Confidence reasonable?</div>
+          <div class="node-meta">
+            <span class="tag endpoint">POST /api/internal/verify-section</span>
+            <span class="tag retry">maxAttempts: 2</span>
+          </div>
+          <div class="expand-toggle">▸ details</div>
+          <div class="expand-content">
+            <ul class="detail-list">
+              <li>Reviews each evidence card for quality and accuracy</li>
+              <li>Marks cards: <span class="highlight">verified=true/false</span> with verification_note</li>
+              <li>Coverage check: ≥1 verified card per must-answer question</li>
+              <li>If gaps found: <span class="highlight">needs_more_research=true</span></li>
+              <li>Targeted re-research with <span class="highlight">search_depth="advanced"</span> (2 credits/query)</li>
+              <li>Returns: cards_verified, cards_total, needs_more_research, gaps[]</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="seq-arrow">↓ if pass</div>
+
+      <div class="seq-step">
+        <div class="seq-number">B</div>
+        <div class="node expandable" onclick="this.classList.toggle('open')">
+          <div class="node-header">
+            <div class="node-icon llm">✍️</div>
+            <div class="node-title">write-section Task</div>
+          </div>
+          <div class="node-desc">Writer agent generates markdown content with [N] citation markers using verified evidence cards + blackboard context</div>
+          <div class="node-meta">
+            <span class="tag endpoint">POST /api/internal/write-section</span>
+            <span class="tag retry">maxAttempts: 3</span>
+            <span class="tag model">OpenRouter LLM</span>
+          </div>
+          <div class="expand-toggle">▸ details</div>
+          <div class="expand-content">
+            <ul class="detail-list">
+              <li>Input: verified evidence cards, blackboard (glossary, concept_ownership, coverage_map)</li>
+              <li>Structure: <span class="highlight">Why This Matters → Main Explanation → Examples → Key Takeaways → What Comes Next</span></li>
+              <li>Mandatory: starts with <span class="highlight">## Section Title</span></li>
+              <li>Uses [N] markers for all factual claims (1-indexed to evidence cards)</li>
+              <li>Blackboard-aware: doesn't re-define glossary terms, references prior sections</li>
+              <li>Target: <span class="highlight">400-800 words</span> per section</li>
+              <li>DB writes: <span class="highlight">Section.content</span> + <span class="highlight">Section.citations</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="seq-arrow">↓ if pass</div>
+
+      <div class="seq-step">
+        <div class="seq-number">C</div>
+        <div class="node expandable" onclick="this.classList.toggle('open')">
+          <div class="node-header">
+            <div class="node-icon llm">🖊️</div>
+            <div class="node-title">edit-section Task</div>
+          </div>
+          <div class="node-desc">Editor agent polishes content, ensures consistency, verifies citations, and generates blackboard updates for downstream sections</div>
+          <div class="node-meta">
+            <span class="tag endpoint">POST /api/internal/edit-section</span>
+            <span class="tag retry">maxAttempts: 2</span>
+            <span class="tag db-write">DB: Section, Blackboard</span>
+          </div>
+          <div class="expand-toggle">▸ details</div>
+          <div class="expand-content">
+            <ul class="detail-list">
+              <li>Polish: terminology consistency, transitions, repetition removal</li>
+              <li>Citation verification: ensures all [N] markers map to valid cards</li>
+              <li>Generates blackboard updates:
+                <span class="highlight">new_glossary_terms, new_concept_ownership, topics_covered, key_points_summary, new_sources</span></li>
+              <li>Blackboard merging: <span class="highlight">update_blackboard()</span> preserves prior section data</li>
+              <li>DB writes: <span class="highlight">Section.content</span> (edited) + <span class="highlight">Blackboard</span> rows</li>
+              <li>Blackboard enables downstream sections to build on earlier content coherently</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-divider">Step 4 — Finalize</div>
+
+    <div class="decision">
+      <div class="decision-title">Determine Final Course Status</div>
+      <div style="color:var(--text-dim);font-size:0.82rem;margin-bottom:0.75rem">
+        Count failed sections across all section pipelines
+      </div>
+      <div class="decision-options">
+        <div class="decision-opt success">0 failures → "completed"</div>
+        <div class="decision-opt partial">Some failures → "completed_partial"</div>
+        <div class="decision-opt fail">All failed → "failed"</div>
+      </div>
+      <div class="node-meta" style="justify-content:center;margin:0.75rem 0 0">
+        <span class="tag endpoint">POST /api/internal/set-course-status</span>
+        <span class="tag db-write">DB: Course.status</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- ─── PHASE 4: REAL-TIME PROGRESS ─── -->
+  <div class="phase">
+    <div class="phase-label frontend">Phase 4 — Real-Time Progress (Frontend)</div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon user">📊</div>
+        <div class="node-title">PipelineProgress Component</div>
+      </div>
+      <div class="node-desc">Real-time updates via Trigger.dev React hooks. Shows per-section status with color-coded stages and progress bar.</div>
+      <div class="node-meta">
+        <span class="tag file">frontend/src/components/PipelineProgress.tsx</span>
+        <span class="tag model">@trigger.dev/react-hooks</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>Uses <span class="highlight">useRealtimeRun(runId)</span> hook</li>
+          <li>Auth: <span class="highlight">NEXT_PUBLIC_TRIGGER_PUBLIC_API_KEY</span></li>
+          <li>Displays: overall stage, progress bar (completed/total), per-section status</li>
+          <li>Colors: <span class="highlight" style="color:var(--blue)">Blue</span>=Researching/Verifying,
+            <span class="highlight" style="color:var(--accent)">Purple</span>=Writing/Editing,
+            <span class="highlight" style="color:var(--green)">Green</span>=Completed,
+            <span class="highlight" style="color:var(--red)">Red</span>=Failed</li>
+          <li>On COMPLETED → redirects to <span class="highlight">/courses/{id}/learn</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- ─── PHASE 5: LEARNING ─── -->
+  <div class="phase">
+    <div class="phase-label frontend">Phase 5 — Learning Experience</div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon user">📖</div>
+        <div class="node-title">Learn Page — Section Reader</div>
+      </div>
+      <div class="node-desc">Sidebar with all sections (completion checkmarks), main area renders markdown content with citations, prev/next navigation.</div>
+      <div class="node-meta">
+        <span class="tag file">frontend/src/app/courses/[id]/learn/page.tsx</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>On mount: loads course + restores position via <span class="highlight">getProgress()</span></li>
+          <li>Sidebar: sections list with <span class="highlight">green checkmarks</span> for completed</li>
+          <li>Content: <span class="highlight">react-markdown</span> renders section.content</li>
+          <li>Citations: <span class="highlight">CitationRenderer</span> transforms [N] to clickable links</li>
+          <li>Evidence: <span class="highlight">EvidencePanel</span> shows expandable source cards with tier/confidence</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connector short"><div class="line"></div></div>
+
+    <div class="node expandable" onclick="this.classList.toggle('open')">
+      <div class="node-header">
+        <div class="node-icon db">📈</div>
+        <div class="node-title">Progress Tracking</div>
+      </div>
+      <div class="node-desc">Tracks current_section and completed_sections[] per user per course. Resumes from last position on return.</div>
+      <div class="node-meta">
+        <span class="tag endpoint">GET/POST /api/courses/{id}/progress</span>
+        <span class="tag db-write">DB: LearnerProgress</span>
+      </div>
+      <div class="expand-toggle">▸ details</div>
+      <div class="expand-content">
+        <ul class="detail-list">
+          <li>On section click: updates <span class="highlight">current_section</span></li>
+          <li>On "Next": marks current as completed + advances</li>
+          <li>On "Previous": only updates current (no completion)</li>
+          <li>Library page shows: <span class="highlight">completedCount / totalSections</span> with progress bar</li>
+          <li>DB: <span class="highlight">LearnerProgress</span> table, unique constraint on (user_id, course_id)</li>
+          <li>Sorted by <span class="highlight">last_accessed_at</span> in library view</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <br><br>
+
+  <!-- ─── DATA MODEL REFERENCE ─── -->
+  <div class="phase" style="border-color: var(--accent)">
+    <div class="phase-label" style="background:var(--accent)">Data Model — 6 Tables</div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0.75rem">
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon db">📦</div>
+          <div class="node-title">Course</div>
+        </div>
+        <div class="node-desc">id, topic, instructions, status, user_id, ungrounded, created_at</div>
+      </div>
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon db">📄</div>
+          <div class="node-title">Section</div>
+        </div>
+        <div class="node-desc">id, course_id, position, title, summary, content, citations</div>
+      </div>
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon db">🔎</div>
+          <div class="node-title">ResearchBrief</div>
+        </div>
+        <div class="node-desc">id, course_id, section_position, questions[], source_policy, findings</div>
+      </div>
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon db">🃏</div>
+          <div class="node-title">EvidenceCard</div>
+        </div>
+        <div class="node-desc">id, course_id, section_position, claim, source_url, passage, confidence, verified</div>
+      </div>
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon db">🖥️</div>
+          <div class="node-title">Blackboard</div>
+        </div>
+        <div class="node-desc">id, course_id, glossary, concept_ownership, coverage_map, key_points, source_log</div>
+      </div>
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon db">📊</div>
+          <div class="node-title">LearnerProgress</div>
+        </div>
+        <div class="node-desc">id, user_id, course_id, current_section, completed_sections[], last_accessed_at</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // All expandable nodes start collapsed - click to expand
+  document.querySelectorAll('.expandable').forEach(node => {
+    node.addEventListener('click', (e) => {
+      // Don't toggle if clicking a link
+      if (e.target.tagName === 'A') return;
+    });
+  });
+</script>
+
+</body>
+</html>

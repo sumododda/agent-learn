@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Settings - agent-learn</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-primary-fixed-variant": "#4647d3",
+                        "on-secondary-fixed-variant": "#5c5b5f",
+                        "on-secondary-container": "#c1bec3",
+                        "inverse-surface": "#fcf8fb",
+                        "on-surface": "#e7e4ec",
+                        "surface-container-high": "#1f1f24",
+                        "primary-fixed": "#e1e0ff",
+                        "tertiary-fixed": "#ced6f5",
+                        "tertiary-fixed-dim": "#c0c9e6",
+                        "surface-container": "#19191d",
+                        "primary-fixed-dim": "#d1d0ff",
+                        "on-primary": "#2724b8",
+                        "primary-dim": "#b0b2ff",
+                        "primary-container": "#2f2ebe",
+                        "tertiary-container": "#ced6f5",
+                        "tertiary": "#dee5ff",
+                        "outline-variant": "#47474e",
+                        "on-error-container": "#ff97a3",
+                        "on-tertiary-container": "#424a63",
+                        "on-tertiary-fixed-variant": "#4b546d",
+                        "on-secondary": "#202023",
+                        "tertiary-dim": "#c0c9e6",
+                        "secondary-container": "#3c3b3f",
+                        "primary": "#c0c1ff",
+                        "surface-dim": "#0e0e10",
+                        "on-secondary-fixed": "#403f43",
+                        "surface-container-highest": "#25252b",
+                        "background": "#0e0e10",
+                        "surface-tint": "#c0c1ff",
+                        "error-dim": "#b95463",
+                        "surface-bright": "#2b2c32",
+                        "surface": "#0e0e10",
+                        "outline": "#75757c",
+                        "on-tertiary": "#4a536c",
+                        "surface-container-lowest": "#000000",
+                        "on-error": "#490013",
+                        "error-container": "#7f2737",
+                        "surface-variant": "#25252b",
+                        "secondary-fixed-dim": "#d6d3d8",
+                        "on-primary-fixed": "#2622b7",
+                        "secondary-fixed": "#e5e1e6",
+                        "on-primary-container": "#ccccff",
+                        "secondary-dim": "#9f9da1",
+                        "on-tertiary-fixed": "#2f384f",
+                        "on-surface-variant": "#acaab1",
+                        "secondary": "#9f9da1",
+                        "error": "#ec7c8a",
+                        "surface-container-low": "#131316",
+                        "inverse-on-surface": "#565457",
+                        "on-background": "#e7e4ec",
+                        "inverse-primary": "#494bd7"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    },
+                    borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0e0e10;
+            color: #e7e4ec;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface">
+<!-- TopAppBar -->
+<header class="bg-[#131316] text-[#c0c1ff] font-inter tracking-[-0.02em] text-sm docked full-width top-0 h-14 border-b border-[#47474e]/30 flex items-center justify-between px-6 w-full gap-8 fixed z-50">
+<div class="flex items-center gap-8 flex-1">
+<span class="text-xl font-bold tracking-tighter text-[#e7e4ec]">agent-learn</span>
+<nav class="hidden md:flex items-center gap-6 h-full">
+<a class="text-[#acaab1] h-full flex items-center hover:text-[#e7e4ec] hover:bg-[#19191d] transition-all duration-200 ease-in-out" href="#">Dashboard</a>
+<a class="text-[#acaab1] h-full flex items-center hover:text-[#e7e4ec] hover:bg-[#19191d] transition-all duration-200 ease-in-out" href="#">Models</a>
+<a class="text-[#acaab1] h-full flex items-center hover:text-[#e7e4ec] hover:bg-[#19191d] transition-all duration-200 ease-in-out" href="#">Datasets</a>
+<a class="text-[#c0c1ff] border-b border-[#6366f1] h-full flex items-center hover:bg-[#19191d] transition-all duration-200 ease-in-out" href="#">Settings</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-[#acaab1] hover:text-[#e7e4ec] transition-all flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="text-[#acaab1] hover:text-[#e7e4ec] transition-all flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+</button>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-[#47474e]/50">
+<img alt="User Profile" data-alt="User profile avatar icon placeholder" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAxrpyhdzJUbeUf1BEZPQ8tDRAHgW7Zb1GK9_X08KGdugHvOgxVTJnfKXPYIFbVneTS7jWlYuhpl1rm1S0mo46wsFFrB_vlfJdYyxKRjWDZbbAybTnzqI3j97QhEAj7WaKh_EYOBuEj5PNkroDv_N4DCzZtmbYyuLddzdpupMfiT84mdO7gP1UOGIee8k_CqDpPJO5Lyovy3FEcYIhJnQgZ9usPPgp-vpHNOlYWhf93xZb8PFxl3JRPia8JGM-9rLM-TvMBykzsVEQ"/>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-14 flex flex-col py-4 gap-1 bg-[#0e0e10] text-[#c0c1ff] font-inter text-[13px] docked left-0 h-screen w-64 border-r border-[#47474e]/30 z-40 hidden lg:flex">
+<div class="px-5 mb-6">
+<div class="flex items-center gap-3">
+<div class="w-6 h-6 bg-primary-container rounded flex items-center justify-center text-[10px] font-bold">PA</div>
+<div>
+<div class="font-bold text-[#e7e4ec]">Project Alpha</div>
+<div class="text-[11px] text-[#acaab1]">Technical Settings</div>
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<a class="bg-[#25252b] text-[#c0c1ff] rounded-md mx-2 px-3 py-2 flex items-center gap-3 scale-98 active:scale-95 transition-transform hover:bg-[#19191d] hover:text-[#e7e4ec]" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>General</span>
+</a>
+<a class="text-[#acaab1] mx-2 px-3 py-2 flex items-center gap-3 scale-98 active:scale-95 transition-transform hover:bg-[#19191d] hover:text-[#e7e4ec]" href="#">
+<span class="material-symbols-outlined" data-icon="shield">shield</span>
+<span>Security</span>
+</a>
+<a class="text-[#acaab1] mx-2 px-3 py-2 flex items-center gap-3 scale-98 active:scale-95 transition-transform hover:bg-[#19191d] hover:text-[#e7e4ec]" href="#">
+<span class="material-symbols-outlined" data-icon="key">key</span>
+<span>API Keys</span>
+</a>
+<a class="text-[#acaab1] mx-2 px-3 py-2 flex items-center gap-3 scale-98 active:scale-95 transition-transform hover:bg-[#19191d] hover:text-[#e7e4ec]" href="#">
+<span class="material-symbols-outlined" data-icon="credit_card">credit_card</span>
+<span>Billing</span>
+</a>
+<a class="text-[#acaab1] mx-2 px-3 py-2 flex items-center gap-3 scale-98 active:scale-95 transition-transform hover:bg-[#19191d] hover:text-[#e7e4ec]" href="#">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span>Team</span>
+</a>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="lg:ml-64 pt-14 min-h-screen">
+<div class="max-w-[720px] mx-auto pt-8 px-6 pb-20">
+<!-- Heading -->
+<header class="mb-8">
+<h1 class="text-[25px] font-semibold text-[#fafafa] tracking-tight">Settings</h1>
+<p class="text-sm text-[#a1a1aa] mt-2">Manage your providers and preferences</p>
+</header>
+<!-- Tabs -->
+<div class="border-b border-[#27272a] mb-8">
+<div class="flex gap-4">
+<button class="pb-3 px-1 text-sm font-medium text-[#fafafa] border-b-2 border-[#6366f1] relative top-[1px]">
+                        AI Provider
+                    </button>
+<button class="pb-3 px-1 text-sm font-medium text-[#a1a1aa] hover:text-[#fafafa] transition-colors">
+                        Search
+                    </button>
+<button class="pb-3 px-1 text-sm font-medium text-[#a1a1aa] hover:text-[#fafafa] transition-colors">
+                        Account
+                    </button>
+</div>
+</div>
+<!-- AI Provider Content -->
+<section class="space-y-8">
+<div class="space-y-6">
+<h2 class="text-sm font-semibold text-[#fafafa]">OpenRouter</h2>
+<!-- API Key Field -->
+<div class="space-y-2">
+<label class="block text-sm text-[#a1a1aa]" for="api-key">API Key</label>
+<div class="flex gap-2">
+<div class="relative flex-1">
+<input class="w-full bg-[#09090b] border border-[#27272a] rounded-md px-3 py-2 text-sm text-[#fafafa] focus:ring-1 focus:ring-[#6366f1] focus:border-[#6366f1] transition-all outline-none" id="api-key" readonly="" type="password" value="••••••••••••••••"/>
+</div>
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-4 py-2 text-sm text-[#d1d5db] hover:bg-[#27272a] transition-all active:scale-95">
+                                Verify
+                            </button>
+</div>
+<div class="flex items-center gap-1.5 mt-1.5">
+<div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+<span class="text-xs text-emerald-400">Connected</span>
+</div>
+</div>
+<!-- Model Field -->
+<div class="space-y-2">
+<label class="block text-sm text-[#a1a1aa]" for="model-select">Model</label>
+<div class="relative group">
+<select class="w-full bg-[#09090b] border border-[#27272a] rounded-md px-3 py-2 text-sm text-[#fafafa] appearance-none focus:ring-1 focus:ring-[#6366f1] focus:border-[#6366f1] transition-all outline-none cursor-pointer" id="model-select">
+<option>google/gemini-2.0-flash</option>
+<option>anthropic/claude-3-sonnet</option>
+<option>openai/gpt-4o</option>
+</select>
+<div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
+<span class="material-symbols-outlined text-[18px]">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Test Action -->
+<div class="flex items-center gap-3 pt-2">
+<button class="bg-[#18181b] border border-[#27272a] rounded-md px-4 py-2 text-sm text-[#d1d5db] hover:bg-[#27272a] transition-all active:scale-95">
+                            Test Connection
+                        </button>
+<span class="text-xs text-[#71717a] font-mono">245ms</span>
+</div>
+</div>
+<!-- Secondary Section (Visual Density Demonstration) -->
+<div class="pt-8 border-t border-[#27272a] space-y-6">
+<h2 class="text-sm font-semibold text-[#fafafa]">Configuration Defaults</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<div class="p-4 bg-[#131316] border border-[#27272a] rounded-md">
+<div class="text-xs text-[#a1a1aa] mb-1">Temperature</div>
+<div class="text-sm text-[#fafafa]">0.7</div>
+</div>
+<div class="p-4 bg-[#131316] border border-[#27272a] rounded-md">
+<div class="text-xs text-[#a1a1aa] mb-1">Max Tokens</div>
+<div class="text-sm text-[#fafafa]">4,096</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Danger Zone -->
+<section class="mt-16 pt-8 border-t border-red-900/30">
+<h2 class="text-sm font-semibold text-red-400">Danger Zone</h2>
+<div class="mt-4 p-4 border border-red-900/20 bg-red-950/10 rounded-md flex items-center justify-between">
+<div>
+<div class="text-sm font-medium text-[#fafafa]">Clear usage cache</div>
+<div class="text-xs text-[#a1a1aa]">Delete all local model history and cached embeddings</div>
+</div>
+<button class="px-3 py-1.5 border border-red-900/50 text-red-400 text-xs rounded hover:bg-red-900/20 transition-all">
+                        Clear Cache
+                    </button>
+</div>
+</section>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-[#0e0e10] border-t border-[#27272a] flex items-center justify-around px-2 z-50">
+<a class="flex flex-col items-center gap-1 text-[#acaab1]" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="text-[10px]">Home</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-[#acaab1]" href="#">
+<span class="material-symbols-outlined">database</span>
+<span class="text-[10px]">Data</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-[#c0c1ff]" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">settings</span>
+<span class="text-[10px]">Settings</span>
+</a>
+</nav>
+</body></html>
