@@ -38,7 +38,7 @@ export default function OutlineReviewPage() {
         setCourse(data);
 
         // If course is in any active pipeline state, show progress
-        if (['generating', 'researching', 'writing', 'verifying', 'editing'].includes(data.status)) {
+        if (['generating', 'researching', 'writing', 'verifying', 'editing', 'stale'].includes(data.status)) {
           setGenerating(true);
         }
       } catch (err) {

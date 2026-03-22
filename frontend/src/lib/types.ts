@@ -105,6 +105,16 @@ export interface ProviderDefinition {
   models?: { id: string; name: string }[] | "dynamic";
 }
 
+export interface PipelineJob {
+  id: string;
+  course_id: string;
+  status: string;
+  checkpoint: number;
+  error: string | null;
+  attempts: number;
+  created_at: string;
+}
+
 export interface ProviderConfig {
   provider: string;
   name: string;
