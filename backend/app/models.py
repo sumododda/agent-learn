@@ -213,6 +213,7 @@ class PipelineJob(Base):
         DateTime(timezone=True), nullable=True
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    events: Mapped[list] = mapped_column(JSONB().with_variant(JSON, "sqlite"), default=list)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=2)
     created_at: Mapped[datetime] = mapped_column(
