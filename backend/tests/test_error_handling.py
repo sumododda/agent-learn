@@ -495,42 +495,12 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
 
 
 # ---------------------------------------------------------------------------
-# Test: update_pipeline_status function correctness
+# Test: get_pipeline_status deprecated stub returns None
 # ---------------------------------------------------------------------------
 
 
-def test_update_status_creates_entry():
-    """_update_status creates a new PipelineStatus entry."""
-    from app.pipeline import _update_status, _jobs
-
-    test_id = "test-pipeline-status-create"
-    _update_status(test_id, stage="researching", section=1, total=3)
-
-    assert test_id in _jobs
-    assert _jobs[test_id].stage == "researching"
-    assert _jobs[test_id].section == 1
-    assert _jobs[test_id].total == 3
-
-    _jobs.pop(test_id, None)
-
-
-def test_update_status_updates_existing():
-    """_update_status updates an existing PipelineStatus entry."""
-    from app.pipeline import _update_status, _jobs
-
-    test_id = "test-pipeline-status-update"
-    _update_status(test_id, stage="researching", section=1, total=3)
-    _update_status(test_id, stage="writing", section=2, total=3)
-
-    assert _jobs[test_id].stage == "writing"
-    assert _jobs[test_id].section == 2
-    assert _jobs[test_id].total == 3
-
-    _jobs.pop(test_id, None)
-
-
-def test_get_pipeline_status_returns_none_for_unknown():
-    """get_pipeline_status returns None for unknown course_id."""
+def test_get_pipeline_status_returns_none():
+    """get_pipeline_status (deprecated stub) always returns None."""
     from app.pipeline import get_pipeline_status
 
-    assert get_pipeline_status("nonexistent-course-id") is None
+    assert get_pipeline_status("any-course-id") is None
