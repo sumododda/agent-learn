@@ -23,7 +23,7 @@ export function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [models, setModels] = useState<ChatModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState('google/gemini-3.1-flash-preview');
+  const [selectedModel, setSelectedModel] = useState('google/gemini-3.1-flash-lite-preview');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -262,7 +262,7 @@ export function ChatPanel({
 
           {/* Model picker dropdown */}
           {modelPickerOpen && (
-            <div className="absolute bottom-full right-0 mb-2 w-72 bg-popover border border-border rounded-lg shadow-xl overflow-hidden z-50">
+            <div className="absolute top-full right-0 mt-2 w-72 bg-popover border border-border rounded-lg shadow-xl overflow-hidden z-50">
               <div className="p-2 border-b border-border">
                 <input
                   type="text"

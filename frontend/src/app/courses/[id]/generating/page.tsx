@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { getPipelineStreamUrl, getCourse, resumeCourse } from '@/lib/api';
+import { getPipelineStreamUrl, getCourse, resumeCourse, getSseTicket } from '@/lib/api';
 import { Navbar } from '@/components/Navbar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -130,8 +130,15 @@ export default function GeneratingPage() {
   );
 
   const connectSSE = useCallback(
-    (token: string) => {
-      const url = getPipelineStreamUrl(courseId, token);
+    async (token: string) => {
+      let ticket: string;
+      try {
+        ticket = await getSseTicket(token);
+      } catch {
+        initSections();
+        return null;
+      }
+      const url = getPipelineStreamUrl(courseId, ticket);
       const es = new EventSource(url);
       eventSourceRef.current = es;
 
@@ -302,7 +309,7 @@ export default function GeneratingPage() {
       const token = await getToken();
       if (!token || cancelled) return;
 
-      connectSSE(token);
+      await connectSSE(token);
     }
 
     start();
@@ -329,7 +336,7 @@ export default function GeneratingPage() {
         eventSourceRef.current.close();
       }
       if (token) {
-        connectSSE(token);
+        await connectSSE(token);
       }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to resume');

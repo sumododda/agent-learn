@@ -79,7 +79,7 @@ async def append_pipeline_event(job_id: uuid.UUID, event: str, data: dict) -> No
     """Append an event to the pipeline_jobs.events JSONB array."""
     async with async_session() as session:
         await session.execute(
-            text("UPDATE pipeline_jobs SET events = COALESCE(events, '[]'::jsonb) || :event::jsonb WHERE id = :job_id"),
+            text("UPDATE pipeline_jobs SET events = COALESCE(events, '[]'::jsonb) || CAST(:event AS jsonb) WHERE id = :job_id"),
             {"event": json.dumps([{"event": event, "data": data}]), "job_id": str(job_id)},
         )
         await session.commit()

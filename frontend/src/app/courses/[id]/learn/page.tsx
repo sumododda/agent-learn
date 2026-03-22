@@ -31,6 +31,30 @@ export default function LearnPage() {
   const contentRef = useRef<HTMLDivElement>(null);
   const [scrollProgress, setScrollProgress] = useState(0);
 
+  // Resizable right sidebar
+  const [sidebarWidth, setSidebarWidth] = useState(340);
+  const isResizing = useRef(false);
+
+  useEffect(() => {
+    function onPointerMove(e: PointerEvent) {
+      if (!isResizing.current) return;
+      const newWidth = window.innerWidth - e.clientX;
+      setSidebarWidth(Math.max(260, Math.min(600, newWidth)));
+    }
+    function onPointerUp() {
+      if (!isResizing.current) return;
+      isResizing.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+  }, []);
+
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
@@ -231,9 +255,20 @@ export default function LearnPage() {
           </div>
         </main>
 
+        {/* Resize handle */}
+        <div
+          onPointerDown={(e) => {
+            e.preventDefault();
+            isResizing.current = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+          }}
+          className="w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+        />
+
         {/* Right: Evidence + Chat tabs */}
-        <aside className="w-[300px] border-l border-border shrink-0 flex flex-col">
-          <Tabs defaultValue={0} className="flex flex-col h-full">
+        <aside style={{ width: sidebarWidth }} className="border-l border-border shrink-0 flex flex-col">
+          <Tabs defaultValue={1} className="flex flex-col h-full">
             <TabsList className="w-full shrink-0">
               <TabsTrigger value={0} className="flex-1">Sources</TabsTrigger>
               <TabsTrigger value={1} className="flex-1">Chat</TabsTrigger>
