@@ -1,9 +1,12 @@
+import asyncio
+import json as json_mod
 import logging
 import uuid
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -12,11 +15,10 @@ from app.agent_service import (
     generate_outline,
     get_blackboard,
 )
-from app.auth import get_current_user
-from app.database import SessionDep
+from app.auth import get_current_user, get_user_from_query_token
+from app.database import SessionDep, async_session
 from app.limiter import limiter
-from app.models import Course, EvidenceCard, LearnerProgress, ProviderConfig, Section, ResearchBrief
-from app.pipeline import get_pipeline_status, start_pipeline
+from app.models import Course, EvidenceCard, LearnerProgress, PipelineJob, ProviderConfig, Section, ResearchBrief
 from app.schemas import (
     BlackboardResponse,
     CourseCreate,
@@ -158,7 +160,7 @@ async def create_course(
     return course
 
 
-@router.post("/courses/{course_id}/generate", response_model=GenerateResponse)
+@router.post("/courses/{course_id}/generate")
 async def generate_course(
     course_id: uuid.UUID,
     session: SessionDep,
@@ -182,29 +184,107 @@ async def generate_course(
             detail=f"Course status is '{course.status}'; generation requires 'outline_ready'",
         )
 
-    # Transition to "generating" before triggering the pipeline
+    # Check if user already has an active pipeline job
+    active_result = await session.execute(
+        select(PipelineJob).where(
+            PipelineJob.user_id == uuid.UUID(user_id),
+            PipelineJob.status.in_(["pending", "claimed", "running"]),
+        )
+    )
+    if active_result.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="A pipeline job is already active")
+
+    # Transition to "generating" before creating the job
+    course.status = "generating"
+    await session.flush()
+
+    # Get provider credentials from cache
+    provider, model, _creds, extra_fields = await _get_user_provider(user_id, session)
+    search_provider, _search_creds = await _get_user_search_provider(user_id, session)
+
+    # Create a PipelineJob row for the worker to pick up
+    job = PipelineJob(
+        course_id=course_id,
+        user_id=uuid.UUID(user_id),
+        config={
+            "provider": provider,
+            "model": model,
+            "extra_fields": extra_fields,
+            "search_provider": search_provider,
+        },
+    )
+    session.add(job)
+    await session.commit()
+
+    return {"job_id": str(job.id)}
+
+
+@router.post("/courses/{course_id}/resume")
+async def resume_course(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    # Verify course exists and user owns it
+    result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
+
+    # Only allow resume when course is stale
+    if course.status != "stale":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Course status is '{course.status}'; resume requires 'stale'",
+        )
+
+    # Find the most recent stale PipelineJob for this course
+    stale_result = await session.execute(
+        select(PipelineJob)
+        .where(
+            PipelineJob.course_id == course_id,
+            PipelineJob.status == "stale",
+        )
+        .order_by(PipelineJob.created_at.desc())
+        .limit(1)
+    )
+    stale_job = stale_result.scalar_one_or_none()
+
+    checkpoint = stale_job.checkpoint if stale_job else 0
+
+    # Mark old job as failed
+    if stale_job:
+        stale_job.status = "failed"
+        stale_job.error = "Superseded by resume"
+        await session.flush()
+
+    # Validate user still has provider config
+    provider, model, _creds, extra_fields = await _get_user_provider(user_id, session)
+    search_provider, _search_creds = await _get_user_search_provider(user_id, session)
+
+    # Create new PipelineJob with checkpoint copied from stale job
+    new_job = PipelineJob(
+        course_id=course_id,
+        user_id=uuid.UUID(user_id),
+        checkpoint=checkpoint,
+        config={
+            "provider": provider,
+            "model": model,
+            "extra_fields": extra_fields,
+            "search_provider": search_provider,
+        },
+    )
+    session.add(new_job)
+
+    # Transition course back to generating
     course.status = "generating"
     await session.commit()
 
-    # Get provider credentials from cache
-    provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
-    search_provider, search_creds = await _get_user_search_provider(user_id, session)
-
-    # Start the asyncio background pipeline
-    start_pipeline(str(course_id), provider, model, creds, extra_fields, search_provider, search_creds)
-
-    # Reload course with sections and return
-    result = await session.execute(
-        select(Course)
-        .options(selectinload(Course.sections))
-        .where(Course.id == course_id)
-    )
-    course = result.scalar_one()
-    return GenerateResponse(
-        id=course.id,
-        status=course.status,
-        sections=course.sections,
-    )
+    return {"job_id": str(new_job.id), "checkpoint": new_job.checkpoint}
 
 
 @router.post("/courses/{course_id}/regenerate", response_model=CourseResponse)
@@ -346,15 +426,32 @@ async def get_course(
     if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
-    # Include pipeline status if a pipeline is running/completed
-    pipeline = get_pipeline_status(str(course_id))
+    # Include pipeline status from the latest PipelineJob in DB
+    job_result = await session.execute(
+        select(PipelineJob)
+        .where(PipelineJob.course_id == course_id)
+        .order_by(PipelineJob.created_at.desc())
+        .limit(1)
+    )
+    job = job_result.scalar_one_or_none()
+
     resp = CourseResponse.model_validate(course)
-    if pipeline is not None:
+    if job is not None:
+        checkpoint_stage_map = {
+            0: "planning",
+            1: "researching",
+            2: "writing",
+            3: "editing",
+            4: "complete",
+        }
+        stage = checkpoint_stage_map.get(job.checkpoint, "unknown")
+        if job.status in ("failed", "stale"):
+            stage = job.status
+        elif job.status in ("completed", "completed_partial"):
+            stage = "complete"
         resp.pipeline_status = PipelineStatusResponse(
-            stage=pipeline.stage,
-            section=pipeline.section,
-            total=pipeline.total,
-            error=pipeline.error,
+            stage=stage,
+            error=job.error,
         )
     return resp
 
@@ -375,6 +472,108 @@ async def delete_course(
         raise HTTPException(status_code=403, detail="Not authorized")
     await session.delete(course)
     await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# SSE pipeline stream endpoint
+# ---------------------------------------------------------------------------
+
+CHECKPOINT_STAGE_MAP = {
+    0: "planning",
+    1: "researching",
+    2: "writing",
+    3: "editing",
+    4: "complete",
+}
+
+
+@router.get("/courses/{course_id}/pipeline/stream")
+async def pipeline_stream(course_id: uuid.UUID, token: str = Query(...)):
+    """Server-Sent Events stream for pipeline progress.
+
+    Polls the pipeline_jobs table every 2 seconds and emits events:
+    - status: stage/checkpoint updates
+    - complete: pipeline finished successfully
+    - stale: pipeline became stale (worker died)
+    - error: pipeline failed
+
+    Max duration: 30 minutes, then the stream closes.
+    """
+    user_id = await get_user_from_query_token(token)
+
+    # Verify course ownership before starting the stream
+    async with async_session() as session:
+        result = await session.execute(
+            select(Course).where(Course.id == course_id)
+        )
+        course = result.scalar_one_or_none()
+        if not course:
+            raise HTTPException(status_code=404, detail="Course not found")
+        if course.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+    async def event_generator():
+        max_iterations = 900  # 30 minutes at 2-second intervals
+        last_checkpoint = -1
+        last_status = ""
+
+        for _ in range(max_iterations):
+            try:
+                async with async_session() as session:
+                    result = await session.execute(
+                        select(PipelineJob)
+                        .where(PipelineJob.course_id == course_id)
+                        .order_by(PipelineJob.created_at.desc())
+                        .limit(1)
+                    )
+                    job = result.scalar_one_or_none()
+
+                if job is None:
+                    yield f"event: status\ndata: {json_mod.dumps({'stage': 'waiting', 'checkpoint': 0})}\n\n"
+                    await asyncio.sleep(2)
+                    continue
+
+                checkpoint = job.checkpoint
+                status = job.status
+
+                # Only emit when something changed
+                if checkpoint != last_checkpoint or status != last_status:
+                    last_checkpoint = checkpoint
+                    last_status = status
+
+                    stage = CHECKPOINT_STAGE_MAP.get(checkpoint, "unknown")
+
+                    if status in ("completed", "completed_partial"):
+                        yield f"event: complete\ndata: {json_mod.dumps({'stage': 'complete', 'checkpoint': checkpoint, 'status': status})}\n\n"
+                        return
+                    elif status == "stale":
+                        yield f"event: stale\ndata: {json_mod.dumps({'stage': 'stale', 'checkpoint': checkpoint})}\n\n"
+                        return
+                    elif status == "failed":
+                        yield f"event: error\ndata: {json_mod.dumps({'stage': 'failed', 'checkpoint': checkpoint, 'error': job.error})}\n\n"
+                        return
+                    else:
+                        yield f"event: status\ndata: {json_mod.dumps({'stage': stage, 'checkpoint': checkpoint})}\n\n"
+
+            except Exception:
+                logger.exception("SSE poll error for course %s", course_id)
+                yield f"event: error\ndata: {json_mod.dumps({'stage': 'error', 'error': 'Internal polling error'})}\n\n"
+                return
+
+            await asyncio.sleep(2)
+
+        # Max duration reached
+        yield f"event: error\ndata: {json_mod.dumps({'stage': 'timeout', 'error': 'Stream timed out after 30 minutes'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

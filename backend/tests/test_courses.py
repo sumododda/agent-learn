@@ -73,8 +73,8 @@ async def test_create_and_get_course(client, mock_outline_with_briefs):
 
 
 @pytest.mark.anyio
-async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs):
-    """POST /generate starts asyncio pipeline and returns 'generating' status."""
+async def test_generate_course_creates_pipeline_job(client, mock_outline_with_briefs):
+    """POST /generate creates a PipelineJob row and returns its job_id."""
     mock_return = (mock_outline_with_briefs, False)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
@@ -88,18 +88,15 @@ async def test_generate_course_starts_pipeline(client, mock_outline_with_briefs)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
-        patch("app.routers.courses.start_pipeline") as mock_start,
     ):
         gen_response = await client.post(f"/api/courses/{course_id}/generate")
 
     assert gen_response.status_code == 200
     data = gen_response.json()
-    assert data["status"] == "generating"
-    assert "id" in data
-    assert "sections" in data
-    mock_start.assert_called_once_with(
-        course_id, TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS, "", {}
-    )
+    assert "job_id" in data
+    # job_id should be a valid UUID string
+    import uuid as _uuid
+    _uuid.UUID(data["job_id"])
 
 
 @pytest.mark.anyio
@@ -119,7 +116,6 @@ async def test_generate_course_requires_outline_ready(client, mock_outline_with_
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
-        patch("app.routers.courses.start_pipeline"),
     ):
         await client.post(f"/api/courses/{course_id}/generate")
 

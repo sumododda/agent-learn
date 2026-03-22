@@ -1,22 +1,14 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Check } from 'lucide-react';
-import { getCourse } from '@/lib/api';
-import { Course, PipelineStatus } from '@/lib/types';
+import { getCourse, resumeCourse, getPipelineStreamUrl } from '@/lib/api';
+import { Button } from '@/components/ui/button';
 
-const STAGE_LABELS: Record<string, string> = {
-  researching: 'Researching',
-  verifying: 'Verifying',
-  writing: 'Writing',
-  editing: 'Editing',
-  completed: 'Completed',
-  failed: 'Failed',
-};
-
-const STAGES = ['research', 'verify', 'write', 'edit', 'complete'];
+const STAGES = ['plan', 'research', 'verify', 'write', 'edit', 'complete'];
 
 const STAGE_DISPLAY: Record<string, string> = {
+  plan: 'Plan',
   research: 'Research',
   verify: 'Verify',
   write: 'Write',
@@ -24,20 +16,27 @@ const STAGE_DISPLAY: Record<string, string> = {
   complete: 'Complete',
 };
 
+// Map SSE stage names to our internal STAGES keys
+const SSE_STAGE_MAP: Record<string, string> = {
+  planning: 'plan',
+  researching: 'research',
+  verifying: 'verify',
+  writing: 'write',
+  editing: 'edit',
+  completed: 'complete',
+};
+
 function getStageStatus(currentStage: string, stage: string): 'completed' | 'active' | 'pending' {
-  const stageMap: Record<string, string> = {
-    researching: 'research',
-    verifying: 'verify',
-    writing: 'write',
-    editing: 'edit',
-    completed: 'complete',
-  };
-  const normalizedCurrent = stageMap[currentStage] || currentStage;
+  const normalizedCurrent = SSE_STAGE_MAP[currentStage] || currentStage;
   const currentIdx = STAGES.indexOf(normalizedCurrent);
   const stageIdx = STAGES.indexOf(stage);
   if (stageIdx < currentIdx) return 'completed';
   if (stageIdx === currentIdx) return 'active';
   return 'pending';
+}
+
+interface LogEntry {
+  message: string;
 }
 
 interface PipelineProgressProps {
@@ -51,48 +50,209 @@ export default function PipelineProgress({
   token,
   onComplete,
 }: PipelineProgressProps) {
-  const [course, setCourse] = useState<Course | null>(null);
-  const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null);
+  const [currentStage, setCurrentStage] = useState<string>('planning');
+  const [currentSection, setCurrentSection] = useState(0);
+  const [totalSections, setTotalSections] = useState(0);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isStale, setIsStale] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [connected, setConnected] = useState(false);
   const completeCalled = useRef(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-  useEffect(() => {
-    async function poll() {
-      try {
-        const data = await getCourse(courseId, token);
-        setCourse(data);
-        if (data.pipeline_status) {
-          setPipelineStatus(data.pipeline_status);
-        }
+  const addLog = useCallback((message: string) => {
+    setLogs(prev => [...prev, { message }]);
+  }, []);
 
-        if (
-          (data.status === 'completed' || data.status === 'completed_partial') &&
-          !completeCalled.current
-        ) {
-          completeCalled.current = true;
-          if (intervalRef.current) clearInterval(intervalRef.current);
-          onComplete();
-        }
-
-        if (data.status === 'failed' || data.pipeline_status?.error) {
-          setError(data.pipeline_status?.error || 'Pipeline failed');
-          if (intervalRef.current) clearInterval(intervalRef.current);
-        }
-      } catch {
-        // Poll failure is non-critical, will retry
+  // Fallback: single getCourse fetch when SSE fails
+  const fallbackFetch = useCallback(async () => {
+    try {
+      const data = await getCourse(courseId, token);
+      if (data.pipeline_status) {
+        setCurrentStage(data.pipeline_status.stage);
+        setCurrentSection(data.pipeline_status.section);
+        setTotalSections(data.pipeline_status.total);
       }
+      if (
+        (data.status === 'completed' || data.status === 'completed_partial') &&
+        !completeCalled.current
+      ) {
+        completeCalled.current = true;
+        onComplete();
+      }
+      if (data.status === 'failed' || data.pipeline_status?.error) {
+        setError(data.pipeline_status?.error || 'Pipeline failed');
+      }
+      if (data.status === 'stale') {
+        setIsStale(true);
+      }
+    } catch {
+      // Fallback fetch failed silently
     }
-
-    poll(); // Initial fetch
-    intervalRef.current = setInterval(poll, 4000);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
   }, [courseId, token, onComplete]);
 
-  if (error) {
+  useEffect(() => {
+    if (!token) {
+      fallbackFetch();
+      return;
+    }
+
+    const url = getPipelineStreamUrl(courseId, token);
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
+      setConnected(true);
+    };
+
+    es.addEventListener('status', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        setCurrentStage(data.stage || 'planning');
+        if (data.section !== undefined) setCurrentSection(data.section);
+        if (data.total !== undefined) setTotalSections(data.total);
+        if (data.message) addLog(data.message);
+      } catch {
+        // Ignore parse errors
+      }
+    });
+
+    es.addEventListener('complete', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        setCurrentStage('completed');
+        if (data.message) addLog(data.message);
+      } catch {
+        // Ignore parse errors
+      }
+      if (!completeCalled.current) {
+        completeCalled.current = true;
+        onComplete();
+      }
+      es.close();
+    });
+
+    es.addEventListener('stale', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.message) addLog(data.message);
+      } catch {
+        // Ignore parse errors
+      }
+      setIsStale(true);
+      es.close();
+    });
+
+    es.addEventListener('error', (e: MessageEvent) => {
+      // This is a named 'error' event from the server (not an EventSource error)
+      try {
+        const data = JSON.parse(e.data);
+        setError(data.message || data.error || 'Pipeline error');
+        if (data.message) addLog(data.message);
+      } catch {
+        // Ignore parse errors
+      }
+      es.close();
+    });
+
+    es.onerror = () => {
+      // EventSource connection error — fall back to single fetch
+      setConnected(false);
+      es.close();
+      fallbackFetch();
+    };
+
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, [courseId, token, onComplete, addLog, fallbackFetch]);
+
+  async function handleResume() {
+    setResuming(true);
+    setIsStale(false);
+    setError(null);
+    try {
+      await resumeCourse(courseId, token);
+      // Reconnect SSE by re-mounting — trigger effect by updating logs
+      addLog('Resuming pipeline...');
+      // Close old EventSource and reconnect
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      if (token) {
+        const url = getPipelineStreamUrl(courseId, token);
+        const es = new EventSource(url);
+        eventSourceRef.current = es;
+
+        es.onopen = () => setConnected(true);
+
+        es.addEventListener('status', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            setCurrentStage(data.stage || 'planning');
+            if (data.section !== undefined) setCurrentSection(data.section);
+            if (data.total !== undefined) setTotalSections(data.total);
+            if (data.message) addLog(data.message);
+          } catch {
+            // Ignore parse errors
+          }
+        });
+
+        es.addEventListener('complete', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            setCurrentStage('completed');
+            if (data.message) addLog(data.message);
+          } catch {
+            // Ignore parse errors
+          }
+          if (!completeCalled.current) {
+            completeCalled.current = true;
+            onComplete();
+          }
+          es.close();
+        });
+
+        es.addEventListener('stale', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.message) addLog(data.message);
+          } catch {
+            // Ignore parse errors
+          }
+          setIsStale(true);
+          es.close();
+        });
+
+        es.addEventListener('error', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            setError(data.message || data.error || 'Pipeline error');
+            if (data.message) addLog(data.message);
+          } catch {
+            // Ignore parse errors
+          }
+          es.close();
+        });
+
+        es.onerror = () => {
+          setConnected(false);
+          es.close();
+          fallbackFetch();
+        };
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume');
+      setIsStale(true);
+    } finally {
+      setResuming(false);
+    }
+  }
+
+  if (error && !isStale) {
     return (
       <div className="mt-6 p-4 bg-destructive/10 border border-destructive rounded-lg">
         <p className="text-destructive text-sm">Pipeline error: {error}</p>
@@ -100,41 +260,26 @@ export default function PipelineProgress({
     );
   }
 
-  if (!pipelineStatus) {
+  if (isStale) {
     return (
-      <div className="mt-6 p-4 bg-card border border-border rounded-lg">
-        <p className="text-muted-foreground text-sm">Waiting for pipeline to start...</p>
+      <div className="mt-6 space-y-4">
+        <div className="p-4 bg-yellow-500/10 border border-yellow-500/50 rounded-lg">
+          <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
+            Pipeline stalled. The generation process stopped unexpectedly.
+          </p>
+          <Button
+            size="sm"
+            onClick={handleResume}
+            disabled={resuming}
+          >
+            {resuming ? 'Resuming...' : 'Resume Pipeline'}
+          </Button>
+        </div>
       </div>
     );
   }
 
-  const overallStage = pipelineStatus.stage;
-  const currentSection = pipelineStatus.section;
-  const totalSections = pipelineStatus.total;
-
-  const isComplete = course?.status === 'completed' || course?.status === 'completed_partial';
-  const isFailed = course?.status === 'failed';
-
-  const sortedSections = course
-    ? [...course.sections].sort((a, b) => a.position - b.position)
-    : [];
-
-  // Build log entries from course data
-  const logs: { timestamp: string; message: string }[] = [];
-
-  // For each section that has content, add a "completed" log
-  sortedSections.forEach(section => {
-    if (section.content && section.content.trim().length > 0) {
-      logs.push({ timestamp: '', message: `\u2713 Section ${section.position}: ${section.title}` });
-    }
-  });
-
-  // Add current activity
-  if (!isComplete && !isFailed && currentSection > 0) {
-    const currentSectionObj = sortedSections.find(s => s.position === currentSection);
-    const stageName = STAGE_LABELS[overallStage] || overallStage;
-    logs.push({ timestamp: '', message: `\u25b8 ${stageName} section ${currentSection}: ${currentSectionObj?.title || ''}` });
-  }
+  const overallStage = currentStage;
 
   return (
     <div className="mt-6 space-y-4">
@@ -211,6 +356,10 @@ export default function PipelineProgress({
         <p className="text-xs text-muted-foreground">
           Section {currentSection} of {totalSections}
         </p>
+      )}
+
+      {!connected && !completeCalled.current && !error && !isStale && (
+        <p className="text-xs text-muted-foreground">Waiting for pipeline to start...</p>
       )}
     </div>
   );
