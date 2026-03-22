@@ -79,7 +79,7 @@ async def append_pipeline_event(job_id: uuid.UUID, event: str, data: dict) -> No
     """Append an event to the pipeline_jobs.events JSONB array."""
     async with async_session() as session:
         await session.execute(
-            text("UPDATE pipeline_jobs SET events = events || :event::jsonb WHERE id = :job_id"),
+            text("UPDATE pipeline_jobs SET events = COALESCE(events, '[]'::jsonb) || :event::jsonb WHERE id = :job_id"),
             {"event": json.dumps([{"event": event, "data": data}]), "job_id": str(job_id)},
         )
         await session.commit()
@@ -288,8 +288,8 @@ async def run_pipeline(
             title = section_titles.get(pos, f"section-{pos}")
             await emit("research_start", {"section": pos, "title": title})
             result = await _research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
-            card_count = len(result.get("evidence_cards", []))
-            await emit("research_done", {"section": pos, "card_count": card_count})
+            sources_found = len(result.get("evidence_cards", []))
+            await emit("research_done", {"section": pos, "sources_found": sources_found})
             return result
 
         research_results = await asyncio.gather(

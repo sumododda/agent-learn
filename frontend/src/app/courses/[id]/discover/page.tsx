@@ -107,7 +107,12 @@ export default function DiscoverPage() {
           const data = JSON.parse(e.data);
           setQueries((prev) => {
             const updated = [...prev];
-            if (updated.length > 0) {
+            const idx = data.query_index;
+            if (idx !== undefined && idx < updated.length) {
+              const target = { ...updated[idx] };
+              target.sources = [...target.sources, { url: data.url, title: data.title, snippet: data.snippet }];
+              updated[idx] = target;
+            } else if (updated.length > 0) {
               const last = { ...updated[updated.length - 1] };
               last.sources = [...last.sources, { url: data.url, title: data.title, snippet: data.snippet }];
               updated[updated.length - 1] = last;
@@ -146,7 +151,7 @@ export default function DiscoverPage() {
         receivedEvents.current = true;
         try {
           const data = JSON.parse(e.data);
-          if (data.concepts) setKeyConcepts(data.concepts);
+          if (data.key_concepts) setKeyConcepts(data.key_concepts);
         } catch {}
       });
 
