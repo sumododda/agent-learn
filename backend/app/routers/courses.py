@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# SSE discovery feed buffers (in-process, append-only)
+# ---------------------------------------------------------------------------
+_feed_events: dict[str, list[dict]] = {}
+_feed_queues: dict[str, asyncio.Queue] = {}
+
 
 async def _ensure_cache(user_id: str, session) -> None:
     """Lazy-load provider credentials into cache if not already present."""
@@ -87,77 +93,192 @@ async def create_course(
     body: CourseCreate,
     session: SessionDep,
     user_id: str = Depends(get_current_user),
+    stream: bool = Query(False),
 ):
     # Create course row first with "researching" status
     course = Course(topic=body.topic, instructions=body.instructions, status="researching", user_id=user_id)
     session.add(course)
-    await session.flush()
+    await session.commit()  # commit (not flush) so background task's own session can see it
 
-    try:
-        # Get provider credentials from cache
-        provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
-        search_provider, search_creds = await _get_user_search_provider(user_id, session)
+    if not stream:
+        # ---- Legacy JSON path (used by regenerate flow and non-stream clients) ----
+        try:
+            provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+            search_provider, search_creds = await _get_user_search_provider(user_id, session)
 
-        # Generate outline via discovery research + planner
-        # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
-        outline_with_briefs, ungrounded = await generate_outline(
-            body.topic, body.instructions, provider, model, creds, extra_fields,
-            search_provider, search_creds,
+            outline_with_briefs, ungrounded = await generate_outline(
+                body.topic, body.instructions, provider, model, creds, extra_fields,
+                search_provider, search_creds,
+            )
+
+            course.ungrounded = ungrounded
+
+            for section_data in outline_with_briefs.sections:
+                section = Section(
+                    course_id=course.id,
+                    position=section_data.position,
+                    title=section_data.title,
+                    summary=section_data.summary,
+                )
+                session.add(section)
+
+            if not ungrounded:
+                discovery_brief = ResearchBrief(
+                    course_id=course.id,
+                    section_position=None,
+                    questions=[],
+                    source_policy={},
+                    findings="Discovery research completed successfully",
+                )
+                session.add(discovery_brief)
+
+            for brief_item in outline_with_briefs.research_briefs:
+                research_brief = ResearchBrief(
+                    course_id=course.id,
+                    section_position=brief_item.section_position,
+                    questions=brief_item.questions,
+                    source_policy=brief_item.source_policy,
+                )
+                session.add(research_brief)
+
+            course.status = "outline_ready"
+            await session.commit()
+
+        except Exception as e:
+            logger.error("Failed to generate outline: %s", e)
+            course.status = "failed"
+            await session.commit()
+            raise HTTPException(
+                status_code=500, detail="Internal server error"
+            )
+
+        result = await session.execute(
+            select(Course)
+            .options(selectinload(Course.sections))
+            .where(Course.id == course.id)
         )
+        course = result.scalar_one()
+        return course
 
-        # Set ungrounded flag if discovery research failed
-        course.ungrounded = ungrounded
+    # ---- SSE streaming path ----
+    course_id = course.id
+    course_id_str = str(course_id)
 
-        # Create section rows from the structured outline
-        for section_data in outline_with_briefs.sections:
-            section = Section(
-                course_id=course.id,
-                position=section_data.position,
-                title=section_data.title,
-                summary=section_data.summary,
-            )
-            session.add(section)
+    queue: asyncio.Queue = asyncio.Queue()
+    _feed_queues[course_id_str] = queue
+    _feed_events[course_id_str] = []
 
-        # Save discovery brief (section_position=null) if discovery succeeded
-        if not ungrounded:
-            discovery_brief = ResearchBrief(
-                course_id=course.id,
-                section_position=None,  # null = discovery brief
-                questions=[],  # discovery brief has no per-section questions
-                source_policy={},
-                findings="Discovery research completed successfully",
-            )
-            session.add(discovery_brief)
+    async def emit(event_type: str, data: dict) -> None:
+        payload = {"event": event_type, **data}
+        _feed_events[course_id_str].append(payload)
+        await queue.put(payload)
 
-        # Save per-section research briefs
-        for brief_item in outline_with_briefs.research_briefs:
-            research_brief = ResearchBrief(
-                course_id=course.id,
-                section_position=brief_item.section_position,
-                questions=brief_item.questions,
-                source_policy=brief_item.source_policy,
-            )
-            session.add(research_brief)
+    async def run_discovery() -> None:
+        try:
+            async with async_session() as sess:
+                # Fetch provider credentials using a fresh session
+                provider, model, creds, extra_fields = await _get_user_provider(user_id, sess)
+                search_provider, search_creds = await _get_user_search_provider(user_id, sess)
 
-        course.status = "outline_ready"
-        await session.commit()
+                outline_with_briefs, ungrounded = await generate_outline(
+                    body.topic, body.instructions, provider, model, creds, extra_fields,
+                    search_provider, search_creds,
+                    on_event=emit,
+                )
 
-    except Exception as e:
-        logger.error("Failed to generate outline: %s", e)
-        course.status = "failed"
-        await session.commit()
-        raise HTTPException(
-            status_code=500, detail="Internal server error"
-        )
+                # Reload course in this session
+                result = await sess.execute(
+                    select(Course).where(Course.id == course_id)
+                )
+                db_course = result.scalar_one()
+                db_course.ungrounded = ungrounded
 
-    # Reload with sections
-    result = await session.execute(
-        select(Course)
-        .options(selectinload(Course.sections))
-        .where(Course.id == course.id)
+                for section_data in outline_with_briefs.sections:
+                    section = Section(
+                        course_id=course_id,
+                        position=section_data.position,
+                        title=section_data.title,
+                        summary=section_data.summary,
+                    )
+                    sess.add(section)
+
+                if not ungrounded:
+                    discovery_brief = ResearchBrief(
+                        course_id=course_id,
+                        section_position=None,
+                        questions=[],
+                        source_policy={},
+                        findings="Discovery research completed successfully",
+                    )
+                    sess.add(discovery_brief)
+
+                for brief_item in outline_with_briefs.research_briefs:
+                    research_brief = ResearchBrief(
+                        course_id=course_id,
+                        section_position=brief_item.section_position,
+                        questions=brief_item.questions,
+                        source_policy=brief_item.source_policy,
+                    )
+                    sess.add(research_brief)
+
+                db_course.status = "outline_ready"
+                await sess.commit()
+
+                # Emit section events for each created section
+                for section_data in outline_with_briefs.sections:
+                    await emit("section", {
+                        "position": section_data.position,
+                        "title": section_data.title,
+                        "summary": section_data.summary,
+                    })
+
+                await emit("complete", {"course_id": course_id_str, "status": "outline_ready"})
+
+        except Exception as e:
+            logger.error("SSE discovery failed for course %s: %s", course_id, e)
+            try:
+                async with async_session() as sess:
+                    result = await sess.execute(
+                        select(Course).where(Course.id == course_id)
+                    )
+                    db_course = result.scalar_one()
+                    db_course.status = "failed"
+                    await sess.commit()
+            except Exception:
+                logger.exception("Failed to mark course %s as failed", course_id)
+            await emit("error", {"message": str(e)})
+
+        finally:
+            await queue.put(None)  # sentinel
+            _feed_queues.pop(course_id_str, None)
+
+            def _cleanup_buffer():
+                _feed_events.pop(course_id_str, None)
+
+            try:
+                loop = asyncio.get_event_loop()
+                loop.call_later(300, _cleanup_buffer)
+            except RuntimeError:
+                _cleanup_buffer()
+
+    asyncio.create_task(run_discovery())
+
+    async def event_generator():
+        while True:
+            payload = await queue.get()
+            if payload is None:
+                return
+            yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
-    course = result.scalar_one()
-    return course
 
 
 @router.post("/courses/{course_id}/generate")
@@ -564,6 +685,103 @@ async def pipeline_stream(course_id: uuid.UUID, token: str = Query(...)):
 
         # Max duration reached
         yield f"event: error\ndata: {json_mod.dumps({'stage': 'timeout', 'error': 'Stream timed out after 30 minutes'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# SSE discovery replay endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get("/courses/{course_id}/discover/stream")
+async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
+    """Replay or follow the live discovery feed for a course.
+
+    1. If a buffer exists, replay all buffered events.
+    2. If discovery is still in progress, poll for new events until terminal.
+    3. If neither buffer nor queue, build synthetic response from DB sections.
+    """
+    user_id = await get_user_from_query_token(token)
+
+    # Verify course ownership
+    async with async_session() as session:
+        result = await session.execute(
+            select(Course)
+            .options(selectinload(Course.sections))
+            .where(Course.id == course_id)
+        )
+        course = result.scalar_one_or_none()
+        if not course:
+            raise HTTPException(status_code=404, detail="Course not found")
+        if course.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+    course_id_str = str(course_id)
+
+    async def event_generator():
+        # Case 1 & 2: Buffer exists (may still be in progress)
+        if course_id_str in _feed_events:
+            read_index = 0
+            max_polls = 300  # 5 minutes at 1-second intervals
+
+            for _ in range(max_polls):
+                # Read any new events since last check
+                events = _feed_events.get(course_id_str)
+                if events is None:
+                    # Buffer was cleaned up mid-read
+                    return
+
+                while read_index < len(events):
+                    payload = events[read_index]
+                    read_index += 1
+                    yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload)}\n\n"
+
+                    # Stop on terminal events
+                    if payload["event"] in ("complete", "error"):
+                        return
+
+                # If no queue exists, discovery is done — all events have been replayed
+                if course_id_str not in _feed_queues:
+                    return
+
+                await asyncio.sleep(1)
+
+            # Timeout
+            yield f"event: error\ndata: {json_mod.dumps({'event': 'error', 'message': 'Stream timed out'})}\n\n"
+            return
+
+        # Case 3: No buffer — build synthetic response from DB
+        async with async_session() as session:
+            result = await session.execute(
+                select(Course)
+                .options(selectinload(Course.sections))
+                .where(Course.id == course_id)
+            )
+            db_course = result.scalar_one_or_none()
+
+        if db_course is None:
+            yield f"event: error\ndata: {json_mod.dumps({'event': 'error', 'message': 'Course not found'})}\n\n"
+            return
+
+        for section in sorted(db_course.sections, key=lambda s: s.position):
+            payload = {
+                "event": "section",
+                "position": section.position,
+                "title": section.title,
+                "summary": section.summary,
+            }
+            yield f"event: section\ndata: {json_mod.dumps(payload)}\n\n"
+
+        yield f"event: complete\ndata: {json_mod.dumps({'event': 'complete', 'course_id': course_id_str, 'status': db_course.status})}\n\n"
 
     return StreamingResponse(
         event_generator(),
