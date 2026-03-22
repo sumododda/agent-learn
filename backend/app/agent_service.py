@@ -156,7 +156,7 @@ async def discover_topic(
     # Emit query events before launching searches
     if on_event:
         for i, query in enumerate(queries):
-            await on_event("query", {"index": i, "total": len(queries), "text": query})
+            await on_event("query", {"index": i, "total": len(queries), "query": query})
 
     # Run searches via configured provider (in parallel)
     all_search_results = []
@@ -184,7 +184,7 @@ async def discover_topic(
         # Emit per-result source events and query_done
         if on_event:
             for r in result:
-                await on_event("source", {"query_index": i, "title": r.title, "url": r.url})
+                await on_event("source", {"query_index": i, "title": r.title, "url": r.url, "snippet": r.content[:200] if r.content else ""})
             await on_event("query_done", {"index": i, "result_count": len(result)})
 
     if not all_search_results:

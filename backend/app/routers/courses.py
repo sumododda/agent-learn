@@ -86,7 +86,7 @@ async def _get_user_search_provider(user_id: str, session) -> tuple[str, dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/courses", response_model=CourseResponse)
+@router.post("/courses")
 @limiter.limit("5/minute")
 async def create_course(
     request: Request,
@@ -158,7 +158,7 @@ async def create_course(
             .where(Course.id == course.id)
         )
         course = result.scalar_one()
-        return course
+        return CourseResponse.model_validate(course)
 
     # ---- SSE streaming path ----
     course_id = course.id
@@ -169,11 +169,14 @@ async def create_course(
     _feed_events[course_id_str] = []
 
     async def emit(event_type: str, data: dict) -> None:
-        payload = {"event": event_type, **data}
+        payload = {"event": event_type, "data": data}
         _feed_events[course_id_str].append(payload)
         await queue.put(payload)
 
     async def run_discovery() -> None:
+        # Emit created event immediately so the frontend can extract course_id
+        await emit("created", {"course_id": course_id_str})
+
         try:
             async with async_session() as sess:
                 # Fetch provider credentials using a fresh session
@@ -246,7 +249,7 @@ async def create_course(
                     await sess.commit()
             except Exception:
                 logger.exception("Failed to mark course %s as failed", course_id)
-            await emit("error", {"message": str(e)})
+            await emit("error", {"message": "Course creation failed. Please try again."})
 
         finally:
             await queue.put(None)  # sentinel
@@ -268,7 +271,7 @@ async def create_course(
             payload = await queue.get()
             if payload is None:
                 return
-            yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload)}\n\n"
+            yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload['data'])}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -751,7 +754,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
                 while read_index < len(events):
                     payload = events[read_index]
                     read_index += 1
-                    yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload)}\n\n"
+                    yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload['data'])}\n\n"
 
                     # Stop on terminal events
                     if payload["event"] in ("complete", "error"):
@@ -764,7 +767,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
                 await asyncio.sleep(1)
 
             # Timeout
-            yield f"event: error\ndata: {json_mod.dumps({'event': 'error', 'message': 'Stream timed out'})}\n\n"
+            yield f"event: error\ndata: {json_mod.dumps({'message': 'Stream timed out'})}\n\n"
             return
 
         # Case 3: No buffer — build synthetic response from DB
@@ -777,19 +780,18 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
             db_course = result.scalar_one_or_none()
 
         if db_course is None:
-            yield f"event: error\ndata: {json_mod.dumps({'event': 'error', 'message': 'Course not found'})}\n\n"
+            yield f"event: error\ndata: {json_mod.dumps({'message': 'Course not found'})}\n\n"
             return
 
         for section in sorted(db_course.sections, key=lambda s: s.position):
             payload = {
-                "event": "section",
                 "position": section.position,
                 "title": section.title,
                 "summary": section.summary,
             }
             yield f"event: section\ndata: {json_mod.dumps(payload)}\n\n"
 
-        yield f"event: complete\ndata: {json_mod.dumps({'event': 'complete', 'course_id': course_id_str, 'status': db_course.status})}\n\n"
+        yield f"event: complete\ndata: {json_mod.dumps({'course_id': course_id_str, 'status': db_course.status})}\n\n"
 
     return StreamingResponse(
         event_generator(),

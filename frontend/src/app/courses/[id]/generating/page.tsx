@@ -320,6 +320,7 @@ export default function GeneratingPage() {
     setResuming(true);
     setOverallStage('starting');
     setErrorMessage(null);
+    completeCalled.current = false;
     try {
       const token = await getToken();
       await resumeCourse(courseId, token);
