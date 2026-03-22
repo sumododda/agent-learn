@@ -12,11 +12,12 @@ after each phase, so pipelines survive server restarts.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.database import async_session
@@ -72,6 +73,16 @@ async def update_job_status(
         .values(**values)
     )
     await session.commit()
+
+
+async def append_pipeline_event(job_id: uuid.UUID, event: str, data: dict) -> None:
+    """Append an event to the pipeline_jobs.events JSONB array."""
+    async with async_session() as session:
+        await session.execute(
+            text("UPDATE pipeline_jobs SET events = events || :event::jsonb WHERE id = :job_id"),
+            {"event": json.dumps([{"event": event, "data": data}]), "job_id": str(job_id)},
+        )
+        await session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +211,13 @@ async def run_pipeline(
     """
     tag = str(course_id)[:8]
 
+    async def emit(event: str, data: dict) -> None:
+        """Fire-and-forget pipeline event."""
+        try:
+            await append_pipeline_event(job_id, event, data)
+        except Exception:
+            logger.warning("[pipeline:%s] Failed to emit event %s", tag, event, exc_info=True)
+
     # Sets tracking per-section failures across phases
     research_failed: set[int] = set()
     vw_failed: set[int] = set()
@@ -255,6 +273,8 @@ async def run_pipeline(
             await update_job_status(job_id, "failed", session, error="No sections found")
         return "failed"
 
+    await emit("pipeline_start", {"total_sections": total})
+
     # ------------------------------------------------------------------
     # Phase 2: Research all sections in parallel
     # ------------------------------------------------------------------
@@ -264,8 +284,16 @@ async def run_pipeline(
             from app.agent_service import update_course_status
             await update_course_status(course_id, "researching", session)
 
+        async def _research_with_events(pos: int) -> dict:
+            title = section_titles.get(pos, f"section-{pos}")
+            await emit("research_start", {"section": pos, "title": title})
+            result = await _research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
+            card_count = len(result.get("evidence_cards", []))
+            await emit("research_done", {"section": pos, "card_count": card_count})
+            return result
+
         research_results = await asyncio.gather(
-            *[_research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials) for pos in positions],
+            *[_research_with_events(pos) for pos in positions],
             return_exceptions=True,
         )
 
@@ -312,9 +340,11 @@ async def run_pipeline(
             async with sem:
                 # Verify
                 logger.info("[pipeline:%s] Verifying section %d (%s)...", tag, pos, sec_name)
+                await emit("verify_start", {"section": pos, "title": sec_name})
                 try:
                     await _verify_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
                     logger.info("[pipeline:%s] Verification OK for section %d", tag, pos)
+                    await emit("verify_done", {"section": pos})
                 except Exception as e:
                     logger.error("[pipeline:%s] Verification FAILED for section %d: %s", tag, pos, e)
                     vw_failed.add(pos)
@@ -322,9 +352,11 @@ async def run_pipeline(
 
                 # Write
                 logger.info("[pipeline:%s] Writing section %d (%s)...", tag, pos, sec_name)
+                await emit("write_start", {"section": pos, "title": sec_name})
                 try:
                     await _write_section(course_id, pos, provider, model, credentials, extra_fields)
                     logger.info("[pipeline:%s] Writing OK for section %d", tag, pos)
+                    await emit("write_done", {"section": pos})
                 except Exception as e:
                     logger.error("[pipeline:%s] Writing FAILED for section %d: %s", tag, pos, e)
                     vw_failed.add(pos)
@@ -354,9 +386,11 @@ async def run_pipeline(
                 continue
 
             logger.info("[pipeline:%s] [%d/%d] Editing section %d (%s)...", tag, idx + 1, total, pos, sec_name)
+            await emit("edit_start", {"section": pos, "title": sec_name})
             try:
                 await _edit_section(course_id, pos, provider, model, credentials, extra_fields)
                 logger.info("[pipeline:%s] [%d/%d] Editing OK for section %d", tag, idx + 1, total, pos)
+                await emit("edit_done", {"section": pos})
             except Exception as e:
                 logger.error("[pipeline:%s] [%d/%d] Editing FAILED for section %d: %s", tag, idx + 1, total, pos, e)
                 vw_failed.add(pos)
@@ -385,6 +419,12 @@ async def run_pipeline(
 
     async with async_session() as session:
         await update_checkpoint(job_id, CHECKPOINT_DONE, session)
+
+    await emit("pipeline_complete", {
+        "status": final_status,
+        "completed_count": total - len(all_failed),
+        "failed_count": len(all_failed),
+    })
 
     logger.info(
         "[pipeline:%s] === PIPELINE FINISHED === status=%s, total=%d, failed=%s",
