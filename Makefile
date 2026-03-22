@@ -1,4 +1,4 @@
-.PHONY: dev-db dev-backend dev-frontend dev migrate install
+.PHONY: dev-db dev-backend dev-frontend dev-worker dev migrate install
 
 dev-db:
 	docker compose up -d db
@@ -8,6 +8,9 @@ dev-backend:
 
 dev-frontend:
 	cd frontend && npm run dev
+
+dev-worker:
+	cd backend && uv run python -m app.worker
 
 migrate:
 	cd backend && uv run alembic upgrade head
@@ -21,5 +24,6 @@ dev:
 	@sleep 2
 	$(MAKE) migrate
 	cd backend && uv run uvicorn app.main:app --reload --port 8000 & \
+	cd backend && uv run python -m app.worker & \
 	cd frontend && npm run dev & \
 	wait

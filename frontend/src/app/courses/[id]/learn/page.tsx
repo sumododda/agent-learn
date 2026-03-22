@@ -47,25 +47,23 @@ export default function LearnPage() {
     async function loadCourse() {
       try {
         const token = await getToken();
-        const data = await getCourse(courseId, token);
+        const [data, progress] = await Promise.all([
+          getCourse(courseId, token),
+          getProgress(courseId, token).catch(() => null),
+        ]);
         setCourse(data);
 
-        try {
-          const progress = await getProgress(courseId, token);
-          if (progress) {
-            const sections = [...(data.sections || [])].sort(
-              (a: Section, b: Section) => a.position - b.position
-            );
-            const resumeIndex = sections.findIndex(
-              (s: Section) => s.position === progress.current_section
-            );
-            if (resumeIndex >= 0) {
-              setCurrentIndex(resumeIndex);
-            }
-            setCompletedSections(progress.completed_sections || []);
+        if (progress) {
+          const sections = [...(data.sections || [])].sort(
+            (a: Section, b: Section) => a.position - b.position
+          );
+          const resumeIndex = sections.findIndex(
+            (s: Section) => s.position === progress.current_section
+          );
+          if (resumeIndex >= 0) {
+            setCurrentIndex(resumeIndex);
           }
-        } catch {
-          // Progress fetch failed -- start from section 0
+          setCompletedSections(progress.completed_sections || []);
         }
         initialLoadDone.current = true;
       } catch (err) {
