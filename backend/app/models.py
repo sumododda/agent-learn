@@ -1,7 +1,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, JSON, Text, Integer, UniqueConstraint, LargeBinary, DateTime, func
+from sqlalchemy import ForeignKey, JSON, Index, Text, Integer, UniqueConstraint, LargeBinary, DateTime, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
@@ -186,3 +187,40 @@ class UserKeySalt(Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     salt: Mapped[bytes] = mapped_column(LargeBinary(16), nullable=False)
+
+
+class PipelineJob(Base):
+    __tablename__ = "pipeline_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    checkpoint: Mapped[int] = mapped_column(Integer, default=0)
+    config: Mapped[dict] = mapped_column(JSONB().with_variant(JSON, "sqlite"), nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("uq_one_active_job_per_user", "user_id", unique=True, postgresql_where=text("status IN ('pending', 'claimed', 'running')")),
+        Index("idx_pipeline_jobs_claimable", "created_at", postgresql_where=text("status = 'pending'")),
+        Index("idx_pipeline_jobs_stale", "heartbeat_at", postgresql_where=text("status = 'running'")),
+    )
