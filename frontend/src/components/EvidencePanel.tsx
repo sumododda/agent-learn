@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { getEvidence } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import { EvidenceCard } from '@/lib/types';
 
 function safeHref(url: string): string {
@@ -45,6 +46,7 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
 }
 
 export default function EvidencePanel({ courseId, sectionPosition }: EvidencePanelProps) {
+  const { getToken } = useAuth();
   const [cards, setCards] = useState<EvidenceCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +61,8 @@ export default function EvidencePanel({ courseId, sectionPosition }: EvidencePan
       setLoading(true);
       setError(null);
       try {
-        const data = await getEvidence(courseId, sectionPosition);
+        const token = await getToken();
+        const data = await getEvidence(courseId, sectionPosition, token);
         setCards(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load evidence');
