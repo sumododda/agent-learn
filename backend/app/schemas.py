@@ -50,6 +50,22 @@ class PipelineStatusResponse(BaseModel):
     error: str | None = None
 
 
+class PipelineJobResponse(BaseModel):
+    model_config = {"from_attributes": True}
+    id: UUID
+    course_id: UUID
+    status: str
+    checkpoint: int
+    error: str | None = None
+    attempts: int
+    created_at: datetime
+
+
+class ResumeResponse(BaseModel):
+    job_id: UUID
+    checkpoint: int
+
+
 class CourseResponse(BaseModel):
     model_config = {"from_attributes": True}
 
