@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { Navbar } from '@/components/Navbar';
@@ -327,8 +327,9 @@ function SearchProviderSection({
   getToken: () => Promise<string | null>;
   onRefresh: () => Promise<void>;
 }) {
-  const providerKeys = Object.keys(registry);
+  const providerKeys = useMemo(() => Object.keys(registry), [registry]);
   const defaultConfig = configs.find((c) => c.is_default);
+  const defaultProvider = defaultConfig?.provider ?? '';
   const [selectedProvider, setSelectedProvider] = useState<string>('');
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -339,13 +340,10 @@ function SearchProviderSection({
 
   useEffect(() => {
     if (providerKeys.length === 0) return;
-    if (defaultConfig) {
-      setSelectedProvider(defaultConfig.provider);
-    } else if (!providerKeys.includes(selectedProvider)) {
-      setSelectedProvider(providerKeys[0]);
+    if (!selectedProvider) {
+      setSelectedProvider(defaultProvider || providerKeys[0]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerKeys, defaultConfig]);
+  }, [providerKeys, defaultProvider, selectedProvider]);
 
   useEffect(() => {
     if (!selectedProvider) return;

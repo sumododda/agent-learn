@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alembic-migrate
+  namespace: agent-learn
+  labels:
+    app: alembic-migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: alembic-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: us-central1-docker.pkg.dev/agent-learn-490805/agent-learn/backend:latest
+          imagePullPolicy: Always
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: postgres-password
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://agentlearn:$(POSTGRES_PASSWORD)@postgres:5432/agentlearn"
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: jwt-secret-key
+            - name: ENCRYPTION_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: encryption-pepper
+            - name: TURNSTILE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: turnstile-secret-key
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: resend-api-key

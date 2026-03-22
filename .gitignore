@@ -12,3 +12,9 @@ trigger/.env
 *.egg-info/
 dist/
 test.db
+*.env.local
+*.env.production.local
+frontend/.env.local
+frontend/.env.production.local
+deploy/*.log
+.next/
