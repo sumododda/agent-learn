@@ -341,10 +341,11 @@ function SearchProviderSection({
     if (providerKeys.length === 0) return;
     if (defaultConfig) {
       setSelectedProvider(defaultConfig.provider);
-    } else if (!selectedProvider || !providerKeys.includes(selectedProvider)) {
+    } else if (!providerKeys.includes(selectedProvider)) {
       setSelectedProvider(providerKeys[0]);
     }
-  }, [providerKeys, defaultConfig, selectedProvider]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerKeys, defaultConfig]);
 
   useEffect(() => {
     if (!selectedProvider) return;
