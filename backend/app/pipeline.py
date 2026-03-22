@@ -1,64 +1,77 @@
-"""Asyncio-based pipeline orchestrator for course generation.
+"""Checkpoint-aware pipeline orchestrator for course generation.
 
-Orchestration flow:
-1. discover_and_plan (sequential) — 3 attempts
-2. research all sections (parallel via asyncio.gather) — 3 attempts each
-3. for each section sequentially: verify (2) -> write (3) -> edit (2), skip failed
-4. determine final status: completed / failed / completed_partial
+Orchestration flow (resumable from any checkpoint):
+1. Planning     — discover_and_plan (3 retries)
+2. Research     — parallel research per section (3 retries each)
+3. Verify+Write — parallel verify→write per section, bounded by semaphore(3)
+4. Edit         — sequential per section (blackboard safety)
+5. Done         — determine final status, persist to DB
+
+State is persisted to the ``pipeline_jobs`` table via ``update_checkpoint``
+after each phase, so pipelines survive server restarts.
 """
 
 import asyncio
 import logging
 import uuid
-from dataclasses import dataclass
+from datetime import datetime, timezone
 
+from sqlalchemy import select, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.database import async_session
+from app.models import PipelineJob, Section
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Pipeline status tracking
+# Checkpoint constants (integers for ordinal-safe comparison)
+# ---------------------------------------------------------------------------
+
+CHECKPOINT_QUEUED = 0
+CHECKPOINT_PLANNING = 1
+CHECKPOINT_RESEARCHED = 2
+CHECKPOINT_WRITING = 3
+CHECKPOINT_EDITING = 4
+CHECKPOINT_DONE = 5
+
+
+# ---------------------------------------------------------------------------
+# DB helper functions
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class PipelineStatus:
-    stage: str = "pending"
-    section: int = 0
-    total: int = 0
-    error: str | None = None
+async def update_checkpoint(
+    job_id: uuid.UUID,
+    checkpoint: int,
+    session,
+) -> None:
+    """UPDATE pipeline_jobs SET checkpoint = :checkpoint WHERE id = :job_id."""
+    await session.execute(
+        update(PipelineJob)
+        .where(PipelineJob.id == job_id)
+        .values(checkpoint=checkpoint)
+    )
+    await session.commit()
 
 
-_jobs: dict[str, PipelineStatus] = {}
-_active_tasks: set[asyncio.Task] = set()
-
-
-def get_pipeline_status(course_id: str) -> PipelineStatus | None:
-    """Return current pipeline status for a course, or None."""
-    return _jobs.get(course_id)
-
-
-def _update_status(
-    course_id: str,
-    stage: str,
-    section: int = 0,
-    total: int = 0,
+async def update_job_status(
+    job_id: uuid.UUID,
+    status: str,
+    session,
     error: str | None = None,
 ) -> None:
-    """Update the in-memory pipeline status for a course."""
-    status = _jobs.get(course_id)
-    if status is None:
-        _jobs[course_id] = PipelineStatus(
-            stage=stage, section=section, total=total, error=error
-        )
-    else:
-        status.stage = stage
-        status.section = section
-        status.total = total
-        status.error = error
+    """UPDATE pipeline_jobs SET status, error, completed_at WHERE id = :job_id."""
+    values: dict = {"status": status, "error": error}
+    if status in ("completed", "completed_partial", "failed"):
+        values["completed_at"] = datetime.now(timezone.utc)
+    await session.execute(
+        update(PipelineJob)
+        .where(PipelineJob.id == job_id)
+        .values(**values)
+    )
+    await session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -164,213 +177,234 @@ async def _edit_section(
 
 
 # ---------------------------------------------------------------------------
-# Pipeline orchestrator — no retry on the orchestrator itself
+# Pipeline orchestrator — checkpoint-aware, no retry on the orchestrator
 # ---------------------------------------------------------------------------
 
 
 async def run_pipeline(
-    course_id: str,
+    job_id: uuid.UUID,
+    course_id: uuid.UUID,
+    checkpoint: int,
     provider: str,
     model: str,
     credentials: dict,
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
-) -> None:
-    """Run the full course generation pipeline.
+    shutdown_event: asyncio.Event | None = None,
+) -> str:
+    """Run the course generation pipeline, resumable from *checkpoint*.
 
-    1. Plan -> get sections list
-    2. Parallel research all sections (gather)
-    3. For each section sequentially: verify -> write -> edit
-    4. Track failed sections, determine final status
+    Returns the final status string:
+    ``"completed"`` | ``"completed_partial"`` | ``"failed"`` | ``"pending"``
     """
-    cid = uuid.UUID(course_id)
-    tag = course_id[:8]
+    tag = str(course_id)[:8]
+
+    # Sets tracking per-section failures across phases
+    research_failed: set[int] = set()
+    vw_failed: set[int] = set()
 
     # ------------------------------------------------------------------
-    # Step 1: Discover and plan (sequential)
+    # Phase 1: Planning
     # ------------------------------------------------------------------
-    logger.info("[pipeline:%s] === STEP 1: PLANNING === (model=%s, search=%s)", tag, model, search_provider or "none")
-    _update_status(course_id, stage="planning")
-    try:
-        plan_result = await _discover_and_plan(cid, provider, model, credentials, extra_fields, search_provider, search_credentials)
-    except Exception as e:
-        logger.error("[pipeline:%s] PLANNING FAILED: %s", tag, e)
-        _update_status(course_id, stage="failed", error="Planning failed")
+    if checkpoint < CHECKPOINT_PLANNING:
+        logger.info("[pipeline:%s] === PHASE 1: PLANNING === (model=%s, search=%s)", tag, model, search_provider or "none")
+        try:
+            plan_result = await _discover_and_plan(course_id, provider, model, credentials, extra_fields, search_provider, search_credentials)
+        except Exception as e:
+            logger.error("[pipeline:%s] PLANNING FAILED: %s", tag, e)
+            async with async_session() as session:
+                from app.agent_service import update_course_status
+                await update_course_status(course_id, "failed", session)
+            async with async_session() as session:
+                await update_job_status(job_id, "failed", session, error="Planning failed")
+            return "failed"
+
+        sections_data = plan_result["sections"]
+        total = len(sections_data)
+        logger.info("[pipeline:%s] Planning complete: %d sections created", tag, total)
+        for s in sections_data:
+            logger.info("[pipeline:%s]   Section %d: %s", tag, s["position"], s["title"])
+
+        async with async_session() as session:
+            await update_checkpoint(job_id, CHECKPOINT_PLANNING, session)
+
+    # Check shutdown between phases
+    if shutdown_event and shutdown_event.is_set():
+        logger.info("[pipeline:%s] Shutdown requested after planning", tag)
+        return "pending"
+
+    # ------------------------------------------------------------------
+    # Load sections from DB (needed for both fresh runs and resumption)
+    # ------------------------------------------------------------------
+    async with async_session() as session:
+        result = await session.execute(
+            select(Section)
+            .where(Section.course_id == course_id)
+            .order_by(Section.position)
+        )
+        sections = list(result.scalars().all())
+
+    positions = [s.position for s in sections]
+    section_titles = {s.position: s.title for s in sections}
+    total = len(positions)
+
+    if total == 0:
+        logger.error("[pipeline:%s] No sections found — aborting", tag)
+        async with async_session() as session:
+            await update_job_status(job_id, "failed", session, error="No sections found")
+        return "failed"
+
+    # ------------------------------------------------------------------
+    # Phase 2: Research all sections in parallel
+    # ------------------------------------------------------------------
+    if checkpoint < CHECKPOINT_RESEARCHED:
+        logger.info("[pipeline:%s] === PHASE 2: RESEARCHING %d sections in parallel ===", tag, total)
         async with async_session() as session:
             from app.agent_service import update_course_status
-            await update_course_status(cid, "failed", session)
-        return
+            await update_course_status(course_id, "researching", session)
 
-    sections = plan_result["sections"]
-    positions = [s["position"] for s in sections]
-    total = len(positions)
-    section_titles = {s["position"]: s["title"] for s in sections}
-    logger.info("[pipeline:%s] Planning complete: %d sections created", tag, total)
-    for s in sections:
-        logger.info("[pipeline:%s]   Section %d: %s", tag, s["position"], s["title"])
+        research_results = await asyncio.gather(
+            *[_research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials) for pos in positions],
+            return_exceptions=True,
+        )
 
-    # Track per-section status: position -> {stage, error?}
-    section_statuses: dict[int, dict] = {
-        pos: {"stage": "pending"} for pos in positions
-    }
+        research_ok = 0
+        for i, pos in enumerate(positions):
+            res = research_results[i]
+            if isinstance(res, BaseException):
+                research_failed.add(pos)
+                logger.error("[pipeline:%s] Research FAILED for section %d (%s): %s", tag, pos, section_titles.get(pos, ""), res)
+            else:
+                research_ok += 1
+                card_count = len(res.get("evidence_cards", []))
+                logger.info("[pipeline:%s] Research OK for section %d (%s): %d evidence cards", tag, pos, section_titles.get(pos, ""), card_count)
 
-    # ------------------------------------------------------------------
-    # Step 2: Research all sections in parallel
-    # ------------------------------------------------------------------
-    logger.info("[pipeline:%s] === STEP 2: RESEARCHING %d sections in parallel ===", tag, total)
-    _update_status(course_id, stage="researching", total=total)
-    async with async_session() as session:
-        from app.agent_service import update_course_status
-        await update_course_status(cid, "researching", session)
-    for pos in positions:
-        section_statuses[pos] = {"stage": "researching"}
+        logger.info("[pipeline:%s] Research complete: %d succeeded, %d failed", tag, research_ok, len(research_failed))
 
-    research_results = await asyncio.gather(
-        *[_research_section(cid, pos, provider, model, credentials, extra_fields, search_provider, search_credentials) for pos in positions],
-        return_exceptions=True,
-    )
+        async with async_session() as session:
+            await update_checkpoint(job_id, CHECKPOINT_RESEARCHED, session)
 
-    # Mark research results
-    research_ok = 0
-    research_fail = 0
-    for i, pos in enumerate(positions):
-        result = research_results[i]
-        if isinstance(result, BaseException):
-            section_statuses[pos] = {"stage": "failed", "error": "Research failed"}
-            research_fail += 1
-            logger.error("[pipeline:%s] Research FAILED for section %d (%s): %s", tag, pos, section_titles.get(pos, ""), result)
-        else:
-            section_statuses[pos] = {"stage": "researched"}
-            research_ok += 1
-            card_count = len(result.get("evidence_cards", []))
-            logger.info("[pipeline:%s] Research OK for section %d (%s): %d evidence cards", tag, pos, section_titles.get(pos, ""), card_count)
-
-    logger.info("[pipeline:%s] Research complete: %d succeeded, %d failed", tag, research_ok, research_fail)
+    # Check shutdown between phases
+    if shutdown_event and shutdown_event.is_set():
+        logger.info("[pipeline:%s] Shutdown requested after research", tag)
+        return "pending"
 
     # ------------------------------------------------------------------
-    # Step 3: Sequential verify -> write -> edit per section
+    # Phase 3: Verify + Write per section (parallel, bounded by semaphore)
     # ------------------------------------------------------------------
-    logger.info("[pipeline:%s] === STEP 3: VERIFY/WRITE/EDIT per section ===", tag)
-    async with async_session() as session:
-        from app.agent_service import update_course_status
-        await update_course_status(cid, "writing", session)
+    if checkpoint < CHECKPOINT_WRITING:
+        logger.info("[pipeline:%s] === PHASE 3: VERIFY+WRITE per section (parallel, sem=3) ===", tag)
+        async with async_session() as session:
+            from app.agent_service import update_course_status
+            await update_course_status(course_id, "writing", session)
 
-    for idx, pos in enumerate(positions):
-        sec_name = section_titles.get(pos, f"section-{pos}")
-        if section_statuses[pos]["stage"] == "failed":
-            logger.warning("[pipeline:%s] Skipping section %d (%s) — research failed", tag, pos, sec_name)
-            continue
+        sem = asyncio.Semaphore(3)
 
-        # Verify
-        logger.info("[pipeline:%s] [%d/%d] Verifying section %d (%s)...", tag, idx + 1, total, pos, sec_name)
-        section_statuses[pos] = {"stage": "verifying"}
-        _update_status(course_id, stage="writing", section=idx + 1, total=total)
-        try:
-            await _verify_section(cid, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
-            logger.info("[pipeline:%s] [%d/%d] Verification OK for section %d", tag, idx + 1, total, pos)
-        except Exception as e:
-            section_statuses[pos] = {"stage": "failed", "error": "Verification failed"}
-            logger.error("[pipeline:%s] [%d/%d] Verification FAILED for section %d: %s", tag, idx + 1, total, pos, e)
-            continue
+        async def _verify_then_write(pos: int) -> None:
+            """Verify then write a single section, bounded by semaphore."""
+            sec_name = section_titles.get(pos, f"section-{pos}")
+            if pos in research_failed:
+                logger.warning("[pipeline:%s] Skipping section %d (%s) — research failed", tag, pos, sec_name)
+                vw_failed.add(pos)
+                return
 
-        # Write
-        logger.info("[pipeline:%s] [%d/%d] Writing section %d (%s)...", tag, idx + 1, total, pos, sec_name)
-        section_statuses[pos] = {"stage": "writing"}
-        _update_status(course_id, stage="writing", section=idx + 1, total=total)
-        try:
-            await _write_section(cid, pos, provider, model, credentials, extra_fields)
-            logger.info("[pipeline:%s] [%d/%d] Writing OK for section %d", tag, idx + 1, total, pos)
-        except Exception as e:
-            section_statuses[pos] = {"stage": "failed", "error": "Writing failed"}
-            logger.error("[pipeline:%s] [%d/%d] Writing FAILED for section %d: %s", tag, idx + 1, total, pos, e)
-            continue
+            async with sem:
+                # Verify
+                logger.info("[pipeline:%s] Verifying section %d (%s)...", tag, pos, sec_name)
+                try:
+                    await _verify_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
+                    logger.info("[pipeline:%s] Verification OK for section %d", tag, pos)
+                except Exception as e:
+                    logger.error("[pipeline:%s] Verification FAILED for section %d: %s", tag, pos, e)
+                    vw_failed.add(pos)
+                    return
 
-        # Edit
-        logger.info("[pipeline:%s] [%d/%d] Editing section %d (%s)...", tag, idx + 1, total, pos, sec_name)
-        section_statuses[pos] = {"stage": "editing"}
-        _update_status(course_id, stage="writing", section=idx + 1, total=total)
-        try:
-            await _edit_section(cid, pos, provider, model, credentials, extra_fields)
-            logger.info("[pipeline:%s] [%d/%d] Editing OK for section %d", tag, idx + 1, total, pos)
-        except Exception as e:
-            section_statuses[pos] = {"stage": "failed", "error": "Editing failed"}
-            logger.error("[pipeline:%s] [%d/%d] Editing FAILED for section %d: %s", tag, idx + 1, total, pos, e)
-            continue
+                # Write
+                logger.info("[pipeline:%s] Writing section %d (%s)...", tag, pos, sec_name)
+                try:
+                    await _write_section(course_id, pos, provider, model, credentials, extra_fields)
+                    logger.info("[pipeline:%s] Writing OK for section %d", tag, pos)
+                except Exception as e:
+                    logger.error("[pipeline:%s] Writing FAILED for section %d: %s", tag, pos, e)
+                    vw_failed.add(pos)
+                    return
 
-        section_statuses[pos] = {"stage": "completed"}
-        logger.info("[pipeline:%s] [%d/%d] Section %d COMPLETE", tag, idx + 1, total, pos)
+        await asyncio.gather(*[_verify_then_write(pos) for pos in positions])
+
+        async with async_session() as session:
+            await update_checkpoint(job_id, CHECKPOINT_WRITING, session)
+
+    # Check shutdown between phases
+    if shutdown_event and shutdown_event.is_set():
+        logger.info("[pipeline:%s] Shutdown requested after verify+write", tag)
+        return "pending"
 
     # ------------------------------------------------------------------
-    # Step 4: Determine final status
+    # Phase 4: Edit — sequential for blackboard safety
     # ------------------------------------------------------------------
-    failed_sections = [
-        pos for pos, s in section_statuses.items() if s["stage"] == "failed"
-    ]
-    completed_sections = [
-        pos for pos, s in section_statuses.items() if s["stage"] == "completed"
-    ]
-    if len(failed_sections) == 0:
+    if checkpoint < CHECKPOINT_EDITING:
+        logger.info("[pipeline:%s] === PHASE 4: EDITING sequentially ===", tag)
+
+        all_failed = research_failed | vw_failed
+        for idx, pos in enumerate(positions):
+            sec_name = section_titles.get(pos, f"section-{pos}")
+            if pos in all_failed:
+                logger.warning("[pipeline:%s] Skipping edit for section %d (%s) — prior failure", tag, pos, sec_name)
+                continue
+
+            logger.info("[pipeline:%s] [%d/%d] Editing section %d (%s)...", tag, idx + 1, total, pos, sec_name)
+            try:
+                await _edit_section(course_id, pos, provider, model, credentials, extra_fields)
+                logger.info("[pipeline:%s] [%d/%d] Editing OK for section %d", tag, idx + 1, total, pos)
+            except Exception as e:
+                logger.error("[pipeline:%s] [%d/%d] Editing FAILED for section %d: %s", tag, idx + 1, total, pos, e)
+                vw_failed.add(pos)
+
+        async with async_session() as session:
+            await update_checkpoint(job_id, CHECKPOINT_EDITING, session)
+
+    # ------------------------------------------------------------------
+    # Phase 5: Determine final status
+    # ------------------------------------------------------------------
+    all_failed = research_failed | vw_failed
+    if len(all_failed) == 0:
         final_status = "completed"
-    elif len(failed_sections) == total:
+    elif len(all_failed) >= total:
         final_status = "failed"
     else:
         final_status = "completed_partial"
 
-    _update_status(course_id, stage=final_status, section=total, total=total)
-
-    # Persist final status to database
+    # Persist final status to both course and job
     async with async_session() as session:
         from app.agent_service import update_course_status
-        await update_course_status(cid, final_status, session)
+        await update_course_status(course_id, final_status, session)
+
+    async with async_session() as session:
+        await update_job_status(job_id, final_status, session)
+
+    async with async_session() as session:
+        await update_checkpoint(job_id, CHECKPOINT_DONE, session)
 
     logger.info(
-        "[pipeline:%s] === PIPELINE FINISHED === status=%s, completed=%d/%d, failed=%s",
-        tag, final_status, len(completed_sections), total,
-        failed_sections if failed_sections else "none",
+        "[pipeline:%s] === PIPELINE FINISHED === status=%s, total=%d, failed=%s",
+        tag, final_status, total,
+        sorted(all_failed) if all_failed else "none",
     )
 
+    return final_status
+
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Backward-compatible stubs (consumed by courses.py / main.py until Task 4)
 # ---------------------------------------------------------------------------
 
+_active_tasks: set[asyncio.Task] = set()
 
-async def _safe_run_pipeline(
-    course_id: str,
-    provider: str,
-    model: str,
-    credentials: dict,
-    extra_fields: dict | None = None,
-    search_provider: str = "",
-    search_credentials: dict | None = None,
-) -> None:
-    """Wrapper that catches ALL exceptions so the task never silently dies."""
-    import traceback
-    tag = course_id[:8]
-    logger.info("[pipeline:%s] STARTED (model=%s, search=%s)", tag, model, search_provider or "none")
-    try:
-        await run_pipeline(course_id, provider, model, credentials, extra_fields, search_provider, search_credentials)
-    except asyncio.CancelledError:
-        logger.warning("[pipeline:%s] CANCELLED (server reload or shutdown)", tag)
-        _update_status(course_id, stage="failed", error="Task cancelled")
-        try:
-            async with async_session() as session:
-                from app.agent_service import update_course_status
-                await update_course_status(uuid.UUID(course_id), "failed", session)
-        except Exception:
-            pass
-        return
-    except Exception as e:
-        tb = traceback.format_exc()
-        logger.error("[pipeline:%s] CRASHED: %s\n%s", tag, e, tb)
-        _update_status(course_id, stage="failed", error=str(e)[:500])
-        try:
-            async with async_session() as session:
-                from app.agent_service import update_course_status
-                await update_course_status(uuid.UUID(course_id), "failed", session)
-        except Exception:
-            logger.error("[pipeline:%s] Failed to persist 'failed' status to DB", tag)
+
+def get_pipeline_status(course_id: str):
+    """Deprecated: returns None. Pipeline status is now in pipeline_jobs table."""
+    return None
 
 
 def start_pipeline(
@@ -382,15 +416,5 @@ def start_pipeline(
     search_provider: str = "",
     search_credentials: dict | None = None,
 ) -> None:
-    """Start the pipeline as a background asyncio task.
-
-    Stores a reference in _active_tasks to prevent GC from silently
-    cancelling the task.
-    """
-    _jobs[course_id] = PipelineStatus()
-    task = asyncio.create_task(
-        _safe_run_pipeline(course_id, provider, model, credentials, extra_fields, search_provider, search_credentials),
-        name=f"pipeline-{course_id}",
-    )
-    _active_tasks.add(task)
-    task.add_done_callback(_active_tasks.discard)
+    """Deprecated: no-op. Use the worker process + PipelineJob row instead."""
+    logger.warning("start_pipeline() is deprecated — pipeline jobs are now DB-driven")
