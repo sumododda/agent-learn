@@ -637,6 +637,7 @@ async def pipeline_stream(course_id: uuid.UUID, token: str = Query(...)):
         max_iterations = 900  # 30 minutes at 2-second intervals
         last_checkpoint = -1
         last_status = ""
+        last_event_count = 0
 
         for _ in range(max_iterations):
             try:
@@ -654,10 +655,17 @@ async def pipeline_stream(course_id: uuid.UUID, token: str = Query(...)):
                     await asyncio.sleep(2)
                     continue
 
+                # Stream granular pipeline events from the JSONB array
+                events = job.events or []
+                new_events = events[last_event_count:]
+                last_event_count = len(events)
+                for entry in new_events:
+                    yield f"event: {entry['event']}\ndata: {json_mod.dumps(entry['data'])}\n\n"
+
                 checkpoint = job.checkpoint
                 status = job.status
 
-                # Only emit when something changed
+                # Only emit stage-level events when something changed
                 if checkpoint != last_checkpoint or status != last_status:
                     last_checkpoint = checkpoint
                     last_status = status
