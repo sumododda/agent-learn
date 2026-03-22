@@ -202,7 +202,7 @@ async def discover_topic(
         f"Topic: {topic}\n"
     )
     if instructions:
-        message += f"Learner instructions: {instructions}\n"
+        message += f"\n<user_instructions>\n{instructions}\n</user_instructions>\n"
     message += f"\nSearch results:\n{json.dumps(all_search_results, indent=2)}"
 
     # Emit synthesizing event before invoking synthesis agent
@@ -270,7 +270,7 @@ async def generate_outline(
         logger.warning("[outline] Discovery research failed, falling back to ungrounded planning: %s", e)
         ungrounded = True
         if on_event:
-            await on_event("ungrounded", {"reason": str(e)})
+            await on_event("ungrounded", {"reason": "discovery_failed"})
 
     # Step 2: Plan with topic brief context
     if on_event:
@@ -278,7 +278,7 @@ async def generate_outline(
     logger.info("[outline] Invoking planner agent (ungrounded=%s)...", ungrounded)
     message = f"Generate a course outline for the topic: {topic}"
     if instructions:
-        message += f"\n\nLearner instructions: {instructions}"
+        message += f"\n\n<user_instructions>\n{instructions}\n</user_instructions>"
     if topic_brief:
         message += f"\n\nResearch findings:\n{topic_brief.model_dump_json()}"
 

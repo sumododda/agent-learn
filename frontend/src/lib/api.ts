@@ -89,12 +89,22 @@ export async function createCourseStream(
   }
 }
 
-export function getDiscoverStreamUrl(courseId: string, token: string): string {
-  return `${API_BASE}/api/courses/${courseId}/discover/stream?token=${encodeURIComponent(token)}`;
+export async function getSseTicket(token: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/auth/sse-ticket`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Failed to get SSE ticket');
+  const data = await res.json();
+  return data.ticket;
 }
 
-export function getPipelineStreamUrl(courseId: string, token: string): string {
-  return `${API_BASE}/api/courses/${courseId}/pipeline/stream?token=${encodeURIComponent(token)}`;
+export function getDiscoverStreamUrl(courseId: string, ticket: string): string {
+  return `${API_BASE}/api/courses/${courseId}/discover/stream?token=${encodeURIComponent(ticket)}`;
+}
+
+export function getPipelineStreamUrl(courseId: string, ticket: string): string {
+  return `${API_BASE}/api/courses/${courseId}/pipeline/stream?token=${encodeURIComponent(ticket)}`;
 }
 
 export async function regenerateCourse(

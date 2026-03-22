@@ -16,6 +16,15 @@ class _CacheEntry:
 
 
 _cache: dict[str, _CacheEntry] = {}
+_MAX_ENTRIES = 1000
+
+
+def _evict_expired() -> None:
+    """Remove expired entries when cache is at capacity."""
+    now = datetime.now(timezone.utc)
+    expired = [k for k, v in _cache.items() if now > v.expires_at]
+    for k in expired:
+        del _cache[k]
 
 
 def populate(
@@ -26,6 +35,11 @@ def populate(
     ttl_seconds: int = 86400,
 ) -> None:
     """Store decrypted credentials for a user."""
+    if user_id not in _cache and len(_cache) >= _MAX_ENTRIES:
+        _evict_expired()
+        if len(_cache) >= _MAX_ENTRIES:
+            oldest_key = next(iter(_cache))
+            del _cache[oldest_key]
     _cache[user_id] = _CacheEntry(
         credentials=credentials,
         default_provider=default_provider,

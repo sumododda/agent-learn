@@ -96,13 +96,17 @@ async def validate_search_credentials(provider: str, credentials: dict) -> bool:
 async def _search_tavily(
     query: str, credentials: dict, max_results: int, search_depth: str
 ) -> list[SearchResult]:
+    import asyncio
     from tavily import AsyncTavilyClient
 
     client = AsyncTavilyClient(api_key=credentials["api_key"])
-    response = await client.search(
-        query=query,
-        search_depth=search_depth,
-        max_results=max_results,
+    response = await asyncio.wait_for(
+        client.search(
+            query=query,
+            search_depth=search_depth,
+            max_results=max_results,
+        ),
+        timeout=30.0,
     )
     return [
         SearchResult(
@@ -118,15 +122,20 @@ async def _search_tavily(
 async def _search_exa(
     query: str, credentials: dict, max_results: int, search_depth: str
 ) -> list[SearchResult]:
+    import asyncio
     from exa_py import Exa
 
     exa = Exa(api_key=credentials["api_key"])
     use_autoprompt = search_depth == "advanced"
-    response = exa.search_and_contents(
-        query,
-        num_results=max_results,
-        text=True,
-        use_autoprompt=use_autoprompt,
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            exa.search_and_contents,
+            query,
+            num_results=max_results,
+            text=True,
+            use_autoprompt=use_autoprompt,
+        ),
+        timeout=30.0,
     )
     return [
         SearchResult(
@@ -197,10 +206,14 @@ async def _search_serper(
 async def _search_duckduckgo(
     query: str, credentials: dict, max_results: int, search_depth: str
 ) -> list[SearchResult]:
+    import asyncio
     from duckduckgo_search import AsyncDDGS
 
     async with AsyncDDGS() as ddgs:
-        raw = await ddgs.atext(query, max_results=max_results)
+        raw = await asyncio.wait_for(
+            ddgs.atext(query, max_results=max_results),
+            timeout=15.0,
+        )
 
     return [
         SearchResult(

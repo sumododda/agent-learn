@@ -237,9 +237,10 @@ async def process_job(job: PipelineJob, shutdown_event: asyncio.Event) -> None:
     except Exception as exc:
         logger.error("Job %s failed with exception: %s", job.id, exc, exc_info=True)
         try:
+            sanitized_error = "Pipeline failed. Check server logs for details."
             async with async_session() as session:
                 await update_job_status(
-                    job.id, "failed", session, error=str(exc)[:500]
+                    job.id, "failed", session, error=sanitized_error
                 )
             async with async_session() as session:
                 await session.execute(

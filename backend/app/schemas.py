@@ -16,7 +16,7 @@ class SectionComment(BaseModel):
 
 class RegenerateRequest(BaseModel):
     overall_comment: str | None = Field(default=None, max_length=5000)
-    section_comments: list[SectionComment] = []
+    section_comments: list[SectionComment] = Field(default=[], max_length=50)
 
 
 class SectionOutline(BaseModel):
@@ -139,8 +139,8 @@ class BlackboardResponse(BaseModel):
 
 class ProgressUpdateRequest(BaseModel):
     """Request body for POST /api/courses/{id}/progress."""
-    current_section: int | None = None
-    completed_section: int | None = None
+    current_section: int | None = Field(default=None, ge=0, le=200)
+    completed_section: int | None = Field(default=None, ge=0, le=200)
 
 
 class ProgressResponse(BaseModel):
@@ -173,7 +173,7 @@ class CourseWithProgressResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(max_length=10000)
     model: str = Field(max_length=200)
-    section_context: int
+    section_context: int = Field(ge=0, le=200)
 
 
 class ChatMessageResponse(BaseModel):
@@ -208,7 +208,7 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class AuthResponse(BaseModel):
@@ -241,21 +241,21 @@ class OtpResendResponse(BaseModel):
 
 
 class ProviderSaveRequest(BaseModel):
-    provider: str
-    credentials: dict
-    extra_fields: dict = {}
+    provider: str = Field(max_length=100)
+    credentials: dict = Field(max_length=10)
+    extra_fields: dict = Field(default={}, max_length=10)
     password: str | None = None
 
 
 class ProviderUpdateRequest(BaseModel):
-    credentials: dict | None = None
-    extra_fields: dict | None = None
+    credentials: dict | None = Field(default=None, max_length=10)
+    extra_fields: dict | None = Field(default=None, max_length=10)
     password: str | None = None
 
 
 class ProviderTestRequest(BaseModel):
-    credentials: dict
-    extra_fields: dict = {}
+    credentials: dict = Field(max_length=10)
+    extra_fields: dict = Field(default={}, max_length=10)
 
 
 class ProviderConfigResponse(BaseModel):
@@ -271,5 +271,5 @@ class ProviderDefaultRequest(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: str = Field(max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
