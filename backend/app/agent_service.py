@@ -2,8 +2,11 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Callable, Awaitable
 from datetime import date
 from typing import Sequence
+
+EventCallback = Callable[[str, dict], Awaitable[None]]
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,6 +136,7 @@ async def discover_topic(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    on_event: EventCallback | None = None,
 ) -> TopicBrief:
     """Run discovery research on a topic using web search + synthesis agent.
 
@@ -148,6 +152,11 @@ async def discover_topic(
     # Generate search queries
     queries = _generate_discovery_queries(topic, instructions)
     logger.info("Discovery research: %d queries for topic '%s'", len(queries), topic)
+
+    # Emit query events before launching searches
+    if on_event:
+        for i, query in enumerate(queries):
+            await on_event("query", {"index": i, "total": len(queries), "query": query})
 
     # Run searches via configured provider (in parallel)
     all_search_results = []
@@ -172,10 +181,19 @@ async def discover_topic(
                 "content": r.content,
                 "score": r.score,
             })
+        # Emit per-result source events and query_done
+        if on_event:
+            for r in result:
+                await on_event("source", {"query_index": i, "title": r.title, "url": r.url, "snippet": r.content[:200] if r.content else ""})
+            await on_event("query_done", {"index": i, "result_count": len(result)})
 
     if not all_search_results:
         logger.error("[discover] All %d searches failed — no results to synthesize", len(queries))
         raise RuntimeError("All searches failed — no results to synthesize")
+
+    # Emit discovery_done with total count
+    if on_event:
+        await on_event("discovery_done", {"total_sources": len(all_search_results)})
 
     logger.info("[discover] Collected %d search results from %d queries", len(all_search_results), len(queries))
 
@@ -187,6 +205,10 @@ async def discover_topic(
         message += f"Learner instructions: {instructions}\n"
     message += f"\nSearch results:\n{json.dumps(all_search_results, indent=2)}"
 
+    # Emit synthesizing event before invoking synthesis agent
+    if on_event:
+        await on_event("synthesizing", {})
+
     logger.info("[discover] Invoking discovery researcher agent...")
     researcher = create_discovery_researcher(provider, model, credentials, extra_fields)
     result = await _invoke_agent(researcher, message)
@@ -194,10 +216,14 @@ async def discover_topic(
     # Ensure we have a TopicBrief
     if isinstance(result, TopicBrief):
         logger.info("[discover] Discovery complete: %d key concepts, %d subtopics", len(result.key_concepts), len(result.subtopics))
+        if on_event:
+            await on_event("synthesis_done", {"key_concepts": result.key_concepts, "subtopics": result.subtopics})
         return result
     elif isinstance(result, dict):
         brief = TopicBrief(**result)
         logger.info("[discover] Discovery complete (from dict): %d key concepts, %d subtopics", len(brief.key_concepts), len(brief.subtopics))
+        if on_event:
+            await on_event("synthesis_done", {"key_concepts": brief.key_concepts, "subtopics": brief.subtopics})
         return brief
     else:
         raise ValueError(f"Discovery researcher returned unexpected type: {type(result)}")
@@ -212,6 +238,7 @@ async def generate_outline(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    on_event: EventCallback | None = None,
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
@@ -231,16 +258,23 @@ async def generate_outline(
             topic_brief = await discover_topic(
                 topic, instructions, provider, model, credentials, extra_fields,
                 search_provider, search_credentials,
+                on_event=on_event,
             )
             logger.info("[outline] Discovery research completed successfully")
         else:
             logger.warning("[outline] No search provider configured — skipping discovery, will be ungrounded")
             ungrounded = True
+            if on_event:
+                await on_event("ungrounded", {"reason": "no_search_provider"})
     except Exception as e:
         logger.warning("[outline] Discovery research failed, falling back to ungrounded planning: %s", e)
         ungrounded = True
+        if on_event:
+            await on_event("ungrounded", {"reason": str(e)})
 
     # Step 2: Plan with topic brief context
+    if on_event:
+        await on_event("planning", {})
     logger.info("[outline] Invoking planner agent (ungrounded=%s)...", ungrounded)
     message = f"Generate a course outline for the topic: {topic}"
     if instructions:

@@ -57,7 +57,7 @@ export default function OutlineReviewPage() {
       const t = await getToken();
       setToken(t);
       await generateCourse(courseId, t);
-      // Pipeline is now running in the background; PipelineProgress will poll
+      router.push(`/courses/${courseId}/generating`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate');
       setGenerating(false);
