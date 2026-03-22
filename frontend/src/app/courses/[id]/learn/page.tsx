@@ -6,6 +6,7 @@ import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import { Check } from 'lucide-react';
 import MermaidBlock from '@/components/MermaidBlock';
+import CitationRenderer from '@/components/CitationRenderer';
 import EvidencePanel from '@/components/EvidencePanel';
 import { ChatPanel } from '@/components/ChatDrawer';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -199,9 +200,11 @@ export default function LearnPage() {
             </div>
 
             <div className="learn-content">
-              <ReactMarkdown components={markdownComponents}>
-                {(currentSection.content || 'Content not yet generated.').replace(/^##?\s+.+\n+/, '')}
-              </ReactMarkdown>
+              <CitationRenderer
+                content={(currentSection.content || 'Content not yet generated.').replace(/^##?\s+.+\n+/, '')}
+                citations={currentSection.citations || []}
+                markdownComponents={markdownComponents}
+              />
             </div>
 
             {/* Prev/Next navigation */}

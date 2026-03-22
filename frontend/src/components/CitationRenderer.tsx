@@ -15,6 +15,7 @@ function safeHref(url: string): string {
 interface CitationRendererProps {
   content: string;
   citations: Citation[];
+  markdownComponents?: Record<string, React.ComponentType</* eslint-disable-next-line @typescript-eslint/no-explicit-any */ any>>;
 }
 
 function transformCitations(text: string): React.ReactNode[] {
@@ -43,12 +44,13 @@ function transformCitations(text: string): React.ReactNode[] {
   });
 }
 
-export default function CitationRenderer({ content, citations }: CitationRendererProps) {
+export default function CitationRenderer({ content, citations, markdownComponents }: CitationRendererProps) {
   return (
     <div>
       <div className="prose dark:prose-invert max-w-none">
         <ReactMarkdown
           components={{
+            ...markdownComponents,
             p: ({ children }) => {
               const processed = React.Children.map(children, (child) => {
                 if (typeof child === 'string') {
