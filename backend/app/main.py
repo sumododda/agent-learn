@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -29,11 +28,6 @@ from app.routers.auth_routes import router as auth_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    # Cancel active pipeline tasks on shutdown
-    from app.pipeline import _active_tasks
-    for task in _active_tasks:
-        task.cancel()
-    await asyncio.gather(*_active_tasks, return_exceptions=True)
 
 
 app = FastAPI(title="agent-learn", lifespan=lifespan)

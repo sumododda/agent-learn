@@ -8,10 +8,14 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import event
 
 from app.main import app
-from app.models import Base, Blackboard, EvidenceCard, ResearchBrief
+from app.models import Base, Blackboard, EvidenceCard, ResearchBrief, User
 from app.database import get_session
 from app.auth import get_current_user
 from app.limiter import limiter
+
+# Deterministic test user UUID (used as both User.id and the JWT subject)
+TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+TEST_USER_ID = str(TEST_USER_UUID)
 from app.agent import (
     BlackboardUpdates,
     CardVerification,
@@ -60,8 +64,14 @@ async def setup_db():
         async with session_factory() as session:
             yield session
 
+    # Create a User row so PipelineJob FK (user_id -> users.id) is satisfied
+    async with session_factory() as session:
+        user = User(id=TEST_USER_UUID, email="test@example.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
     limiter.enabled = False
     yield
 
