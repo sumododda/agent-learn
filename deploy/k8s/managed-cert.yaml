@@ -1,0 +1,8 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: agent-learn-cert
+  namespace: agent-learn
+spec:
+  domains:
+    - learn.blekcipher.com

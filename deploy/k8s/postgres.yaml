@@ -47,6 +47,8 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: postgres-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           resources:
             requests:
               memory: "256Mi"
