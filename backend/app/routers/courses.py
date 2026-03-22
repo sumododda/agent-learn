@@ -35,16 +35,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _get_default_model(provider: str) -> str:
-    from app.provider_service import PROVIDERS
-    models = PROVIDERS.get(provider, {}).get("models", [])
-    if isinstance(models, list) and models:
-        return models[0]["id"]
-    return "gpt-4o-mini"
+async def _ensure_cache(user_id: str, session) -> None:
+    """Lazy-load provider credentials into cache if not already present."""
+    if key_cache.get_default(user_id) is not None:
+        return
+    from app.routers.auth_routes import _load_provider_keys
+    uid = uuid.UUID(user_id)
+    await _load_provider_keys(user_id, uid, session)
 
 
 async def _get_user_provider(user_id: str, session) -> tuple[str, str, dict, dict]:
-    """Get (provider, model, credentials, extra_fields) from cache + DB."""
+    """Get (provider, model, api_key, extra_fields) for the user's OpenRouter config."""
+    from app.provider_service import DEFAULT_MODEL
+    await _ensure_cache(user_id, session)
     default = key_cache.get_default(user_id)
     if default is None:
         raise HTTPException(400, detail="no_provider_configured")
@@ -57,12 +60,13 @@ async def _get_user_provider(user_id: str, session) -> tuple[str, str, dict, dic
     )
     pc = result.scalar_one_or_none()
     extra_fields = pc.extra_fields if pc else {}
-    model = _get_default_model(provider)
+    model = (extra_fields or {}).get("model") or DEFAULT_MODEL
     return provider, model, creds, extra_fields or {}
 
 
-def _get_user_search_provider(user_id: str) -> tuple[str, dict]:
+async def _get_user_search_provider(user_id: str, session) -> tuple[str, dict]:
     """Get (search_provider, search_credentials) from cache. Returns ("", {}) if none configured."""
+    await _ensure_cache(user_id, session)
     result = key_cache.get_default_search(user_id)
     if result is None:
         return ("", {})
@@ -90,7 +94,7 @@ async def create_course(
     try:
         # Get provider credentials from cache
         provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
-        search_provider, search_creds = _get_user_search_provider(user_id)
+        search_provider, search_creds = await _get_user_search_provider(user_id, session)
 
         # Generate outline via discovery research + planner
         # generate_outline now returns (CourseOutlineWithBriefs, ungrounded_flag)
@@ -184,7 +188,7 @@ async def generate_course(
 
     # Get provider credentials from cache
     provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
-    search_provider, search_creds = _get_user_search_provider(user_id)
+    search_provider, search_creds = await _get_user_search_provider(user_id, session)
 
     # Start the asyncio background pipeline
     start_pipeline(str(course_id), provider, model, creds, extra_fields, search_provider, search_creds)
@@ -252,9 +256,11 @@ async def regenerate_course(
     try:
         # Get provider credentials from cache
         provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
+        search_provider, search_creds = await _get_user_search_provider(user_id, session)
 
         outline_with_briefs, ungrounded = await generate_outline(
-            course.topic, enhanced_instructions, provider, model, creds, extra_fields
+            course.topic, enhanced_instructions, provider, model, creds, extra_fields,
+            search_provider, search_creds,
         )
 
         course.ungrounded = ungrounded
@@ -351,6 +357,24 @@ async def get_course(
             error=pipeline.error,
         )
     return resp
+
+
+@router.delete("/courses/{course_id}", status_code=204)
+async def delete_course(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    result = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await session.delete(course)
+    await session.commit()
 
 
 # ---------------------------------------------------------------------------

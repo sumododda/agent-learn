@@ -7,16 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import search_service
+from app import key_cache, search_service
 from app.auth import get_current_user
 from app.config import settings
 from app.crypto import (
-    decrypt_credentials,
     derive_key,
     encrypt_credentials,
+    decrypt_credentials,
     generate_credential_hint,
     generate_salt,
-    zero_buffer,
 )
 from app.database import get_session
 from app.models import ProviderConfig, UserKeySalt
@@ -51,6 +50,11 @@ async def _get_or_create_salt(user_id: str, session: AsyncSession) -> tuple[byte
     session.add(UserKeySalt(user_id=uid, salt=salt))
     await session.flush()
     return salt, True
+
+
+def _get_key(salt: bytes) -> bytearray:
+    """Derive encryption key from server pepper + user salt."""
+    return derive_key(salt, settings.ENCRYPTION_PEPPER.encode("utf-8"))
 
 
 @router.get("/registry")
@@ -103,13 +107,18 @@ async def save_search_provider(
         raise HTTPException(409, f"Search provider {body.provider} already configured. Use PUT to update.")
 
     salt, _ = await _get_or_create_salt(user_id, session)
-    key = derive_key(body.password, salt, settings.ENCRYPTION_PEPPER.encode("utf-8"))
-    try:
-        encrypted = encrypt_credentials(key, json.dumps(body.credentials))
-    finally:
-        zero_buffer(key)
-
+    key = _get_key(salt)
+    encrypted = encrypt_credentials(key, json.dumps(body.credentials))
     hint = generate_credential_hint(body.provider, body.credentials) if body.credentials else "No key required"
+
+    # Auto-set as default if first search provider
+    existing_count = await session.execute(
+        select(ProviderConfig).where(
+            ProviderConfig.user_id == uid,
+            ProviderConfig.provider.in_(_VALID_PROVIDERS),
+        )
+    )
+    is_first = len(existing_count.scalars().all()) == 0
 
     config = ProviderConfig(
         user_id=uid,
@@ -117,10 +126,14 @@ async def save_search_provider(
         encrypted_credentials=encrypted,
         credential_hint=hint,
         extra_fields=body.extra_fields or None,
-        is_default=False,
+        is_default=is_first,
     )
     session.add(config)
     await session.commit()
+
+    key_cache.set_credentials(user_id, body.provider, body.credentials)
+    if is_first:
+        key_cache.set_default_search(user_id, body.provider)
 
     return ProviderConfigResponse(
         provider=config.provider,
@@ -148,7 +161,6 @@ async def set_default_search_provider(
     if not target:
         raise HTTPException(404, f"Search provider {body.provider} not configured")
 
-    # Only toggle is_default among search provider rows
     all_result = await session.execute(
         select(ProviderConfig).where(
             ProviderConfig.user_id == uid,
@@ -159,6 +171,7 @@ async def set_default_search_provider(
         config.is_default = (config.provider == body.provider)
 
     await session.commit()
+    key_cache.set_default_search(user_id, body.provider)
 
     return ProviderConfigResponse(
         provider=target.provider,
@@ -188,15 +201,11 @@ async def update_search_provider(
         raise HTTPException(404, f"Search provider {provider} not configured")
 
     if body.credentials is not None:
-        if not body.password:
-            raise HTTPException(400, "Password required when updating credentials")
         salt, _ = await _get_or_create_salt(user_id, session)
-        key = derive_key(body.password, salt, settings.ENCRYPTION_PEPPER.encode("utf-8"))
-        try:
-            config.encrypted_credentials = encrypt_credentials(key, json.dumps(body.credentials))
-        finally:
-            zero_buffer(key)
+        key = _get_key(salt)
+        config.encrypted_credentials = encrypt_credentials(key, json.dumps(body.credentials))
         config.credential_hint = generate_credential_hint(provider, body.credentials) if body.credentials else "No key required"
+        key_cache.set_credentials(user_id, provider, body.credentials)
 
     if body.extra_fields is not None:
         config.extra_fields = body.extra_fields
@@ -230,6 +239,7 @@ async def delete_search_provider(
         raise HTTPException(404, f"Search provider {provider} not configured")
     await session.delete(config)
     await session.commit()
+    key_cache.remove_credentials(user_id, provider)
 
 
 @router.post("/{provider}/test")

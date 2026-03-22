@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>agent-learn | Library</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-bright": "#2b2c32",
+                        "primary": "#c0c1ff",
+                        "primary-fixed-dim": "#d1d0ff",
+                        "inverse-primary": "#494bd7",
+                        "on-primary": "#2724b8",
+                        "tertiary-dim": "#c0c9e6",
+                        "surface-container-lowest": "#000000",
+                        "surface-dim": "#0e0e10",
+                        "secondary-fixed": "#e5e1e6",
+                        "surface-variant": "#25252b",
+                        "surface-container-highest": "#25252b",
+                        "secondary-container": "#3c3b3f",
+                        "on-primary-container": "#ccccff",
+                        "surface-container-high": "#1f1f24",
+                        "primary-container": "#2f2ebe",
+                        "on-primary-fixed": "#2622b7",
+                        "on-tertiary-fixed-variant": "#4b546d",
+                        "error-container": "#7f2737",
+                        "error": "#ec7c8a",
+                        "surface-container": "#19191d",
+                        "on-secondary-fixed": "#403f43",
+                        "outline": "#75757c",
+                        "surface-tint": "#c0c1ff",
+                        "on-secondary": "#202023",
+                        "on-secondary-fixed-variant": "#5c5b5f",
+                        "on-background": "#e7e4ec",
+                        "background": "#0e0e10",
+                        "tertiary-fixed-dim": "#c0c9e6",
+                        "primary-fixed": "#e1e0ff",
+                        "on-primary-fixed-variant": "#4647d3",
+                        "surface": "#0e0e10",
+                        "tertiary-container": "#ced6f5",
+                        "on-tertiary-fixed": "#2f384f",
+                        "outline-variant": "#47474e",
+                        "inverse-on-surface": "#565457",
+                        "surface-container-low": "#131316",
+                        "inverse-surface": "#fcf8fb",
+                        "on-surface-variant": "#acaab1",
+                        "tertiary": "#dee5ff",
+                        "secondary": "#9f9da1",
+                        "on-tertiary-container": "#424a63",
+                        "on-error-container": "#ff97a3",
+                        "on-secondary-container": "#c1bec3",
+                        "on-error": "#490013",
+                        "tertiary-fixed": "#ced6f5",
+                        "error-dim": "#b95463",
+                        "primary-dim": "#b0b2ff",
+                        "on-tertiary": "#4a536c",
+                        "secondary-fixed-dim": "#d6d3d8",
+                        "secondary-dim": "#9f9da1",
+                        "on-surface": "#e7e4ec"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface antialiased min-h-screen">
+<!-- TopNavBar (Shared Component Execution) -->
+<header class="bg-[#0e0e10] h-[48px] w-full sticky top-0 z-50 border-b border-[#47474e]/50 font-['Inter'] antialiased tracking-tight text-sm">
+<div class="flex justify-between items-center px-6 w-full max-w-[960px] mx-auto h-full">
+<div class="text-lg font-bold tracking-tighter text-[#e7e4ec] cursor-pointer">
+                agent-learn
+            </div>
+<nav class="flex items-center h-full space-x-2">
+<a class="text-[#acaab1] hover:text-[#e7e4ec] h-full flex items-center px-4 transition-colors cursor-pointer active:opacity-80" href="#">Create</a>
+<!-- Active Navigation: Library -->
+<a class="text-[#6366f1] font-semibold border-b-2 border-[#6366f1] h-full flex items-center px-4 cursor-pointer active:opacity-80" href="#">Library</a>
+</nav>
+<div class="flex items-center space-x-4">
+<button class="text-[#acaab1] hover:text-[#e7e4ec] transition-colors cursor-pointer">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="max-w-[960px] mx-auto px-6 py-8">
+<!-- Dashboard Header & Tabs -->
+<div class="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
+<div>
+<h1 class="text-[25px] font-semibold text-on-surface tracking-tight">My Courses</h1>
+</div>
+<nav class="flex items-center space-x-6">
+<button class="text-sm font-medium text-on-surface border-b-2 border-[#6366f1] pb-1 cursor-pointer">All</button>
+<button class="text-sm font-medium text-on-surface-variant hover:text-on-surface transition-colors pb-1 cursor-pointer">In Progress</button>
+<button class="text-sm font-medium text-on-surface-variant hover:text-on-surface transition-colors pb-1 cursor-pointer">Completed</button>
+</nav>
+</div>
+<!-- 2-Column Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<!-- Card: Kubernetes Networking -->
+<article class="bg-[#19191d] border border-[#47474e]/50 rounded-lg p-5 flex flex-col justify-between hover:border-[#6366f1]/50 transition-colors">
+<div class="mb-6">
+<h3 class="text-base font-semibold text-on-surface mb-1">Kubernetes Networking</h3>
+<p class="text-sm text-on-surface-variant">12 sections · Started 3 days ago</p>
+</div>
+<div class="space-y-2">
+<div class="w-full bg-[#25252b] h-1 rounded-full overflow-hidden">
+<div class="bg-[#6366f1] h-full" style="width: 64%"></div>
+</div>
+<p class="text-[10px] text-outline text-right font-medium">64% complete</p>
+</div>
+</article>
+<!-- Card: Advanced SQL Tuning -->
+<article class="bg-[#19191d] border border-[#47474e]/50 rounded-lg p-5 flex flex-col justify-between hover:border-[#6366f1]/50 transition-colors">
+<div class="mb-6">
+<h3 class="text-base font-semibold text-on-surface mb-1">Advanced SQL Tuning</h3>
+<p class="text-sm text-on-surface-variant">8 sections · Started 1 week ago</p>
+</div>
+<div class="space-y-2">
+<div class="w-full bg-[#25252b] h-1 rounded-full overflow-hidden">
+<div class="bg-[#6366f1] h-full" style="width: 20%"></div>
+</div>
+<p class="text-[10px] text-outline text-right font-medium">20% complete</p>
+</div>
+</article>
+<!-- Card: Go Microservices Architecture -->
+<article class="bg-[#19191d] border border-[#47474e]/50 rounded-lg p-5 flex flex-col justify-between hover:border-[#6366f1]/50 transition-colors">
+<div class="mb-6">
+<h3 class="text-base font-semibold text-on-surface mb-1">Go Microservices Architecture</h3>
+<p class="text-sm text-on-surface-variant">15 sections · Finished yesterday</p>
+</div>
+<div class="space-y-2">
+<div class="w-full bg-[#25252b] h-1 rounded-full overflow-hidden">
+<div class="bg-[#22c55e] h-full" style="width: 100%"></div>
+</div>
+<div class="flex justify-between items-center">
+<span class="text-[10px] text-[#22c55e] font-bold uppercase tracking-wider">Completed</span>
+<p class="text-[10px] text-outline text-right font-medium">100% complete</p>
+</div>
+</div>
+</article>
+<!-- Card: React Design Patterns -->
+<article class="bg-[#19191d] border border-[#47474e]/50 rounded-lg p-5 flex flex-col justify-between hover:border-[#6366f1]/50 transition-colors">
+<div class="mb-6">
+<h3 class="text-base font-semibold text-on-surface mb-1">React Design Patterns</h3>
+<p class="text-sm text-on-surface-variant">10 sections · Started 5 days ago</p>
+</div>
+<div class="space-y-2">
+<div class="w-full bg-[#25252b] h-1 rounded-full overflow-hidden">
+<div class="bg-[#6366f1] h-full" style="width: 45%"></div>
+</div>
+<p class="text-[10px] text-outline text-right font-medium">45% complete</p>
+</div>
+</article>
+<!-- Card: Prompt Engineering for Devs -->
+<article class="bg-[#19191d] border border-[#47474e]/50 rounded-lg p-5 flex flex-col justify-between hover:border-[#6366f1]/50 transition-colors">
+<div class="mb-6">
+<h3 class="text-base font-semibold text-on-surface mb-1">Prompt Engineering for Devs</h3>
+<p class="text-sm text-on-surface-variant">6 sections · Started 2 days ago</p>
+</div>
+<div class="space-y-2">
+<div class="w-full bg-[#25252b] h-1 rounded-full overflow-hidden">
+<div class="bg-[#6366f1] h-full" style="width: 82%"></div>
+</div>
+<p class="text-[10px] text-outline text-right font-medium">82% complete</p>
+</div>
+</article>
+<!-- Card: Distributed Systems Fundamentals -->
+<article class="bg-[#19191d] border border-[#47474e]/50 rounded-lg p-5 flex flex-col justify-between hover:border-[#6366f1]/50 transition-colors">
+<div class="mb-6">
+<h3 class="text-base font-semibold text-on-surface mb-1">Distributed Systems Fundamentals</h3>
+<p class="text-sm text-on-surface-variant">20 sections · Started 2 weeks ago</p>
+</div>
+<div class="space-y-2">
+<div class="w-full bg-[#25252b] h-1 rounded-full overflow-hidden">
+<div class="bg-[#6366f1] h-full" style="width: 12%"></div>
+</div>
+<p class="text-[10px] text-outline text-right font-medium">12% complete</p>
+</div>
+</article>
+</div>
+<!-- Density Footer Meta -->
+<footer class="mt-12 pt-6 border-t border-[#47474e]/30 flex flex-col md:flex-row justify-between items-center gap-4">
+<div class="flex items-center space-x-4 text-[11px] text-outline font-medium tracking-widest uppercase">
+<span>6 Courses Enrolled</span>
+<span class="w-1 h-1 bg-outline-variant rounded-full"></span>
+<span>2 Completed</span>
+</div>
+<div class="text-[11px] text-outline font-medium tracking-tight">
+                System Status: <span class="text-[#22c55e]">Operational</span>
+</div>
+</footer>
+</main>
+</body></html>

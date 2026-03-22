@@ -75,7 +75,10 @@ export default function LibraryPage() {
   const statusBadge: Record<string, { text: string; className: string }> = {
     outline_ready: { text: 'Outline Ready', className: 'bg-warning/15 text-warning' },
     generating: { text: 'Generating...', className: 'bg-primary/15 text-primary' },
+    researching: { text: 'Researching...', className: 'bg-primary/15 text-primary' },
+    writing: { text: 'Writing...', className: 'bg-primary/15 text-primary' },
     completed: { text: 'Completed', className: 'bg-emerald-500/15 text-emerald-500' },
+    completed_partial: { text: 'Partial', className: 'bg-warning/15 text-warning' },
     failed: { text: 'Failed', className: 'bg-destructive/15 text-destructive' },
   };
 
@@ -129,7 +132,7 @@ export default function LibraryPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filtered.map((course) => {
               const href =
-                course.status === 'completed'
+                course.status === 'completed' || course.status === 'completed_partial'
                   ? `/courses/${course.id}/learn`
                   : `/courses/${course.id}`;
 

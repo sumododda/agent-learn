@@ -34,19 +34,22 @@ class Course(Base):
     )
 
     sections: Mapped[list["Section"]] = relationship(
-        back_populates="course", order_by="Section.position"
+        back_populates="course", order_by="Section.position", cascade="all, delete-orphan"
     )
     research_briefs: Mapped[list["ResearchBrief"]] = relationship(
-        back_populates="course"
+        back_populates="course", cascade="all, delete-orphan"
     )
     evidence_cards: Mapped[list["EvidenceCard"]] = relationship(
-        back_populates="course"
+        back_populates="course", cascade="all, delete-orphan"
     )
     blackboard: Mapped["Blackboard | None"] = relationship(
-        back_populates="course", uselist=False
+        back_populates="course", uselist=False, cascade="all, delete-orphan"
     )
     chat_messages: Mapped[list["ChatMessage"]] = relationship(
-        back_populates="course"
+        back_populates="course", cascade="all, delete-orphan"
+    )
+    learner_progress: Mapped[list["LearnerProgress"]] = relationship(
+        cascade="all, delete-orphan"
     )
 
 

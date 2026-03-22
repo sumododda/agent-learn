@@ -3,9 +3,8 @@ uvicorn[standard]
 sqlalchemy[asyncio]
 asyncpg
 alembic
-litellm
-deepagents
-langchain-litellm
+langchain
+langchain-openai
 pydantic-settings
 python-dotenv
 httpx

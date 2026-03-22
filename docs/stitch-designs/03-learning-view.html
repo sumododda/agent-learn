@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Learning View | agent-learn</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Newsreader:opsz,wght@6..72,400;500&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        @font-face {
+            font-family: 'Georgia';
+            src: local('Georgia');
+        }
+        .serif-body {
+            font-family: 'Georgia', serif;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            font-size: 18px;
+        }
+        /* Custom scrollbar for brutalist feel */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #09090b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #27272a;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              colors: {
+                "on-secondary": "#202023",
+                "on-secondary-container": "#c1bec2",
+                "error-dim": "#b95463",
+                "tertiary": "#dee5ff",
+                "surface-dim": "#0e0e10",
+                "on-error-container": "#ff97a3",
+                "primary-fixed": "#e1e0ff",
+                "secondary-fixed": "#e4e1e5",
+                "primary-fixed-dim": "#d1d0ff",
+                "primary-dim": "#b0b2ff",
+                "secondary-dim": "#9f9da1",
+                "secondary-container": "#3b3b3e",
+                "on-tertiary-fixed": "#2f384f",
+                "primary-container": "#2f2ebe",
+                "error-container": "#7f2737",
+                "surface-container": "#19191d",
+                "outline-variant": "#47474e",
+                "on-tertiary": "#4a536c",
+                "on-surface-variant": "#acaab1",
+                "on-primary-fixed-variant": "#4647d3",
+                "background": "#09090b",
+                "error": "#ec7c8a",
+                "on-primary": "#2724b8",
+                "inverse-surface": "#fcf8fb",
+                "on-error": "#490013",
+                "on-background": "#e7e4ec",
+                "tertiary-fixed-dim": "#c0c9e6",
+                "on-primary-container": "#ccccff",
+                "surface-container-low": "#131316",
+                "surface-container-lowest": "#000000",
+                "on-surface": "#e7e4ec",
+                "on-secondary-fixed-variant": "#5c5b5e",
+                "secondary": "#9f9da1",
+                "surface-bright": "#2b2c32",
+                "on-primary-fixed": "#2622b7",
+                "surface-container-high": "#1f1f24",
+                "outline": "#75757c",
+                "surface-tint": "#c0c1ff",
+                "tertiary-dim": "#c0c9e6",
+                "on-tertiary-fixed-variant": "#4b546d",
+                "surface": "#0e0e10",
+                "tertiary-fixed": "#ced6f5",
+                "secondary-fixed-dim": "#d6d3d7",
+                "tertiary-container": "#ced6f5",
+                "inverse-primary": "#494bd7",
+                "primary": "#6366f1",
+                "surface-container-highest": "#25252b",
+                "on-tertiary-container": "#424a63",
+                "inverse-on-surface": "#565457",
+                "on-secondary-fixed": "#3f3f42"
+              },
+              fontFamily: {
+                "headline": ["Inter", "sans-serif"],
+                "body": ["Georgia", "serif"],
+                "label": ["Inter", "sans-serif"]
+              },
+              borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+            },
+          },
+        }
+      </script>
+</head>
+<body class="bg-background text-on-surface font-label antialiased overflow-hidden">
+<div class="flex h-screen w-full">
+<!-- LEFT SIDEBAR -->
+<!-- Logic: Maps to SideNavBar component from Shared Components JSON -->
+<aside class="fixed left-0 top-0 h-full w-[240px] flex flex-col z-40 bg-zinc-900 border-r border-zinc-800">
+<!-- Header Section -->
+<div class="p-4 space-y-3">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 bg-primary rounded-sm flex items-center justify-center text-[10px] text-on-primary font-bold">KL</div>
+<h2 class="text-sm font-semibold text-zinc-50 tracking-tight">Kubernetes Networking</h2>
+</div>
+<!-- Progress Bar -->
+<div class="w-full h-[3px] bg-zinc-800 overflow-hidden">
+<div class="h-full bg-primary w-[40%]"></div>
+</div>
+<div class="flex justify-between items-center">
+<span class="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Course Progress</span>
+<span class="text-[10px] font-medium text-primary">40% Complete</span>
+</div>
+</div>
+<!-- Navigation List -->
+<nav class="flex-1 overflow-y-auto py-2">
+<!-- Completed Items -->
+<div class="px-2 space-y-0.5">
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-400 hover:bg-zinc-800/50 transition-colors text-xs font-medium">
+<span class="material-symbols-outlined text-[#22c55e] !text-[16px]">check_circle</span>
+<span>1. Introduction</span>
+</button>
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-400 hover:bg-zinc-800/50 transition-colors text-xs font-medium">
+<span class="material-symbols-outlined text-[#22c55e] !text-[16px]">check_circle</span>
+<span>2. Networking Model</span>
+</button>
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-400 hover:bg-zinc-800/50 transition-colors text-xs font-medium">
+<span class="material-symbols-outlined text-[#22c55e] !text-[16px]">check_circle</span>
+<span>3. Services &amp; DNS</span>
+</button>
+<!-- Active Item -->
+<!-- style_active_navigation: bg-zinc-800 text-indigo-400 border-l-2 border-indigo-500 rounded-r-sm -->
+<button class="w-full flex items-center gap-3 px-3 py-2 bg-zinc-800 text-primary border-l-2 border-primary rounded-r-sm text-xs font-semibold">
+<span class="material-symbols-outlined !text-[16px]">play_circle</span>
+<span>4. Pod Communication</span>
+</button>
+<!-- Upcoming Items -->
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-500 hover:text-zinc-400 text-xs font-medium">
+<span class="w-4 h-4"></span>
+<span>5. Network Policies</span>
+</button>
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-500 hover:text-zinc-400 text-xs font-medium">
+<span class="w-4 h-4"></span>
+<span>6. Ingress</span>
+</button>
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-500 hover:text-zinc-400 text-xs font-medium">
+<span class="w-4 h-4"></span>
+<span>7. Service Mesh</span>
+</button>
+<button class="w-full flex items-center gap-3 px-3 py-2 text-zinc-500 hover:text-zinc-400 text-xs font-medium">
+<span class="w-4 h-4"></span>
+<span>8. Troubleshooting</span>
+</button>
+</div>
+</nav>
+<!-- Bottom Context -->
+<div class="p-4 border-t border-zinc-800 mt-auto bg-zinc-900/50">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-400">
+<span class="material-symbols-outlined !text-[18px]">account_tree</span>
+</div>
+<div>
+<p class="text-[11px] font-bold text-zinc-200">Engineering Brutalism</p>
+<p class="text-[10px] text-zinc-500">The Architect's Ledger</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- CENTER CONTENT -->
+<main class="flex-1 ml-[240px] mr-[300px] bg-background overflow-y-auto scroll-smooth">
+<div class="max-w-[680px] mx-auto py-12 px-10">
+<!-- Breadcrumb -->
+<nav class="flex items-center gap-2 text-[11px] font-medium text-zinc-500 mb-6 tracking-wide">
+<span>KUBERNETES NETWORKING</span>
+<span class="material-symbols-outlined !text-[12px]">chevron_right</span>
+<span class="text-zinc-400">POD COMMUNICATION</span>
+</nav>
+<!-- Heading -->
+<h1 class="text-[25px] font-semibold text-zinc-50 mb-8 tracking-tight leading-tight">
+                    Understanding Intra-Pod Communication
+                </h1>
+<!-- Body Content (Georgia) -->
+<div class="serif-body text-base leading-[1.75] text-[#d4d4d8] space-y-6">
+<p>
+                        In the Kubernetes networking model, every Pod gets its own IP address. This is often referred to as the "IP-per-Pod" model. Pods on a node can communicate with all pods on all nodes without NAT. This fundamental requirement simplifies the transition of applications from physical machines and virtual machines to containers.
+                    </p>
+<p>
+                        When containers within the same Pod need to communicate, they do so via <span class="text-zinc-200 font-medium">localhost</span>. They share the same network namespace, including the IP address and network ports. This allows for highly efficient data exchange, ideal for sidecar patterns such as logging agents or service mesh proxies.
+                    </p>
+<!-- Code Block -->
+<div class="my-8 rounded border border-zinc-800 bg-[#111113] group relative">
+<div class="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900/50">
+<span class="text-[11px] font-mono text-zinc-500">pod-definition.yaml</span>
+<button class="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors">
+<span class="material-symbols-outlined !text-[14px]">content_copy</span>
+<span>Copy</span>
+</button>
+</div>
+<pre class="p-4 text-[14px] font-mono leading-relaxed overflow-x-auto text-zinc-300"><code><span class="text-indigo-400">apiVersion</span>: v1
+<span class="text-indigo-400">kind</span>: Pod
+<span class="text-indigo-400">metadata</span>:
+  <span class="text-indigo-400">name</span>: <span class="text-[#22c55e]">"multi-container-pod"</span>
+<span class="text-indigo-400">spec</span>:
+  <span class="text-indigo-400">containers</span>:
+  - <span class="text-indigo-400">name</span>: <span class="text-[#22c55e]">"app-container"</span>
+    <span class="text-indigo-400">image</span>: <span class="text-[#22c55e]">"my-app:1.0"</span>
+  - <span class="text-indigo-400">name</span>: <span class="text-[#22c55e]">"sidecar-container"</span>
+    <span class="text-indigo-400">image</span>: <span class="text-[#22c55e]">"logging-agent:latest"</span>
+<span class="text-zinc-500"># Both containers share the same network stack</span></code></pre>
+</div>
+<p>
+                        Communication between Pods on different nodes is orchestrated by the Container Network Interface (CNI) plugin. Whether you are using Calico, Flannel, or Cilium, the goal is to encapsulate or route traffic such that the destination Pod receives the packet with its original source IP intact.
+                    </p>
+</div>
+<!-- Footer Navigation -->
+<div class="mt-16 pt-8 border-t border-zinc-800 flex justify-between items-center">
+<a class="flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors group" href="#">
+<span class="material-symbols-outlined !text-[18px] transition-transform group-hover:-translate-x-1">arrow_back</span>
+<span>Previous Section</span>
+</a>
+<a class="flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors group" href="#">
+<span>Next Section</span>
+<span class="material-symbols-outlined !text-[18px] transition-transform group-hover:translate-x-1">arrow_forward</span>
+</a>
+</div>
+</div>
+</main>
+<!-- RIGHT PANEL -->
+<aside class="fixed right-0 top-0 h-full w-[300px] bg-zinc-900 border-l border-zinc-800 flex flex-col z-40">
+<!-- Tabs -->
+<div class="flex border-b border-zinc-800">
+<button class="flex-1 py-4 text-[11px] font-bold uppercase tracking-widest text-primary border-b-2 border-primary">
+                    Sources
+                </button>
+<button class="flex-1 py-4 text-[11px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-300 transition-colors">
+                    Chat
+                </button>
+</div>
+<!-- Source List -->
+<div class="flex-1 overflow-y-auto p-4 space-y-3">
+<!-- Source Card 1 -->
+<div class="p-3 bg-zinc-800 rounded border border-zinc-700/50 hover:border-zinc-600 transition-colors cursor-pointer group">
+<div class="flex items-start justify-between mb-2">
+<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/20">TIER 1</span>
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-zinc-400">open_in_new</span>
+</div>
+<h3 class="text-xs font-semibold text-zinc-50 mb-1 leading-snug">Kubernetes Official Documentation: Networking</h3>
+<p class="text-[10px] font-mono text-zinc-500 truncate">kubernetes.io/docs/concepts/cluster-administration/networking/</p>
+</div>
+<!-- Source Card 2 -->
+<div class="p-3 bg-zinc-800 rounded border border-zinc-700/50 hover:border-zinc-600 transition-colors cursor-pointer group">
+<div class="flex items-start justify-between mb-2">
+<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/20">TIER 1</span>
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-zinc-400">open_in_new</span>
+</div>
+<h3 class="text-xs font-semibold text-zinc-50 mb-1 leading-snug">The CNI Specification v1.0.0</h3>
+<p class="text-[10px] font-mono text-zinc-500 truncate">github.com/containernetworking/cni/blob/spec/SPEC.md</p>
+</div>
+<!-- Source Card 3 -->
+<div class="p-3 bg-zinc-800 rounded border border-zinc-700/50 hover:border-zinc-600 transition-colors cursor-pointer group">
+<div class="flex items-start justify-between mb-2">
+<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/20">TIER 1</span>
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-zinc-400">open_in_new</span>
+</div>
+<h3 class="text-xs font-semibold text-zinc-50 mb-1 leading-snug">Packet Walk: Intra-node Communication</h3>
+<p class="text-[10px] font-mono text-zinc-500 truncate">blog.architect.io/k8s-packet-flow-explained</p>
+</div>
+<!-- Source Card 4 -->
+<div class="p-3 bg-zinc-800 rounded border border-zinc-700/50 hover:border-zinc-600 transition-colors cursor-pointer group">
+<div class="flex items-start justify-between mb-2">
+<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/20">TIER 1</span>
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-zinc-400">open_in_new</span>
+</div>
+<h3 class="text-xs font-semibold text-zinc-50 mb-1 leading-snug">Understanding IPVS Proxy Mode</h3>
+<p class="text-[10px] font-mono text-zinc-500 truncate">docs.tigera.io/calico/latest/networking/ipvs</p>
+</div>
+</div>
+<!-- Reference Summary -->
+<div class="p-4 bg-zinc-950 border-t border-zinc-800">
+<h4 class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Architect's Note</h4>
+<p class="text-[11px] leading-relaxed text-zinc-400 serif-body italic">
+                    All sources verified for Kubernetes v1.28+ technical accuracy.
+                </p>
+</div>
+</aside>
+</div>
+</body></html>

@@ -1,10 +1,9 @@
-"""In-memory session cache for decrypted provider credentials.
+"""In-memory cache for decrypted provider credentials.
 
-Populated at login after deriving the encryption key from the user's password.
-Intentionally per-process and non-persistent — server restarts clear all
-cached credentials, requiring users to re-login.
+Populated on login or lazily on first use. Server-side encryption means
+credentials can always be decrypted from DB without user password.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 
@@ -26,7 +25,7 @@ def populate(
     default_search_provider: str | None = None,
     ttl_seconds: int = 86400,
 ) -> None:
-    """Store decrypted credentials for a user. Called after login."""
+    """Store decrypted credentials for a user."""
     _cache[user_id] = _CacheEntry(
         credentials=credentials,
         default_provider=default_provider,
@@ -56,7 +55,6 @@ def get_default(user_id: str) -> tuple[str, dict] | None:
         return None
     if entry.default_provider and entry.default_provider in entry.credentials:
         return (entry.default_provider, entry.credentials[entry.default_provider])
-    # Fall back to first configured provider
     if entry.credentials:
         first = next(iter(entry.credentials))
         return (first, entry.credentials[first])
@@ -75,15 +73,46 @@ def get_default_search(user_id: str) -> tuple[str, dict] | None:
         return None
     if entry.default_search_provider and entry.default_search_provider in entry.credentials:
         return (entry.default_search_provider, entry.credentials[entry.default_search_provider])
-    # Fall back to first search provider found in credentials
     for provider in entry.credentials:
         if provider in SEARCH_PROVIDERS:
             return (provider, entry.credentials[provider])
     return None
 
 
+def set_credentials(user_id: str, provider: str, creds: dict) -> None:
+    """Add or update decrypted credentials for a single provider in the cache."""
+    entry = _cache.get(user_id)
+    if entry is None:
+        return
+    entry.credentials[provider] = creds
+
+
+def remove_credentials(user_id: str, provider: str) -> None:
+    """Remove credentials for a single provider from cache."""
+    entry = _cache.get(user_id)
+    if entry is None:
+        return
+    entry.credentials.pop(provider, None)
+
+
+def set_default_llm(user_id: str, provider: str) -> None:
+    """Update the cached default LLM provider."""
+    entry = _cache.get(user_id)
+    if entry is None:
+        return
+    entry.default_provider = provider
+
+
+def set_default_search(user_id: str, provider: str) -> None:
+    """Update the cached default search provider."""
+    entry = _cache.get(user_id)
+    if entry is None:
+        return
+    entry.default_search_provider = provider
+
+
 def clear(user_id: str) -> None:
-    """Remove cached credentials for a user. Called on logout."""
+    """Remove cached credentials for a user."""
     _cache.pop(user_id, None)
 
 

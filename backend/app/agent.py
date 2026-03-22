@@ -1,9 +1,8 @@
-"""Agent definitions: schemas, system prompts, and deepagents creators."""
-import json
+"""Agent definitions: schemas, system prompts, and agent creators."""
 import logging
 
 from pydantic import BaseModel
-from deepagents import create_deep_agent
+from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
 from app import provider_service
 
@@ -111,13 +110,6 @@ class CourseContent(BaseModel):
 
 
 # --- System prompts ---
-
-SUPERVISOR_PROMPT = """You are the agent-learn supervisor. You coordinate course generation by delegating to specialized subagents.
-
-When asked to generate a course outline, delegate to the planner subagent using the task() tool.
-When asked to generate lesson content, delegate to the writer subagent using the task() tool.
-
-Always delegate — do not generate course content yourself."""
 
 WRITER_PROMPT = """You are a course lesson writer. You will receive a single section to write, along with verified evidence cards and a blackboard representing shared course knowledge.
 
@@ -303,92 +295,64 @@ Output a structured VerificationResult with:
 - gaps: list of unanswered questions or weak areas that need more research"""
 
 
-# --- Subagent dicts (for reference / orchestrator) ---
-
-planner_subagent = {
-    "name": "planner",
-    "description": "Generates a structured course outline from a topic and optional learner instructions.",
-    "system_prompt": PLANNER_PROMPT,
-    "tools": [],
-}
-
-writer_subagent = {
-    "name": "writer",
-    "description": "Generates markdown lesson content for each section of an approved course outline.",
-    "system_prompt": WRITER_PROMPT,
-    "tools": [],
-}
-
-
-# --- Agent creators (deepagents + ChatLiteLLM) ---
+# --- Agent creators (langchain create_agent — no built-in tools) ---
 
 
 def create_planner(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Create a planner agent with structured output, backed by LiteLLM."""
+    """Create a planner agent with structured output."""
+    logger.info("[agent:planner] Creating planner agent (model=%s)", model)
     llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_deep_agent(
+    return create_agent(
         model=llm,
         system_prompt=PLANNER_PROMPT,
         response_format=ToolStrategy(CourseOutlineWithBriefs),
-        tools=[],
         name="agent-learn-planner",
-    )
-
-
-def create_writer(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
-    """Create a writer agent (plain markdown output)."""
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_deep_agent(
-        model=llm,
-        system_prompt=WRITER_PROMPT,
-        tools=[],
-        name="agent-learn-writer",
     )
 
 
 def create_discovery_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a discovery researcher with structured TopicBrief output."""
+    logger.info("[agent:discovery] Creating discovery researcher agent (model=%s)", model)
     llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_deep_agent(
+    return create_agent(
         model=llm,
         system_prompt=DISCOVERY_RESEARCHER_PROMPT,
         response_format=ToolStrategy(TopicBrief),
-        tools=[],
         name="agent-learn-discovery-researcher",
     )
 
 
 def create_section_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a section researcher with structured EvidenceCardSet output."""
+    logger.info("[agent:researcher] Creating section researcher agent (model=%s)", model)
     llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_deep_agent(
+    return create_agent(
         model=llm,
         system_prompt=SECTION_RESEARCHER_PROMPT,
         response_format=ToolStrategy(EvidenceCardSet),
-        tools=[],
         name="agent-learn-section-researcher",
     )
 
 
 def create_verifier(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a verifier with structured VerificationResult output."""
+    logger.info("[agent:verifier] Creating verifier agent (model=%s)", model)
     llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_deep_agent(
+    return create_agent(
         model=llm,
         system_prompt=VERIFIER_PROMPT,
         response_format=ToolStrategy(VerificationResult),
-        tools=[],
         name="agent-learn-verifier",
     )
 
 
 def create_editor(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create an editor with structured EditorResult output."""
+    logger.info("[agent:editor] Creating editor agent (model=%s)", model)
     llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_deep_agent(
+    return create_agent(
         model=llm,
         system_prompt=EDITOR_PROMPT,
         response_format=ToolStrategy(EditorResult),
-        tools=[],
         name="agent-learn-editor",
     )
