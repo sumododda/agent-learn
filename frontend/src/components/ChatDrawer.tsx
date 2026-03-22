@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import ReactMarkdown from 'react-markdown';
 import MermaidBlock from '@/components/MermaidBlock';
-import { getChatModels, getChatHistory, sendChatMessage } from '@/lib/api';
+import { getChatHistory, sendChatMessage } from '@/lib/api';
 import { ChatMessage, ChatModel } from '@/lib/types';
 
 interface ChatPanelProps {
@@ -23,7 +23,7 @@ export function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [models, setModels] = useState<ChatModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState('google/gemini-3.1-flash-preview');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -31,17 +31,26 @@ export function ChatPanel({
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const { getToken } = useAuth();
 
-  // Load models on mount
+  // Load models from OpenRouter public API
   useEffect(() => {
-    async function loadModels() {
-      const fetched = await getChatModels();
-      setModels(fetched);
-      // Use the first available model from the backend
-      if (fetched.length > 0) {
-        setSelectedModel(fetched[0].id);
-      }
-    }
-    loadModels();
+    let cancelled = false;
+    fetch('https://openrouter.ai/api/v1/models')
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        const list: ChatModel[] = (data.data || [])
+          .filter((m: Record<string, unknown>) => typeof m.id === 'string')
+          .map((m: Record<string, unknown>) => ({
+            id: m.id as string,
+            name: (m.name as string) || (m.id as string),
+            context_length: (m.context_length as number) || 0,
+            pricing_prompt: String((m.pricing as Record<string, unknown>)?.prompt || '0'),
+            pricing_completion: String((m.pricing as Record<string, unknown>)?.completion || '0'),
+          }));
+        setModels(list);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   // Auto-load history on mount (always visible, not toggled)
