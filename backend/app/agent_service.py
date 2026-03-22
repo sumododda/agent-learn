@@ -149,26 +149,29 @@ async def discover_topic(
     queries = _generate_discovery_queries(topic, instructions)
     logger.info("Discovery research: %d queries for topic '%s'", len(queries), topic)
 
-    # Run searches via configured provider
+    # Run searches via configured provider (in parallel)
     all_search_results = []
-    for i, query in enumerate(queries):
-        logger.debug("[discover] Searching query %d/%d: '%s'", i + 1, len(queries), query)
-        try:
-            results = await search_service.search(
-                search_provider, query, search_credentials or {},
-                max_results=5, search_depth="basic",
-            )
-            logger.debug("[discover] Query %d returned %d results", i + 1, len(results))
-            for r in results:
-                all_search_results.append({
-                    "title": r.title,
-                    "url": r.url,
-                    "content": r.content,
-                    "score": r.score,
-                })
-        except Exception as e:
-            logger.warning("[discover] Search failed for query '%s': %s", query, e)
+    search_tasks = [
+        search_service.search(
+            search_provider, query, search_credentials or {},
+            max_results=5, search_depth="basic",
+        )
+        for query in queries
+    ]
+    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    for i, (query, result) in enumerate(zip(queries, search_results)):
+        if isinstance(result, BaseException):
+            logger.warning("[discover] Search failed for query '%s': %s", query, result)
             continue
+        logger.debug("[discover] Query %d/%d returned %d results", i + 1, len(queries), len(result))
+        for r in result:
+            all_search_results.append({
+                "title": r.title,
+                "url": r.url,
+                "content": r.content,
+                "score": r.score,
+            })
 
     if not all_search_results:
         logger.error("[discover] All %d searches failed — no results to synthesize", len(queries))
@@ -447,24 +450,27 @@ async def research_section(
     logger.info("[research] Section %s: researching %d questions", brief.section_position, len(brief.questions))
     all_results: list[dict] = []
 
-    for i, question in enumerate(brief.questions):
-        logger.debug("[research] Section %s: searching question %d/%d: '%s'", brief.section_position, i + 1, len(brief.questions), question[:80])
-        try:
-            results = await search_service.search(
-                search_provider, question, search_credentials or {},
-                max_results=5, search_depth="basic",
-            )
-            logger.debug("[research] Section %s: question %d returned %d results", brief.section_position, i + 1, len(results))
-            for r in results:
-                all_results.append({
-                    "title": r.title,
-                    "url": r.url,
-                    "content": r.content,
-                    "score": r.score,
-                })
-        except Exception as e:
-            logger.warning("[research] Section %s: search failed for question '%s': %s", brief.section_position, question[:60], e)
+    search_tasks = [
+        search_service.search(
+            search_provider, question, search_credentials or {},
+            max_results=5, search_depth="basic",
+        )
+        for question in brief.questions
+    ]
+    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    for i, (question, result) in enumerate(zip(brief.questions, search_results)):
+        if isinstance(result, BaseException):
+            logger.warning("[research] Section %s: search failed for question '%s': %s", brief.section_position, question[:60], result)
             continue
+        logger.debug("[research] Section %s: question %d/%d returned %d results", brief.section_position, i + 1, len(brief.questions), len(result))
+        for r in result:
+            all_results.append({
+                "title": r.title,
+                "url": r.url,
+                "content": r.content,
+                "score": r.score,
+            })
 
     if not all_results:
         logger.error("[research] Section %s: all %d searches failed", brief.section_position, len(brief.questions))
