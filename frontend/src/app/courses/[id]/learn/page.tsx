@@ -251,19 +251,31 @@ export default function LearnPage() {
               >
                 &larr; Previous
               </Button>
-              <Button
-                variant="ghost"
-                onClick={() =>
-                  handleNext(
-                    currentSection.position,
-                    currentIndex + 1,
-                    sections[currentIndex + 1].position
-                  )
-                }
-                disabled={currentIndex === sections.length - 1}
-              >
-                Next &rarr;
-              </Button>
+              {currentIndex < sections.length - 1 ? (
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    handleNext(
+                      currentSection.position,
+                      currentIndex + 1,
+                      sections[currentIndex + 1].position
+                    )
+                  }
+                >
+                  Next &rarr;
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => {
+                    trackProgress({ completed_section: currentSection.position });
+                  }}
+                  disabled={completedSections.includes(currentSection.position)}
+                >
+                  {completedSections.includes(currentSection.position)
+                    ? 'Completed'
+                    : 'Mark as Completed'}
+                </Button>
+              )}
             </div>
           </div>
         </main>
