@@ -115,6 +115,54 @@ function HomePageInner() {
     }
   }
 
+  // Not signed in — show landing
+  if (isLoaded && !isSignedIn) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[70vh] px-4">
+        <div className="w-full max-w-[520px] text-center">
+          <h1 className="text-4xl font-bold mb-3">Learn anything, your way</h1>
+          <p className="text-muted-foreground text-lg mb-8">
+            AI-powered courses built around your topic, level, and goals.
+            Grounded in real sources, delivered section by section.
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <Button size="lg" nativeButton={false} render={<Link href="/register" />}>
+              Get Started
+            </Button>
+            <Button size="lg" variant="outline" nativeButton={false} render={<Link href="/login" />}>
+              Sign In
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground mt-4">
+            New here?{' '}
+            <a
+              href="https://github.com/sumododda/agent-learn/wiki"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Read the setup guide
+            </a>
+          </p>
+          <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
+            <div className="p-4 rounded-xl border border-border">
+              <div className="text-sm font-medium mb-1">Source-grounded</div>
+              <div className="text-xs text-muted-foreground">Every lesson backed by real research and citations</div>
+            </div>
+            <div className="p-4 rounded-xl border border-border">
+              <div className="text-sm font-medium mb-1">Personalized</div>
+              <div className="text-xs text-muted-foreground">Tailored to your level, style, and language preferences</div>
+            </div>
+            <div className="p-4 rounded-xl border border-border">
+              <div className="text-sm font-medium mb-1">Progressive</div>
+              <div className="text-xs text-muted-foreground">Start reading as sections complete, track your progress</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // No-provider state
   if (isLoaded && isSignedIn && hasProvider === false) {
     return (
