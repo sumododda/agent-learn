@@ -27,9 +27,10 @@ export default function LearnPage() {
   const [error, setError] = useState<string | null>(null);
   const initialLoadDone = useRef(false);
 
-  // Scroll progress tracking
+  // Scroll progress tracking — use ref + RAF to avoid re-renders on every scroll
   const contentRef = useRef<HTMLDivElement>(null);
-  const [scrollProgress, setScrollProgress] = useState(0);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const rafId = useRef<number>(0);
 
   // Resizable right sidebar
   const [sidebarWidth, setSidebarWidth] = useState(340);
@@ -59,12 +60,21 @@ export default function LearnPage() {
     const el = contentRef.current;
     if (!el) return;
     function handleScroll() {
-      const { scrollTop, scrollHeight, clientHeight } = el!;
-      const progress = scrollHeight > clientHeight ? (scrollTop / (scrollHeight - clientHeight)) * 100 : 0;
-      setScrollProgress(progress);
+      cancelAnimationFrame(rafId.current);
+      rafId.current = requestAnimationFrame(() => {
+        const { scrollTop, scrollHeight, clientHeight } = el!;
+        const progress = scrollHeight > clientHeight ? (scrollTop / (scrollHeight - clientHeight)) * 100 : 0;
+        // Update the progress bar directly via DOM to avoid re-rendering
+        if (progressBarRef.current) {
+          progressBarRef.current.style.width = `${progress}%`;
+        }
+      });
     }
-    el.addEventListener('scroll', handleScroll);
-    return () => el.removeEventListener('scroll', handleScroll);
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+      cancelAnimationFrame(rafId.current);
+    };
   }, [currentIndex]);
 
   useEffect(() => {
@@ -115,7 +125,8 @@ export default function LearnPage() {
   const handleSectionClick = useCallback(
     (index: number, sectionPosition: number) => {
       setCurrentIndex(index);
-      setScrollProgress(0);
+      if (progressBarRef.current) progressBarRef.current.style.width = '0%';
+      if (contentRef.current) contentRef.current.scrollTop = 0;
       if (initialLoadDone.current) {
         trackProgress({ current_section: sectionPosition });
       }
@@ -126,7 +137,8 @@ export default function LearnPage() {
   const handleNext = useCallback(
     (currentPosition: number, nextIndex: number, nextPosition: number) => {
       setCurrentIndex(nextIndex);
-      setScrollProgress(0);
+      if (progressBarRef.current) progressBarRef.current.style.width = '0%';
+      if (contentRef.current) contentRef.current.scrollTop = 0;
       trackProgress({
         current_section: nextPosition,
         completed_section: currentPosition,
@@ -138,7 +150,8 @@ export default function LearnPage() {
   const handlePrev = useCallback(
     (prevIndex: number, prevPosition: number) => {
       setCurrentIndex(prevIndex);
-      setScrollProgress(0);
+      if (progressBarRef.current) progressBarRef.current.style.width = '0%';
+      if (contentRef.current) contentRef.current.scrollTop = 0;
       trackProgress({ current_section: prevPosition });
     },
     [trackProgress]
@@ -177,7 +190,7 @@ export default function LearnPage() {
 
       {/* Reading progress bar */}
       <div className="h-0.5 bg-muted shrink-0">
-        <div className="h-full bg-primary transition-all" style={{ width: `${scrollProgress}%` }} />
+        <div ref={progressBarRef} className="h-full bg-primary" style={{ width: 0 }} />
       </div>
 
       {/* 3-panel body */}
