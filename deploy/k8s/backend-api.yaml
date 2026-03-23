@@ -80,6 +80,8 @@ metadata:
   namespace: agent-learn
   labels:
     app: backend-api
+  annotations:
+    cloud.google.com/backend-config: '{"default": "backend-api-config"}'
 spec:
   type: ClusterIP
   ports:

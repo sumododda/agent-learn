@@ -112,19 +112,44 @@ async def update_course_status(
 
 
 
-def _generate_discovery_queries(topic: str, instructions: str | None) -> list[str]:
-    """Generate 3-5 broad search queries from the topic for discovery research."""
-    queries = [
-        f"{topic} fundamentals overview",
-        f"{topic} key concepts explained",
-        f"{topic} learning roadmap beginner to advanced",
-    ]
-    # Add instruction-specific queries if provided
+_MAX_QUERY_LENGTH = 300
+
+
+async def _generate_discovery_queries(
+    topic: str,
+    instructions: str | None,
+    provider: str,
+    model: str,
+    credentials: dict,
+    extra_fields: dict | None,
+) -> list[str]:
+    """Use the LLM to generate targeted search queries for the topic."""
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+
+    prompt = (
+        "Generate exactly 5 web search queries to research the following topic for building an educational course.\n"
+        "The queries should cover different angles: fundamentals, key concepts, practical applications, "
+        "common misconceptions, and authoritative resources.\n"
+        "Each query must be under 200 characters and specific to the topic.\n\n"
+        f"Topic: {topic}\n"
+    )
     if instructions:
-        queries.append(f"{topic} {instructions}")
-    # Add a best-practices / authoritative query
-    queries.append(f"{topic} best practices authoritative guide")
-    return queries[:5]  # Cap at 5 queries
+        prompt += f"Learner context: {instructions[:500]}\n"
+    prompt += (
+        "\nReturn ONLY a JSON array of 5 query strings. No explanation, no markdown.\n"
+        'Example: ["query 1", "query 2", "query 3", "query 4", "query 5"]'
+    )
+
+    result = await llm.ainvoke(prompt)
+    content = result.content.strip()
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        content = content.rsplit("```", 1)[0]
+    queries = json.loads(content)
+    if not isinstance(queries, list) or len(queries) < 3:
+        raise ValueError(f"LLM returned invalid queries: expected list of 3-5, got {type(queries).__name__}")
+    return [str(q)[:_MAX_QUERY_LENGTH] for q in queries[:5]]
 
 
 async def discover_topic(
@@ -149,8 +174,10 @@ async def discover_topic(
 
     credentials = credentials or {}
 
-    # Generate search queries
-    queries = _generate_discovery_queries(topic, instructions)
+    # Generate search queries using LLM
+    queries = await _generate_discovery_queries(
+        topic, instructions, provider, model, credentials, extra_fields
+    )
     logger.info("Discovery research: %d queries for topic '%s'", len(queries), topic)
 
     # Emit query events before launching searches
