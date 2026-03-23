@@ -604,8 +604,33 @@ async def delete_course(
         raise HTTPException(status_code=404, detail="Course not found")
     if course.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
-    await session.delete(course)
-    await session.commit()
+
+    # Cancel any active pipeline jobs so the worker stops processing
+    active_jobs = await session.execute(
+        select(PipelineJob).where(
+            PipelineJob.course_id == course_id,
+            PipelineJob.status.in_(["pending", "claimed", "running"]),
+        )
+    )
+    for job in active_jobs.scalars().all():
+        job.status = "cancelled"
+    await session.commit()  # commit cancellation first so worker sees it
+
+    # Clean up in-memory SSE feed buffers
+    cid_str = str(course_id)
+    _feed_events.pop(cid_str, None)
+    q = _feed_queues.pop(cid_str, None)
+    if q:
+        await q.put(None)  # signal stream to close
+
+    # Re-fetch and delete (cascade removes all related data)
+    result2 = await session.execute(
+        select(Course).where(Course.id == course_id)
+    )
+    course = result2.scalar_one_or_none()
+    if course:
+        await session.delete(course)
+        await session.commit()
 
 
 # ---------------------------------------------------------------------------
