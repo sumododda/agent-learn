@@ -75,6 +75,16 @@ async def update_job_status(
     await session.commit()
 
 
+async def is_job_cancelled(job_id: uuid.UUID) -> bool:
+    """Check if a pipeline job has been cancelled (e.g. course deleted)."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(PipelineJob.status).where(PipelineJob.id == job_id)
+        )
+        status = result.scalar_one_or_none()
+        return status == "cancelled" or status is None
+
+
 async def append_pipeline_event(job_id: uuid.UUID, event: str, data: dict) -> None:
     """Append an event to the pipeline_jobs.events JSONB array."""
     async with async_session() as session:
@@ -247,10 +257,13 @@ async def run_pipeline(
         async with async_session() as session:
             await update_checkpoint(job_id, CHECKPOINT_PLANNING, session)
 
-    # Check shutdown between phases
+    # Check shutdown / cancellation between phases
     if shutdown_event and shutdown_event.is_set():
         logger.info("[pipeline:%s] Shutdown requested after planning", tag)
         return "pending"
+    if await is_job_cancelled(job_id):
+        logger.info("[pipeline:%s] Job cancelled after planning", tag)
+        return "cancelled"
 
     # ------------------------------------------------------------------
     # Load sections from DB (needed for both fresh runs and resumption)
@@ -313,10 +326,13 @@ async def run_pipeline(
         async with async_session() as session:
             await update_checkpoint(job_id, CHECKPOINT_RESEARCHED, session)
 
-    # Check shutdown between phases
+    # Check shutdown / cancellation between phases
     if shutdown_event and shutdown_event.is_set():
         logger.info("[pipeline:%s] Shutdown requested after research", tag)
         return "pending"
+    if await is_job_cancelled(job_id):
+        logger.info("[pipeline:%s] Job cancelled after research", tag)
+        return "cancelled"
 
     # ------------------------------------------------------------------
     # Phase 3: Verify + Write per section (parallel, bounded by semaphore)
@@ -367,10 +383,13 @@ async def run_pipeline(
         async with async_session() as session:
             await update_checkpoint(job_id, CHECKPOINT_WRITING, session)
 
-    # Check shutdown between phases
+    # Check shutdown / cancellation between phases
     if shutdown_event and shutdown_event.is_set():
         logger.info("[pipeline:%s] Shutdown requested after verify+write", tag)
         return "pending"
+    if await is_job_cancelled(job_id):
+        logger.info("[pipeline:%s] Job cancelled after verify+write", tag)
+        return "cancelled"
 
     # ------------------------------------------------------------------
     # Phase 4: Edit — sequential for blackboard safety

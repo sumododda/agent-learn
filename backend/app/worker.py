@@ -231,6 +231,8 @@ async def process_job(job: PipelineJob, shutdown_event: asyncio.Event) -> None:
             async with async_session() as session:
                 await update_job_status(job.id, "pending", session)
             logger.info("Job %s set back to pending (graceful shutdown)", job.id)
+        elif result == "cancelled":
+            logger.info("Job %s cancelled (course deleted)", job.id)
 
         # Otherwise, run_pipeline handles its own final status
 

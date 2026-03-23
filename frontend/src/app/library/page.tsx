@@ -175,7 +175,7 @@ export default function LibraryPage() {
                           <AlertDialogHeader>
                             <AlertDialogTitle>Delete course?</AlertDialogTitle>
                             <AlertDialogDescription>
-                              This will permanently delete &ldquo;{course.topic}&rdquo;.
+                              This will permanently delete &ldquo;{course.topic}&rdquo; and all associated data. Any active generation will be stopped.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
                           <AlertDialogFooter>
