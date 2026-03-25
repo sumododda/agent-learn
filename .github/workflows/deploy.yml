@@ -80,7 +80,6 @@ jobs:
           file: ./deploy/Dockerfile.frontend
           push: true
           build-args: |
-            NEXT_PUBLIC_API_URL=https://learn.blekcipher.com
             NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ secrets.TURNSTILE_SITE_KEY }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:${{ github.sha }}
