@@ -1,6 +1,6 @@
 import { ChatMessage, ChatModel, Course, CourseWithProgress, EvidenceCard, ProgressData, ProviderConfig, ProviderDefinition } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 function authHeaders(token?: string | null): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
