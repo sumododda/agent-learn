@@ -1,0 +1,122 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  # ── Detect which folders changed ──────────────────────────────────
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'deploy/Dockerfile.backend'
+            frontend:
+              - 'frontend/**'
+              - 'deploy/Dockerfile.frontend'
+
+  # ── Build Backend ─────────────────────────────────────────────────
+  build-backend:
+    name: Build Backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./deploy/Dockerfile.backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/agentlearn-backend:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/agentlearn-backend:latest
+
+  # ── Build Frontend ────────────────────────────────────────────────
+  build-frontend:
+    name: Build Frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./deploy/Dockerfile.frontend
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://learn.blekcipher.com
+            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ secrets.TURNSTILE_SITE_KEY }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:latest
+
+  # ── Deploy on self-hosted runner ──────────────────────────────────
+  deploy:
+    name: Deploy
+    needs: [changes, build-backend, build-frontend]
+    if: |
+      always() && !failure() && !cancelled() &&
+      (needs.changes.outputs.backend == 'true' ||
+       needs.changes.outputs.frontend == 'true')
+    runs-on: [self-hosted, agentlearn]
+    steps:
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull and restart
+        run: |
+          cd /home/agent/stacks/agentlearn
+          docker compose pull --ignore-pull-failures
+          docker compose up -d --remove-orphans
+          docker compose run --rm migration
+          docker image prune -f
+
+      - name: Health check
+        run: |
+          echo "Waiting for backend to be healthy..."
+          for i in $(seq 1 30); do
+            if docker inspect --format='{{.State.Health.Status}}' agentlearn-backend 2>/dev/null | grep -q healthy; then
+              echo "backend is healthy!"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check timed out"
+          docker logs agentlearn-backend --tail 20
+          exit 1
