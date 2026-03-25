@@ -1,4 +1,4 @@
-# agent-learn frontend
+# agent-learn frontend (learn.blekcipher.com)
 # Stage 1: builder
 FROM node:22-alpine AS builder
 WORKDIR /app
