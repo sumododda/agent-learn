@@ -224,6 +224,7 @@ async def process_job(job: PipelineJob, shutdown_event: asyncio.Event) -> None:
             search_provider=job.config.get("search_provider", ""),
             search_credentials=search_creds,
             shutdown_event=shutdown_event,
+            user_id=str(job.user_id),
         )
 
         # If pipeline returned "pending" (graceful shutdown), set job back to pending

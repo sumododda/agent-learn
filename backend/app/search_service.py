@@ -78,6 +78,58 @@ async def search(
     return await adapter(query, credentials, max_results, search_depth)
 
 
+async def search_with_fallback(
+    primary_provider: str,
+    query: str,
+    primary_credentials: dict,
+    user_id: str = "",
+    max_results: int = 5,
+    search_depth: str = "basic",
+) -> list[SearchResult]:
+    """Try the primary provider first, then fall back through other configured providers.
+
+    Fallback order: primary → other user-configured providers → DuckDuckGo.
+    Returns results from the first provider that succeeds. If all fail, returns [].
+    """
+    from app import key_cache
+
+    # Try primary provider first
+    if primary_provider and primary_provider != "duckduckgo" and is_configured(primary_provider, primary_credentials):
+        try:
+            results = await search(primary_provider, query, primary_credentials, max_results, search_depth)
+            if results:
+                return results
+            logger.warning("[search_fallback] %s returned 0 results for '%s', trying fallbacks", primary_provider, query[:60])
+        except Exception as e:
+            logger.warning("[search_fallback] %s failed for '%s': %s — trying fallbacks", primary_provider, query[:60], e)
+
+    # Try other configured providers (skipping the one we already tried)
+    if user_id:
+        other_providers = key_cache.get_all_search_providers(user_id)
+        for provider_name, creds in other_providers:
+            if provider_name == primary_provider:
+                continue
+            try:
+                results = await search(provider_name, query, creds, max_results, search_depth)
+                if results:
+                    logger.info("[search_fallback] %s succeeded as fallback (%d results)", provider_name, len(results))
+                    return results
+                logger.warning("[search_fallback] %s returned 0 results, trying next", provider_name)
+            except Exception as e:
+                logger.warning("[search_fallback] %s failed: %s — trying next", provider_name, e)
+
+    # DuckDuckGo as implicit last resort (no API key needed)
+    try:
+        results = await search("duckduckgo", query, {}, max_results, search_depth)
+        if results:
+            logger.info("[search_fallback] DuckDuckGo fallback returned %d results", len(results))
+            return results
+    except Exception as e:
+        logger.warning("[search_fallback] DuckDuckGo fallback also failed: %s", e)
+
+    return []
+
+
 async def validate_search_credentials(provider: str, credentials: dict) -> bool:
     """Test credentials by running a lightweight search query."""
     try:
@@ -126,14 +178,12 @@ async def _search_exa(
     from exa_py import Exa
 
     exa = Exa(api_key=credentials["api_key"])
-    use_autoprompt = search_depth == "advanced"
     response = await asyncio.wait_for(
         asyncio.to_thread(
             exa.search_and_contents,
             query,
             num_results=max_results,
             text=True,
-            use_autoprompt=use_autoprompt,
         ),
         timeout=30.0,
     )
@@ -207,13 +257,15 @@ async def _search_duckduckgo(
     query: str, credentials: dict, max_results: int, search_depth: str
 ) -> list[SearchResult]:
     import asyncio
-    from duckduckgo_search import AsyncDDGS
+    from ddgs import DDGS
 
-    async with AsyncDDGS() as ddgs:
-        raw = await asyncio.wait_for(
-            ddgs.atext(query, max_results=max_results),
-            timeout=15.0,
-        )
+    def _sync_search():
+        return DDGS().text(query, max_results=max_results)
+
+    raw = await asyncio.wait_for(
+        asyncio.to_thread(_sync_search),
+        timeout=15.0,
+    )
 
     return [
         SearchResult(

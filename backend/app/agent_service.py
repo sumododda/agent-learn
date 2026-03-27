@@ -162,6 +162,7 @@ async def discover_topic(
     search_provider: str = "",
     search_credentials: dict | None = None,
     on_event: EventCallback | None = None,
+    user_id: str = "",
 ) -> TopicBrief:
     """Run discovery research on a topic using web search + synthesis agent.
 
@@ -185,12 +186,12 @@ async def discover_topic(
         for i, query in enumerate(queries):
             await on_event("query", {"index": i, "total": len(queries), "query": query})
 
-    # Run searches via configured provider (in parallel)
+    # Run searches via configured provider with fallback (in parallel)
     all_search_results = []
     search_tasks = [
-        search_service.search(
+        search_service.search_with_fallback(
             search_provider, query, search_credentials or {},
-            max_results=5, search_depth="basic",
+            user_id=user_id, max_results=5, search_depth="basic",
         )
         for query in queries
     ]
@@ -266,6 +267,7 @@ async def generate_outline(
     search_provider: str = "",
     search_credentials: dict | None = None,
     on_event: EventCallback | None = None,
+    user_id: str = "",
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
@@ -285,7 +287,7 @@ async def generate_outline(
             topic_brief = await discover_topic(
                 topic, instructions, provider, model, credentials, extra_fields,
                 search_provider, search_credentials,
-                on_event=on_event,
+                on_event=on_event, user_id=user_id,
             )
             logger.info("[outline] Discovery research completed successfully")
         else:
@@ -330,6 +332,7 @@ async def generate_lessons(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> None:
     """Legacy monolithic pipeline: research -> verify -> write -> edit per section.
 
@@ -352,7 +355,7 @@ async def generate_lessons(
         # 1. Parallel section research
         await update_course_status(course_id, "researching", session)
         update_pipeline_status(pipeline_key, None, "researching")
-        await research_all_sections(course_id, briefs, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
+        await research_all_sections(course_id, briefs, session, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
 
         # 2. Sequential per section: verify -> write -> edit
         blackboard = await create_blackboard(course_id, session)
@@ -380,7 +383,7 @@ async def generate_lessons(
                 if verification.needs_more_research:
                     new_card_items = await research_section_targeted(
                         verification.gaps, provider, model, credentials, extra_fields,
-                        search_provider, search_credentials,
+                        search_provider, search_credentials, user_id=user_id,
                     )
                     if new_card_items:
                         await save_evidence_cards(
@@ -496,6 +499,7 @@ async def research_section(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> list[EvidenceCardItem]:
     """Research a single section by searching each must-answer question.
 
@@ -512,9 +516,9 @@ async def research_section(
     all_results: list[dict] = []
 
     search_tasks = [
-        search_service.search(
+        search_service.search_with_fallback(
             search_provider, question, search_credentials or {},
-            max_results=5, search_depth="basic",
+            user_id=user_id, max_results=5, search_depth="basic",
         )
         for question in brief.questions
     ]
@@ -571,6 +575,7 @@ async def research_all_sections(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> None:
     """Run section research in parallel for all section-level briefs.
 
@@ -592,7 +597,7 @@ async def research_all_sections(
     )
 
     results = await asyncio.gather(
-        *[research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials) for brief in section_briefs],
+        *[research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id) for brief in section_briefs],
         return_exceptions=True,
     )
 
@@ -753,6 +758,7 @@ async def research_section_targeted(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> list[EvidenceCardItem]:
     """One retry with targeted queries for specific gaps.
 
@@ -767,9 +773,9 @@ async def research_section_targeted(
 
     for gap in gaps:
         try:
-            results = await search_service.search(
+            results = await search_service.search_with_fallback(
                 search_provider, gap, search_credentials or {},
-                max_results=3, search_depth="advanced",
+                user_id=user_id, max_results=3, search_depth="advanced",
             )
             for r in results:
                 all_results.append({
@@ -1155,6 +1161,7 @@ async def run_discover_and_plan(
     search_credentials: dict | None = None,
     *,
     skip_status_update: bool = False,
+    user_id: str = "",
 ) -> dict:
     """Run discovery research + planning for a course.
 
@@ -1186,7 +1193,7 @@ async def run_discover_and_plan(
     # Run discovery research + planner
     outline_with_briefs, ungrounded = await generate_outline(
         course.topic, course.instructions, provider, model, credentials, extra_fields,
-        search_provider, search_credentials,
+        search_provider, search_credentials, user_id=user_id,
     )
 
     # Set ungrounded flag
@@ -1283,6 +1290,7 @@ async def run_research_section(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> dict:
     """Run section researcher for one section.
 
@@ -1312,7 +1320,7 @@ async def run_research_section(
         )
 
     # Run section researcher (search + agent)
-    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials)
+    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
 
     # Save evidence cards to DB
     await save_evidence_cards(course_id, section_position, card_items, session)
@@ -1351,6 +1359,7 @@ async def run_verify_section(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> dict:
     """Run verifier for one section.
 
@@ -1399,7 +1408,7 @@ async def run_verify_section(
     if verification.needs_more_research:
         new_card_items = await research_section_targeted(
             verification.gaps, provider, model, credentials, extra_fields,
-            search_provider, search_credentials,
+            search_provider, search_credentials, user_id=user_id,
         )
         if new_card_items:
             await save_evidence_cards(

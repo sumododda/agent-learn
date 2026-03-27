@@ -121,12 +121,13 @@ async def _discover_and_plan(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> dict:
     """Run discover-and-plan with retries (3 attempts)."""
     from app.agent_service import run_discover_and_plan
 
     async with async_session() as session:
-        return await run_discover_and_plan(course_id, session, provider, model, credentials, extra_fields, search_provider, search_credentials, skip_status_update=True)
+        return await run_discover_and_plan(course_id, session, provider, model, credentials, extra_fields, search_provider, search_credentials, skip_status_update=True, user_id=user_id)
 
 
 @_retry_3
@@ -139,12 +140,13 @@ async def _research_section(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> dict:
     """Run research for one section with retries (3 attempts)."""
     from app.agent_service import run_research_section
 
     async with async_session() as session:
-        return await run_research_section(course_id, position, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
+        return await run_research_section(course_id, position, session, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
 
 
 @_retry_2
@@ -157,12 +159,13 @@ async def _verify_section(
     extra_fields: dict | None = None,
     search_provider: str = "",
     search_credentials: dict | None = None,
+    user_id: str = "",
 ) -> dict:
     """Run verification for one section with retries (2 attempts)."""
     from app.agent_service import run_verify_section
 
     async with async_session() as session:
-        return await run_verify_section(course_id, position, session, provider, model, credentials, extra_fields, search_provider, search_credentials)
+        return await run_verify_section(course_id, position, session, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
 
 
 @_retry_3
@@ -213,6 +216,7 @@ async def run_pipeline(
     search_provider: str = "",
     search_credentials: dict | None = None,
     shutdown_event: asyncio.Event | None = None,
+    user_id: str = "",
 ) -> str:
     """Run the course generation pipeline, resumable from *checkpoint*.
 
@@ -238,7 +242,7 @@ async def run_pipeline(
     if checkpoint < CHECKPOINT_PLANNING:
         logger.info("[pipeline:%s] === PHASE 1: PLANNING === (model=%s, search=%s)", tag, model, search_provider or "none")
         try:
-            plan_result = await _discover_and_plan(course_id, provider, model, credentials, extra_fields, search_provider, search_credentials)
+            plan_result = await _discover_and_plan(course_id, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
         except Exception as e:
             logger.error("[pipeline:%s] PLANNING FAILED: %s", tag, e)
             async with async_session() as session:
@@ -300,7 +304,7 @@ async def run_pipeline(
         async def _research_with_events(pos: int) -> dict:
             title = section_titles.get(pos, f"section-{pos}")
             await emit("research_start", {"section": pos, "title": title})
-            result = await _research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
+            result = await _research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
             sources_found = len(result.get("evidence_cards", []))
             await emit("research_done", {"section": pos, "sources_found": sources_found})
             return result
@@ -358,7 +362,7 @@ async def run_pipeline(
                 logger.info("[pipeline:%s] Verifying section %d (%s)...", tag, pos, sec_name)
                 await emit("verify_start", {"section": pos, "title": sec_name})
                 try:
-                    await _verify_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials)
+                    await _verify_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
                     logger.info("[pipeline:%s] Verification OK for section %d", tag, pos)
                     await emit("verify_done", {"section": pos})
                 except Exception as e:

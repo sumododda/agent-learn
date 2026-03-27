@@ -93,6 +93,29 @@ def get_default_search(user_id: str) -> tuple[str, dict] | None:
     return None
 
 
+def get_all_search_providers(user_id: str) -> list[tuple[str, dict]]:
+    """Return all configured search providers, default first. Excludes duckduckgo."""
+    from app.search_service import SEARCH_PROVIDERS
+
+    entry = _cache.get(user_id)
+    if entry is None:
+        return []
+    if datetime.now(timezone.utc) > entry.expires_at:
+        del _cache[user_id]
+        return []
+    result: list[tuple[str, dict]] = []
+    # Default search provider first
+    if entry.default_search_provider and entry.default_search_provider in entry.credentials:
+        if entry.default_search_provider != "duckduckgo":
+            result.append((entry.default_search_provider, entry.credentials[entry.default_search_provider]))
+    # Then the rest
+    for provider, creds in entry.credentials.items():
+        if provider in SEARCH_PROVIDERS and provider != "duckduckgo":
+            if not any(p == provider for p, _ in result):
+                result.append((provider, creds))
+    return result
+
+
 def set_credentials(user_id: str, provider: str, creds: dict) -> None:
     """Add or update decrypted credentials for a single provider in the cache."""
     entry = _cache.get(user_id)
