@@ -77,15 +77,18 @@ export default function OutlineReviewPage() {
         .filter(([, comment]) => comment.trim())
         .map(([position, comment]) => ({ position: Number(position), comment }));
 
-      const updated = await regenerateCourse(
+      await regenerateCourse(
         courseId,
         overallComment.trim() || undefined,
         comments.length > 0 ? comments : undefined,
         t
       );
-      setCourse(updated);
+      // Re-fetch to get the latest course data after regeneration
+      const refreshed = await getCourse(courseId, t);
+      setCourse(refreshed);
       setOverallComment('');
       setSectionComments({});
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to regenerate');
     } finally {
