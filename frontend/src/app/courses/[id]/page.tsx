@@ -1,11 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { getCourse, generateCourse, regenerateCourse } from '@/lib/api';
 import { Course } from '@/lib/types';
-import PipelineProgress from '@/components/PipelineProgress';
 import { Navbar } from '@/components/Navbar';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -64,10 +63,6 @@ export default function OutlineReviewPage() {
     }
   }
 
-  const handlePipelineComplete = useCallback(() => {
-    router.push(`/courses/${courseId}/learn`);
-  }, [router, courseId]);
-
   async function handleRegenerate() {
     setRegenerating(true);
     setError(null);
@@ -98,6 +93,13 @@ export default function OutlineReviewPage() {
 
   const hasComments = overallComment.trim() || Object.values(sectionComments).some(c => c.trim());
   const busy = generating || regenerating;
+  const isCompleted = !!(course && (course.status === 'completed' || course.status === 'completed_partial'));
+  const isGenerating = generating || !!(course && ['generating', 'researching', 'writing', 'verifying', 'editing'].includes(course.status));
+
+  useEffect(() => {
+    if (isCompleted) router.push(`/courses/${courseId}/learn`);
+    else if (isGenerating) router.push(`/courses/${courseId}/generating`);
+  }, [isCompleted, isGenerating, courseId, router]);
 
   if (loading) return (
     <>
@@ -111,20 +113,9 @@ export default function OutlineReviewPage() {
       <div className="text-center text-destructive mt-20">{error}</div>
     </>
   );
-  if (!course) return (
-    <>
-      <Navbar />
-      <div className="text-center text-muted-foreground mt-20">Course not found</div>
-    </>
-  );
-
-  if (course.status === 'completed' || course.status === 'completed_partial') {
-    router.push(`/courses/${courseId}/learn`);
-    return null;
-  }
+  if (!course || isCompleted || isGenerating) return null;
 
   const sortedSections = [...course.sections].sort((a, b) => a.position - b.position);
-  const isGenerating = generating || course.status === 'generating';
   const totalSections = sortedSections.length;
 
   return (
@@ -134,19 +125,8 @@ export default function OutlineReviewPage() {
         <h1 className="text-2xl font-semibold">{course.topic}</h1>
         <p className="text-sm text-muted-foreground mb-6">{totalSections} sections · Review your course outline</p>
 
-        {/* Pipeline progress via polling */}
-        {isGenerating && (
-          <PipelineProgress
-            courseId={courseId}
-            token={token}
-            onComplete={handlePipelineComplete}
-          />
-        )}
-
-        {/* Only show outline review UI when not generating */}
-        {!isGenerating && (
-          <>
-            {/* Overall comment */}
+        <>
+          {/* Overall comment */}
             <div className="mb-6">
               <Textarea
                 value={overallComment}
@@ -187,8 +167,7 @@ export default function OutlineReviewPage() {
                 {regenerating ? 'Regenerating...' : hasComments ? 'Regenerate with Feedback' : 'Regenerate'}
               </Button>
             </div>
-          </>
-        )}
+        </>
       </div>
     </>
   );
