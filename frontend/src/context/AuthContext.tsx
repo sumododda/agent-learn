@@ -112,7 +112,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
-      throw new Error(err.detail || 'Registration failed');
+      const detail = err.detail;
+      const message = Array.isArray(detail) ? detail.map((e: { msg?: string }) => e.msg).join(', ') : detail || 'Registration failed';
+      throw new Error(message);
     }
     const data: { email: string; message: string } = await res.json();
     return { email: data.email, message: data.message };
