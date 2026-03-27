@@ -110,11 +110,6 @@ export default function RegisterPage() {
               {loading ? 'Creating account...' : !turnstileToken ? 'Verifying...' : 'Create account'}
             </Button>
 
-            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              Your secrets are encrypted at rest with real server-side crypto, not left lying
-              around in plain text like it is 2009.
-            </div>
-
             <p className="text-center text-sm text-muted-foreground">
               Already have an account?{' '}
               <Link href="/login" className="text-primary hover:underline">
