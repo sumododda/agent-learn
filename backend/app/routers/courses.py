@@ -144,67 +144,7 @@ async def create_course(
     session.add(course)
     await session.commit()  # commit (not flush) so background task's own session can see it
 
-    if not stream:
-        # ---- Legacy JSON path (used by regenerate flow and non-stream clients) ----
-        try:
-            provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
-            search_provider, search_creds = await _get_user_search_provider(user_id, session)
-
-            outline_with_briefs, ungrounded = await generate_outline(
-                body.topic, body.instructions, provider, model, creds, extra_fields,
-                search_provider, search_creds, user_id=user_id,
-            )
-
-            course.ungrounded = ungrounded
-
-            for section_data in outline_with_briefs.sections:
-                section = Section(
-                    course_id=course.id,
-                    position=section_data.position,
-                    title=section_data.title,
-                    summary=section_data.summary,
-                )
-                session.add(section)
-
-            if not ungrounded:
-                discovery_brief = ResearchBrief(
-                    course_id=course.id,
-                    section_position=None,
-                    questions=[],
-                    source_policy={},
-                    findings="Discovery research completed successfully",
-                )
-                session.add(discovery_brief)
-
-            for brief_item in outline_with_briefs.research_briefs:
-                research_brief = ResearchBrief(
-                    course_id=course.id,
-                    section_position=brief_item.section_position,
-                    questions=brief_item.questions,
-                    source_policy=brief_item.source_policy,
-                )
-                session.add(research_brief)
-
-            course.status = "outline_ready"
-            await session.commit()
-
-        except Exception as e:
-            logger.error("Failed to generate outline: %s", e)
-            course.status = "failed"
-            await session.commit()
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            )
-
-        result = await session.execute(
-            select(Course)
-            .options(selectinload(Course.sections))
-            .where(Course.id == course.id)
-        )
-        course = result.scalar_one()
-        return CourseResponse.model_validate(course)
-
-    # ---- SSE streaming path ----
+    # ---- SSE streaming path (also used as background task for non-stream) ----
     course_id = course.id
     course_id_str = str(course_id)
 
@@ -314,6 +254,10 @@ async def create_course(
                 _cleanup_buffer()
 
     asyncio.create_task(run_discovery())
+
+    if not stream:
+        # Return course immediately — discover page picks up SSE events
+        return CourseResponse.model_validate(course)
 
     async def event_generator():
         while True:
