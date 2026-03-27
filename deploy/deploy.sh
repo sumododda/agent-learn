@@ -59,7 +59,7 @@ create_cluster() {
 
 # ─── Step 4: Create Secrets in Secret Manager ───────────────────────────────
 create_secrets() {
-  local secrets=("jwt-secret-key" "encryption-pepper" "turnstile-secret-key" "resend-api-key" "postgres-password")
+  local secrets=("jwt-secret-key" "encryption-pepper" "turnstile-secret-key" "resend-api-key" "resend-from-email" "postgres-password")
 
   for secret_name in "${secrets[@]}"; do
     if gcloud secrets describe "$secret_name" --project="$PROJECT_ID" &>/dev/null; then
@@ -82,7 +82,7 @@ sync_secrets() {
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
   local args=()
-  local secret_keys=("jwt-secret-key" "encryption-pepper" "turnstile-secret-key" "resend-api-key" "postgres-password")
+  local secret_keys=("jwt-secret-key" "encryption-pepper" "turnstile-secret-key" "resend-api-key" "resend-from-email" "postgres-password")
 
   for key in "${secret_keys[@]}"; do
     local value

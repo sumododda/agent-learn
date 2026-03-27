@@ -268,6 +268,7 @@ async def generate_outline(
     search_credentials: dict | None = None,
     on_event: EventCallback | None = None,
     user_id: str = "",
+    current_outline: Sequence | None = None,
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
@@ -305,7 +306,20 @@ async def generate_outline(
     if on_event:
         await on_event("planning", {})
     logger.info("[outline] Invoking planner agent (ungrounded=%s)...", ungrounded)
-    message = f"Generate a course outline for the topic: {topic}"
+    if current_outline:
+        message = f"Revise the existing course outline for the topic: {topic}"
+        message += (
+            "\n\nYou are revising an existing outline, not starting from scratch."
+            "\nFollow these rules strictly:"
+            "\n- Preserve the section count, order, and untouched sections unless overall feedback explicitly asks for a broader restructure."
+            "\n- Apply per-section feedback only to the referenced sections."
+            "\n- If feedback targets one section, do not rewrite the other sections."
+            "\n- Keep section positions stable whenever possible."
+            "\n- Return the full revised outline and a full matching set of research briefs."
+        )
+        message += f"\n\n<current_outline>\n{_format_outline_context(current_outline)}\n</current_outline>"
+    else:
+        message = f"Generate a course outline for the topic: {topic}"
     if instructions:
         message += f"\n\n<user_instructions>\n{instructions}\n</user_instructions>"
     if topic_brief:

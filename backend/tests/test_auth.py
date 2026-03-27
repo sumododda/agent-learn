@@ -83,7 +83,7 @@ async def client():
 _captured_otp = {}
 
 
-async def _register_user(client: AsyncClient, email: str = "test@example.com", password: str = "securepass123"):
+async def _register_user(client: AsyncClient, email: str = "test@example.com", password: str = "SecurePass123"):
     """Register a user via the two-phase OTP flow and return the verify-otp response (with JWT).
 
     Mocks Turnstile (always passes) and captures the OTP from the email service.
@@ -109,7 +109,7 @@ async def _register_user(client: AsyncClient, email: str = "test@example.com", p
     return verify_resp
 
 
-async def _login_user(client: AsyncClient, email: str = "test@example.com", password: str = "securepass123"):
+async def _login_user(client: AsyncClient, email: str = "test@example.com", password: str = "SecurePass123"):
     """Log in a user and return the response."""
     return await client.post(
         "/api/auth/login",
@@ -136,7 +136,7 @@ async def test_register_success(auth_db, client):
 
 @pytest.mark.anyio
 async def test_register_duplicate_email(auth_db, client):
-    """POST /api/auth/register with existing email returns 200 (no enumeration)."""
+    """POST /api/auth/register with existing email returns generic success."""
     resp1 = await _register_user(client, email="dup@example.com")
     assert resp1.status_code == 200
 
@@ -144,9 +144,8 @@ async def test_register_duplicate_email(auth_db, client):
          patch("app.routers.auth_routes.send_verification_email"):
         resp2 = await client.post(
             "/api/auth/register",
-            json={"email": "dup@example.com", "password": "securepass123", "turnstile_token": "test"},
+            json={"email": "dup@example.com", "password": "SecurePass123", "turnstile_token": "test"},
         )
-    # Returns same 200 response to prevent email enumeration
     assert resp2.status_code == 200
     assert resp2.json()["email"] == "dup@example.com"
 
@@ -159,9 +158,9 @@ async def test_register_duplicate_email(auth_db, client):
 @pytest.mark.anyio
 async def test_login_success(auth_db, client):
     """POST /api/auth/login with valid credentials returns JWT + user_id."""
-    await _register_user(client, email="login@example.com", password="mypass123")
+    await _register_user(client, email="login@example.com", password="MyPass123")
 
-    resp = await _login_user(client, email="login@example.com", password="mypass123")
+    resp = await _login_user(client, email="login@example.com", password="MyPass123")
     assert resp.status_code == 200
     data = resp.json()
     assert "token" in data
@@ -172,9 +171,9 @@ async def test_login_success(auth_db, client):
 @pytest.mark.anyio
 async def test_login_bad_password(auth_db, client):
     """POST /api/auth/login with wrong password returns 401."""
-    await _register_user(client, email="badpass@example.com", password="rightpass")
+    await _register_user(client, email="badpass@example.com", password="RightPass1")
 
-    resp = await _login_user(client, email="badpass@example.com", password="wrongpass")
+    resp = await _login_user(client, email="badpass@example.com", password="WrongPass1")
     assert resp.status_code == 401
 
 

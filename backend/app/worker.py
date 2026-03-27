@@ -175,16 +175,19 @@ async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None]:
         search_creds = None
         search_provider = job.config.get("search_provider")
         if search_provider:
-            search_result = await session.execute(
-                select(ProviderConfig).where(
-                    ProviderConfig.user_id == job.user_id,
-                    ProviderConfig.provider == search_provider,
+            if search_provider == "duckduckgo":
+                search_creds = {}
+            else:
+                search_result = await session.execute(
+                    select(ProviderConfig).where(
+                        ProviderConfig.user_id == job.user_id,
+                        ProviderConfig.provider == search_provider,
+                    )
                 )
-            )
-            search_row = search_result.scalar_one()
-            search_creds = json.loads(
-                decrypt_credentials(key, search_row.encrypted_credentials)
-            )
+                search_row = search_result.scalar_one()
+                search_creds = json.loads(
+                    decrypt_credentials(key, search_row.encrypted_credentials)
+                )
 
     return creds, search_creds
 

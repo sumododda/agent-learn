@@ -44,6 +44,23 @@ class TestGetDefault:
         assert cache.get_default("nonexistent") is None
 
 
+class TestGetDefaultSearch:
+    def test_returns_duckduckgo_when_no_search_provider_is_configured(self):
+        cache.populate("user1", {"openrouter": {"api_key": "sk-or"}}, "openrouter")
+        result = cache.get_default_search("user1")
+        assert result == ("duckduckgo", {})
+
+    def test_returns_duckduckgo_when_explicitly_marked_default(self):
+        cache.populate(
+            "user1",
+            {"tavily": {"api_key": "sk-search"}},
+            "openrouter",
+            default_search_provider="duckduckgo",
+        )
+        result = cache.get_default_search("user1")
+        assert result == ("duckduckgo", {})
+
+
 class TestTTLEviction:
     def test_expired_entry_returns_none(self):
         cache.populate("user1", {"anthropic": {"api_key": "sk-123"}}, "anthropic", ttl_seconds=0)

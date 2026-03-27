@@ -44,6 +44,49 @@ _feed_queues: dict[str, asyncio.Queue] = {}
 _MAX_FEED_ENTRIES = 200  # max concurrent course feeds
 
 
+def _format_outline_snapshot(sections: list[Section]) -> str:
+    lines = []
+    for section in sorted(sections, key=lambda s: s.position):
+        lines.append(f"{section.position}. {section.title}: {section.summary}")
+    return "\n".join(lines)
+
+
+def _build_regeneration_instructions(
+    original_instructions: str | None,
+    current_sections: list[Section],
+    body: RegenerateRequest,
+) -> str | None:
+    parts: list[str] = []
+
+    if original_instructions:
+        parts.append("<original_instructions>")
+        parts.append(original_instructions)
+        parts.append("</original_instructions>")
+
+    parts.append("Revise the existing outline instead of creating a brand-new one.")
+    parts.append("Keep the current section count, order, and untouched sections stable unless the overall feedback explicitly asks for broader restructuring.")
+    parts.append("Apply per-section comments only to the referenced sections.")
+    parts.append("If a section comment asks to remove or replace a topic, treat that as a targeted rewrite of that section rather than a rewrite of the full outline.")
+
+    if body.overall_comment:
+        parts.append("<overall_feedback>")
+        parts.append(body.overall_comment)
+        parts.append("</overall_feedback>")
+
+    if body.section_comments:
+        parts.append("<section_feedback>")
+        for sc in sorted(body.section_comments, key=lambda s: s.position):
+            parts.append(f"Section {sc.position}: {sc.comment}")
+        parts.append("</section_feedback>")
+
+    if current_sections:
+        parts.append("<current_outline>")
+        parts.append(_format_outline_snapshot(current_sections))
+        parts.append("</current_outline>")
+
+    return "\n".join(parts) if parts else None
+
+
 async def _ensure_cache(user_id: str, session) -> None:
     """Lazy-load provider credentials into cache if not already present."""
     if key_cache.get_default(user_id) is not None:
@@ -440,16 +483,12 @@ async def regenerate_course(
     if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
-    # Build enhanced instructions from comments
-    feedback_parts = []
-    if course.instructions:
-        feedback_parts.append(course.instructions)
-    if body.overall_comment:
-        feedback_parts.append(f"Feedback on previous outline: {body.overall_comment}")
-    for sc in sorted(body.section_comments, key=lambda s: s.position):
-        feedback_parts.append(f"Feedback on section {sc.position}: {sc.comment}")
-
-    enhanced_instructions = "\n".join(feedback_parts) if feedback_parts else None
+    current_sections = list(sorted(course.sections, key=lambda s: s.position))
+    enhanced_instructions = _build_regeneration_instructions(
+        course.instructions,
+        current_sections,
+        body,
+    )
 
     # Delete old sections
     for section in course.sections:
@@ -475,7 +514,7 @@ async def regenerate_course(
 
         outline_with_briefs, ungrounded = await generate_outline(
             course.topic, enhanced_instructions, provider, model, creds, extra_fields,
-            search_provider, search_creds, user_id=user_id,
+            search_provider, search_creds, user_id=user_id, current_outline=current_sections,
         )
 
         course.ungrounded = ungrounded
@@ -535,10 +574,11 @@ async def list_courses(
     session: SessionDep,
     user_id: str = Depends(get_current_user),
 ):
+    user_uuid = uuid.UUID(user_id)
     result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
-        .where(Course.user_id == user_id)
+        .where(Course.user_id == user_uuid)
         .order_by(Course.created_at.desc())
     )
     return result.scalars().all()
@@ -1003,17 +1043,19 @@ async def list_my_courses_with_progress(
     user_id: str = Depends(get_current_user),
 ):
     """List the current user's courses with progress data, sorted by last accessed."""
+    user_uuid = uuid.UUID(user_id)
+
     # Get all courses for the user
     courses_result = await session.execute(
         select(Course)
         .options(selectinload(Course.sections))
-        .where(Course.user_id == user_id)
+        .where(Course.user_id == user_uuid)
     )
     courses = courses_result.scalars().all()
 
     # Get all progress records for the user
     progress_result = await session.execute(
-        select(LearnerProgress).where(LearnerProgress.user_id == user_id)
+        select(LearnerProgress).where(LearnerProgress.user_id == user_uuid)
     )
     progress_map = {
         p.course_id: p for p in progress_result.scalars().all()
@@ -1044,5 +1086,3 @@ async def list_my_courses_with_progress(
 
     items.sort(key=lambda pair: pair[0], reverse=True)
     return [item[1] for item in items]
-
-

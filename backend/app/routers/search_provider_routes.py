@@ -228,6 +228,9 @@ async def delete_search_provider(
     user_id: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    if provider == "duckduckgo":
+        raise HTTPException(400, "DuckDuckGo is built in and cannot be removed")
+
     uid = _uid(user_id)
     result = await session.execute(
         select(ProviderConfig).where(

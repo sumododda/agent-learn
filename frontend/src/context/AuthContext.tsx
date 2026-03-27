@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -10,6 +11,8 @@ interface AuthContextValue {
   register: (email: string, password: string, turnstileToken: string) => Promise<{ email: string; message: string }>;
   verifyOtp: (email: string, otp: string) => Promise<void>;
   resendOtp: (email: string) => Promise<{ message: string }>;
+  requestPasswordReset: (email: string) => Promise<{ message: string }>;
+  confirmPasswordReset: (email: string, otp: string, newPassword: string) => Promise<{ message: string }>;
   logout: () => void;
   isSignedIn: boolean;
   isLoaded: boolean;
@@ -38,6 +41,7 @@ function isTokenExpired(token: string): boolean {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [providerKeysLoaded, setProviderKeysLoaded] = useState(0);
@@ -56,13 +60,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const getToken = useCallback(async (): Promise<string | null> => {
-    if (!token) return null;
-    if (isTokenExpired(token)) {
+    let resolvedToken = token;
+
+    // On a hard refresh, route effects can run before the hydration effect above
+    // has copied the token from localStorage into React state.
+    if (!resolvedToken && typeof window !== 'undefined') {
+      const stored = localStorage.getItem('token');
+      if (stored && !isTokenExpired(stored)) {
+        resolvedToken = stored;
+        setToken(stored);
+        setUserEmail(localStorage.getItem('userEmail'));
+      }
+    }
+
+    if (!resolvedToken) return null;
+    if (isTokenExpired(resolvedToken)) {
       localStorage.removeItem('token');
+      localStorage.removeItem('userEmail');
       setToken(null);
+      setUserEmail(null);
       return null;
     }
-    return token;
+    return resolvedToken;
   }, [token]);
 
   const login = useCallback(async (email: string, password: string): Promise<void> => {
@@ -132,17 +151,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.json();
   }, []);
 
+  const requestPasswordReset = useCallback(async (email: string): Promise<{ message: string }> => {
+    const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to send reset code' }));
+      throw new Error(err.detail || 'Failed to send reset code');
+    }
+    return res.json();
+  }, []);
+
+  const confirmPasswordReset = useCallback(async (
+    email: string,
+    otp: string,
+    newPassword: string,
+  ): Promise<{ message: string }> => {
+    const res = await fetch(`${API_BASE}/api/auth/forgot-password/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp, new_password: newPassword }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to reset password' }));
+      throw new Error(err.detail || 'Failed to reset password');
+    }
+    return res.json();
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem('token');
     localStorage.removeItem('userEmail');
     setToken(null);
     setUserEmail(null);
-  }, []);
+    router.replace('/');
+  }, [router]);
 
   const isSignedIn = token !== null && !isTokenExpired(token);
 
   return (
-    <AuthContext.Provider value={{ getToken, login, register, verifyOtp, resendOtp, logout, isSignedIn, isLoaded, providerKeysLoaded, userEmail }}>
+    <AuthContext.Provider
+      value={{
+        getToken,
+        login,
+        register,
+        verifyOtp,
+        resendOtp,
+        requestPasswordReset,
+        confirmPasswordReset,
+        logout,
+        isSignedIn,
+        isLoaded,
+        providerKeysLoaded,
+        userEmail,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
