@@ -27,7 +27,7 @@ class Course(Base):
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, default="outline_ready")
-    user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     ungrounded: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -140,7 +140,7 @@ class LearnerProgress(Base):
     __tablename__ = "learner_progress"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), nullable=False)
     current_section: Mapped[int] = mapped_column(Integer, default=0)
     completed_sections: Mapped[list] = mapped_column(JSON, default=list)
@@ -155,7 +155,7 @@ class ChatMessage(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), nullable=False)
-    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)  # "user" or "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)  # null for user messages

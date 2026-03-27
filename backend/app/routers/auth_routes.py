@@ -26,6 +26,7 @@ from app.schemas import (
 from app.turnstile import verify_turnstile_token
 from app.email_service import send_verification_email
 import app.key_cache as key_cache
+import app.login_tracker as login_tracker
 import app.pending_registration_cache as pending_cache
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,16 @@ async def verify_otp(request: Request, body: OtpVerifyRequest, session: SessionD
     # 1. Look up pending registration
     pending = pending_cache.get(body.email)
     if pending is None:
-        raise HTTPException(status_code=410, detail="Verification expired or not found")
+        # Multi-replica fallback: check if another replica already verified this user
+        existing = await session.execute(
+            select(User).where(User.email == body.email)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail="Account already verified. Please log in.",
+            )
+        raise HTTPException(status_code=410, detail="Verification expired or not found. Please register again.")
 
     # 2. Check attempt limit
     if pending.attempts >= pending_cache.MAX_ATTEMPTS:
@@ -171,13 +181,19 @@ async def resend_otp(request: Request, body: OtpResendRequest):
 @router.post("/login", response_model=AuthResponse)
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest, session: SessionDep):
+    # Per-email lockout check
+    if login_tracker.is_locked_out(body.email):
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+
     result = await session.execute(
         select(User).where(User.email == body.email)
     )
     user = result.scalar_one_or_none()
     if not user or not pwd_context.verify(body.password, user.password_hash):
+        login_tracker.record_failure(body.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    login_tracker.reset(body.email)
     token = create_access_token(str(user.id))
     user_id = str(user.id)
 

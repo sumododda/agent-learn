@@ -97,7 +97,7 @@ async def create_course(
     stream: bool = Query(False),
 ):
     # Create course row first with "researching" status
-    course = Course(topic=body.topic, instructions=body.instructions, status="researching", user_id=user_id)
+    course = Course(topic=body.topic, instructions=body.instructions, status="researching", user_id=uuid.UUID(user_id))
     session.add(course)
     await session.commit()  # commit (not flush) so background task's own session can see it
 
@@ -286,6 +286,7 @@ async def create_course(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
@@ -306,7 +307,7 @@ async def generate_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Status guard: only allow generation when outline is ready
@@ -364,7 +365,7 @@ async def resume_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Only allow resume when course is stale
@@ -436,7 +437,7 @@ async def regenerate_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Build enhanced instructions from comments
@@ -557,7 +558,7 @@ async def get_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Include pipeline status from the latest PipelineJob in DB
@@ -602,7 +603,7 @@ async def delete_course(
     course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Cancel any active pipeline jobs so the worker stops processing
@@ -668,7 +669,7 @@ async def pipeline_stream(course_id: uuid.UUID, token: str = Query(...)):
         course = result.scalar_one_or_none()
         if not course:
             raise HTTPException(status_code=404, detail="Course not found")
-        if course.user_id != user_id:
+        if str(course.user_id) != user_id:
             raise HTTPException(status_code=403, detail="Not authorized")
 
     async def event_generator():
@@ -739,6 +740,7 @@ async def pipeline_stream(course_id: uuid.UUID, token: str = Query(...)):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
@@ -768,7 +770,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
         course = result.scalar_one_or_none()
         if not course:
             raise HTTPException(status_code=404, detail="Course not found")
-        if course.user_id != user_id:
+        if str(course.user_id) != user_id:
             raise HTTPException(status_code=403, detail="Not authorized")
 
     course_id_str = str(course_id)
@@ -835,6 +837,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
@@ -862,7 +865,7 @@ async def get_evidence(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     query = select(EvidenceCard).where(EvidenceCard.course_id == course_id)
@@ -893,7 +896,7 @@ async def get_course_blackboard(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     bb = await get_blackboard(course_id, session)
@@ -920,7 +923,7 @@ async def get_progress(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     result = await session.execute(
@@ -955,7 +958,7 @@ async def update_progress(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Fetch existing progress or create new
@@ -969,7 +972,7 @@ async def update_progress(
 
     if progress is None:
         progress = LearnerProgress(
-            user_id=user_id,
+            user_id=uuid.UUID(user_id),
             course_id=course_id,
             current_section=body.current_section if body.current_section is not None else 0,
             completed_sections=[],

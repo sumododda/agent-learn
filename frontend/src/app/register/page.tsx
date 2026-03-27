@@ -89,6 +89,7 @@ export default function RegisterPage() {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+              <p className="text-xs text-muted-foreground">At least 8 characters with uppercase, lowercase, and a digit.</p>
             </div>
 
             <div className="flex justify-center">

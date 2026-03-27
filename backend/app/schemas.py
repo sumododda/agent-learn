@@ -1,7 +1,9 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+import re
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class CourseCreate(BaseModel):
@@ -200,10 +202,23 @@ class ChatModelInfo(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _validate_password_strength(password: str) -> str:
+    """Require at least one uppercase, one lowercase, one digit."""
+    if not re.search(r'[A-Z]', password):
+        raise ValueError('Password must contain at least one uppercase letter')
+    if not re.search(r'[a-z]', password):
+        raise ValueError('Password must contain at least one lowercase letter')
+    if not re.search(r'[0-9]', password):
+        raise ValueError('Password must contain at least one digit')
+    return password
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     turnstile_token: str
+
+    _check_password_strength = field_validator('password')(_validate_password_strength)
 
 
 class LoginRequest(BaseModel):
@@ -240,17 +255,30 @@ class OtpResendResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _validate_credential_values(v: dict | None) -> dict | None:
+    """Reject credential values longer than 10,000 characters."""
+    if v:
+        for key, val in v.items():
+            if isinstance(val, str) and len(val) > 10000:
+                raise ValueError(f'Credential value for "{key}" exceeds maximum length')
+    return v
+
+
 class ProviderSaveRequest(BaseModel):
     provider: str = Field(max_length=100)
     credentials: dict = Field(max_length=10)
     extra_fields: dict = Field(default={}, max_length=10)
     password: str | None = None
 
+    _check_cred_values = field_validator('credentials')(_validate_credential_values)
+
 
 class ProviderUpdateRequest(BaseModel):
     credentials: dict | None = Field(default=None, max_length=10)
     extra_fields: dict | None = Field(default=None, max_length=10)
     password: str | None = None
+
+    _check_cred_values = field_validator('credentials')(_validate_credential_values)
 
 
 class ProviderTestRequest(BaseModel):
@@ -273,3 +301,5 @@ class ProviderDefaultRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     old_password: str = Field(max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
+
+    _check_password_strength = field_validator('new_password')(_validate_password_strength)
