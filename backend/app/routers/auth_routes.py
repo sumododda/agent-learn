@@ -7,7 +7,7 @@ import uuid as uuid_mod
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 
-from app.auth import create_access_token, create_sse_token, get_current_user, pwd_context
+from app.auth import create_access_token, create_sse_token, get_current_user, hash_password, verify_password
 from app.config import settings
 from app.crypto import decrypt_credentials, derive_key
 from app.database import SessionDep
@@ -107,9 +107,9 @@ async def register(request: Request, body: RegisterRequest, session: SessionDep)
         return RegisterResponse(message="Verification code sent", email=body.email)
 
     # 4. Hash password, generate and hash OTP
-    password_hash = pwd_context.hash(body.password)
+    password_hash = await hash_password(body.password)
     otp = _generate_otp()
-    otp_hash = pwd_context.hash(otp)
+    otp_hash = await hash_password(otp)
 
     # 5. Store pending registration
     pending_cache.store(body.email, password_hash, otp_hash)
@@ -142,7 +142,7 @@ async def verify_otp(request: Request, body: OtpVerifyRequest, session: SessionD
         raise HTTPException(status_code=429, detail="Too many failed attempts")
 
     # 3. Verify OTP
-    if not pwd_context.verify(body.otp, pending.otp_hash):
+    if not await verify_password(body.otp, pending.otp_hash):
         pending_cache.increment_attempts(body.email)
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
@@ -172,7 +172,7 @@ async def resend_otp(request: Request, body: OtpResendRequest):
         return OtpResendResponse(message="If a pending registration exists, a new code has been sent")
 
     otp = _generate_otp()
-    otp_hash = pwd_context.hash(otp)
+    otp_hash = await hash_password(otp)
 
     if not pending_cache.replace_otp(body.email, otp_hash):
         return OtpResendResponse(message="If a pending registration exists, a new code has been sent")
@@ -192,7 +192,7 @@ async def forgot_password(request: Request, body: ForgotPasswordRequest, session
 
     if user:
         otp = _generate_otp()
-        otp_hash = pwd_context.hash(otp)
+        otp_hash = await hash_password(otp)
         pending = password_reset_cache.get(body.email)
         if pending is None:
             password_reset_cache.store(body.email, otp_hash)
@@ -222,7 +222,7 @@ async def confirm_forgot_password(
     if pending.attempts >= password_reset_cache.MAX_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Too many failed attempts")
 
-    if not pwd_context.verify(body.otp, pending.otp_hash):
+    if not await verify_password(body.otp, pending.otp_hash):
         password_reset_cache.increment_attempts(body.email)
         raise HTTPException(status_code=400, detail="Invalid reset code")
 
@@ -237,7 +237,7 @@ async def confirm_forgot_password(
             detail="Password reset code expired or not found. Request a new code.",
         )
 
-    user.password_hash = pwd_context.hash(body.new_password)
+    user.password_hash = await hash_password(body.new_password)
     await session.commit()
     password_reset_cache.remove(body.email)
     login_tracker.reset(body.email)
@@ -256,7 +256,7 @@ async def login(request: Request, body: LoginRequest, session: SessionDep):
         select(User).where(User.email == body.email)
     )
     user = result.scalar_one_or_none()
-    if not user or not pwd_context.verify(body.password, user.password_hash):
+    if not user or not await verify_password(body.password, user.password_hash):
         login_tracker.record_failure(body.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -283,10 +283,10 @@ async def change_password(
         select(User).where(User.id == uid)
     )
     user = result.scalar_one_or_none()
-    if not user or not pwd_context.verify(body.old_password, user.password_hash):
+    if not user or not await verify_password(body.old_password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid current password")
 
-    user.password_hash = pwd_context.hash(body.new_password)
+    user.password_hash = await hash_password(body.new_password)
     await session.commit()
 
     return {"message": "Password changed successfully"}

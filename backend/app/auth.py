@@ -2,7 +2,9 @@
 
 Verifies Bearer tokens signed with HS256 using JWT_SECRET_KEY.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 import jwt
 from fastapi import Header, HTTPException
@@ -16,6 +18,16 @@ _JWT_ISSUER = "agent-learn"
 _JWT_AUDIENCE_API = "agent-learn-api"
 _JWT_AUDIENCE_SSE = "agent-learn-sse"
 _SSE_TOKEN_EXPIRY_SECONDS = 60
+
+
+# -- Async bcrypt helpers (offload CPU-heavy work to threadpool) --
+
+async def hash_password(password: str) -> str:
+    return await asyncio.to_thread(pwd_context.hash, password)
+
+
+async def verify_password(plain: str, hashed: str) -> bool:
+    return await asyncio.to_thread(pwd_context.verify, plain, hashed)
 
 
 def create_access_token(user_id: str) -> str:

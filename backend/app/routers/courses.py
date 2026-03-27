@@ -257,7 +257,15 @@ async def create_course(
 
     if not stream:
         # Return course immediately — discover page picks up SSE events
-        return CourseResponse.model_validate(course)
+        return CourseResponse(
+            id=course.id,
+            topic=course.topic,
+            instructions=course.instructions,
+            status=course.status,
+            ungrounded=False,
+            sections=[],
+            pipeline_status=None,
+        )
 
     async def event_generator():
         while True:
