@@ -18,7 +18,7 @@ anyio==4.12.1
 bcrypt==4.0.1
 tavily-python==0.7.23
 exa_py==2.9.0
-duckduckgo-search==8.1.1
+ddgs>=9.11.0
 passlib[bcrypt]==1.7.4
 argon2-cffi==25.1.0
 tenacity==9.1.4

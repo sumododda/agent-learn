@@ -109,7 +109,7 @@ async def create_course(
 
             outline_with_briefs, ungrounded = await generate_outline(
                 body.topic, body.instructions, provider, model, creds, extra_fields,
-                search_provider, search_creds,
+                search_provider, search_creds, user_id=user_id,
             )
 
             course.ungrounded = ungrounded
@@ -192,7 +192,7 @@ async def create_course(
                 outline_with_briefs, ungrounded = await generate_outline(
                     body.topic, body.instructions, provider, model, creds, extra_fields,
                     search_provider, search_creds,
-                    on_event=emit,
+                    on_event=emit, user_id=user_id,
                 )
 
                 # Reload course in this session
@@ -475,7 +475,7 @@ async def regenerate_course(
 
         outline_with_briefs, ungrounded = await generate_outline(
             course.topic, enhanced_instructions, provider, model, creds, extra_fields,
-            search_provider, search_creds,
+            search_provider, search_creds, user_id=user_id,
         )
 
         course.ungrounded = ungrounded

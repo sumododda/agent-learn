@@ -240,7 +240,7 @@ function OpenRouterSection({
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-foreground">AI Provider</h2>
-        <p className="text-xs text-muted-foreground mt-1">Powered by OpenRouter</p>
+        <p className="text-xs text-muted-foreground mt-1">Powered by <a href="https://openrouter.ai/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">OpenRouter</a></p>
       </div>
 
       {isConfigured && (
