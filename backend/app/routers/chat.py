@@ -85,7 +85,7 @@ async def chat_stream(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Get provider credentials from cache (lazy-load if needed)
@@ -108,7 +108,7 @@ async def chat_stream(
     # Persist user message
     user_msg = ChatMessage(
         course_id=uuid.UUID(course_id),
-        user_id=user_id,
+        user_id=uuid.UUID(user_id),
         role="user",
         content=body.message,
         model=None,
@@ -140,7 +140,7 @@ async def chat_stream(
                 async with async_session() as persist_session:
                     assistant_msg = ChatMessage(
                         course_id=uuid.UUID(course_id),
-                        user_id=user_id,
+                        user_id=uuid.UUID(user_id),
                         role="assistant",
                         content=full_content,
                         model=body.model,
@@ -155,6 +155,7 @@ async def chat_stream(
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
@@ -187,7 +188,7 @@ async def chat_history(
     course = course_result.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if course.user_id != user_id:
+    if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     query = (
