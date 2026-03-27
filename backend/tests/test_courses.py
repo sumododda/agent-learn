@@ -154,6 +154,47 @@ async def test_regenerate_course(client, mock_outline_with_briefs):
 
 
 @pytest.mark.anyio
+async def test_regenerate_course_passes_current_outline_and_targeted_feedback(client, mock_outline_with_briefs):
+    mock_return = (mock_outline_with_briefs, False)
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
+    ):
+        create_response = await client.post(
+            "/api/courses",
+            json={"topic": "Machine Learning", "instructions": "Beginner-friendly."},
+        )
+
+    course_id = create_response.json()["id"]
+
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return) as mock_generate,
+    ):
+        regen_response = await client.post(
+            f"/api/courses/{course_id}/regenerate",
+            json={
+                "section_comments": [
+                    {
+                        "position": 3,
+                        "comment": "Replace this section with security risks and adversarial examples.",
+                    }
+                ],
+            },
+        )
+
+    assert regen_response.status_code == 200
+    await_args = mock_generate.await_args
+    assert await_args is not None
+    assert await_args.kwargs["current_outline"][2].title == "Practice"
+    assert "Revise the existing outline instead of creating a brand-new one." in await_args.args[1]
+    assert "Section 3: Replace this section with security risks and adversarial examples." in await_args.args[1]
+    assert "<current_outline>" in await_args.args[1]
+
+
+@pytest.mark.anyio
 async def test_get_evidence_empty(client, mock_outline_with_briefs):
     """GET /evidence returns empty list when no evidence cards exist."""
     mock_return = (mock_outline_with_briefs, False)

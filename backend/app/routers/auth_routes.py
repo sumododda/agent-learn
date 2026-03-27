@@ -15,6 +15,9 @@ from app.limiter import limiter
 from app.models import ProviderConfig, User, UserKeySalt
 from app.schemas import (
     AuthResponse,
+    ForgotPasswordConfirmRequest,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     OtpResendRequest,
     OtpResendResponse,
@@ -24,10 +27,11 @@ from app.schemas import (
     RegisterResponse,
 )
 from app.turnstile import verify_turnstile_token
-from app.email_service import send_verification_email
+from app.email_service import send_password_reset_email, send_verification_email
 import app.key_cache as key_cache
 import app.login_tracker as login_tracker
 import app.pending_registration_cache as pending_cache
+import app.password_reset_cache as password_reset_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
@@ -90,7 +94,7 @@ async def register(request: Request, body: RegisterRequest, session: SessionDep)
     if not await verify_turnstile_token(body.turnstile_token):
         raise HTTPException(status_code=400, detail="Turnstile verification failed")
 
-    # 2. Check email not already registered (return same response to prevent enumeration)
+    # 2. Check email not already registered
     existing = await session.execute(
         select(User).where(User.email == body.email)
     )
@@ -176,6 +180,69 @@ async def resend_otp(request: Request, body: OtpResendRequest):
     send_verification_email(body.email, otp)
 
     return OtpResendResponse(message="If a pending registration exists, a new code has been sent")
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit("5/hour")
+async def forgot_password(request: Request, body: ForgotPasswordRequest, session: SessionDep):
+    result = await session.execute(
+        select(User).where(User.email == body.email)
+    )
+    user = result.scalar_one_or_none()
+
+    if user:
+        otp = _generate_otp()
+        otp_hash = pwd_context.hash(otp)
+        pending = password_reset_cache.get(body.email)
+        if pending is None:
+            password_reset_cache.store(body.email, otp_hash)
+            send_password_reset_email(body.email, otp)
+        elif password_reset_cache.replace_otp(body.email, otp_hash):
+            send_password_reset_email(body.email, otp)
+
+    return ForgotPasswordResponse(
+        message="If an account with that email exists, a password reset code has been sent."
+    )
+
+
+@router.post("/forgot-password/confirm", response_model=ForgotPasswordResponse)
+@limiter.limit("10/minute")
+async def confirm_forgot_password(
+    request: Request,
+    body: ForgotPasswordConfirmRequest,
+    session: SessionDep,
+):
+    pending = password_reset_cache.get(body.email)
+    if pending is None:
+        raise HTTPException(
+            status_code=410,
+            detail="Password reset code expired or not found. Request a new code.",
+        )
+
+    if pending.attempts >= password_reset_cache.MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many failed attempts")
+
+    if not pwd_context.verify(body.otp, pending.otp_hash):
+        password_reset_cache.increment_attempts(body.email)
+        raise HTTPException(status_code=400, detail="Invalid reset code")
+
+    result = await session.execute(
+        select(User).where(User.email == body.email)
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        password_reset_cache.remove(body.email)
+        raise HTTPException(
+            status_code=410,
+            detail="Password reset code expired or not found. Request a new code.",
+        )
+
+    user.password_hash = pwd_context.hash(body.new_password)
+    await session.commit()
+    password_reset_cache.remove(body.email)
+    login_tracker.reset(body.email)
+
+    return ForgotPasswordResponse(message="Password reset successful. Please sign in.")
 
 
 @router.post("/login", response_model=AuthResponse)

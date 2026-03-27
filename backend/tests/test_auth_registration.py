@@ -14,6 +14,7 @@ from app.auth import get_current_user
 from app.limiter import limiter
 from app.models import Base, User
 import app.pending_registration_cache as pending_cache
+import app.password_reset_cache as password_reset_cache
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,13 @@ def clear_pending_cache():
     pending_cache._cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def clear_password_reset_cache():
+    password_reset_cache._cache.clear()
+    yield
+    password_reset_cache._cache.clear()
+
+
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
@@ -74,7 +82,7 @@ async def client():
 
 VALID_REGISTER = {
     "email": "alice@example.com",
-    "password": "strongpass123",
+    "password": "StrongPass123",
     "turnstile_token": "tok_valid",
 }
 
@@ -103,7 +111,7 @@ async def _register_and_get_otp(client: AsyncClient, email: str = "alice@example
     ):
         resp = await client.post("/api/auth/register", json={
             "email": email,
-            "password": "strongpass123",
+            "password": "StrongPass123",
             "turnstile_token": "tok_valid",
         })
         assert resp.status_code == 200
@@ -208,7 +216,7 @@ class TestRegisterEndpoint:
         assert "Turnstile" in resp.json()["detail"]
 
     async def test_register_duplicate_email(self, client):
-        """Registration with existing email returns 200 (no enumeration)."""
+        """Registration with existing email returns generic success."""
         # First, complete a full registration so user exists in DB
         otp = await _register_and_get_otp(client)
         await client.post("/api/auth/verify-otp", json={
@@ -216,7 +224,7 @@ class TestRegisterEndpoint:
             "otp": otp,
         })
 
-        # Now try to register again — returns same 200 to prevent enumeration
+        # Now try to register again — same 200 response to prevent enumeration
         resp = await _register(client, email="alice@example.com")
         assert resp.status_code == 200
         assert resp.json()["email"] == "alice@example.com"
@@ -239,7 +247,7 @@ class TestRegisterEndpoint:
         ):
             resp = await client.post("/api/auth/register", json={
                 "email": "not-an-email",
-                "password": "strongpass123",
+                "password": "StrongPass123",
                 "turnstile_token": "tok_valid",
             })
         assert resp.status_code == 422
@@ -463,7 +471,7 @@ class TestFullFlow:
         ):
             resp = await client.post("/api/auth/register", json={
                 "email": "bob@example.com",
-                "password": "securepass99",
+                "password": "SecurePass99",
                 "turnstile_token": "tok_valid",
             })
         assert resp.status_code == 200
@@ -500,9 +508,109 @@ class TestFullFlow:
         # Login
         resp = await client.post("/api/auth/login", json={
             "email": "carol@example.com",
-            "password": "strongpass123",
+            "password": "StrongPass123",
         })
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data
         assert "user_id" in data
+
+
+class TestForgotPassword:
+    async def test_forgot_password_existing_email_sends_code(self, client):
+        otp = await _register_and_get_otp(client)
+        await client.post("/api/auth/verify-otp", json={
+            "email": "alice@example.com",
+            "otp": otp,
+        })
+
+        with patch("app.routers.auth_routes.send_password_reset_email") as mock_send:
+            resp = await client.post("/api/auth/forgot-password", json={
+                "email": "alice@example.com",
+            })
+
+        assert resp.status_code == 200
+        assert "reset code has been sent" in resp.json()["message"]
+        mock_send.assert_called_once()
+        sent_otp = mock_send.call_args[0][1]
+        assert len(sent_otp) == 6 and sent_otp.isdigit()
+
+    async def test_forgot_password_unknown_email_returns_generic_success(self, client):
+        with patch("app.routers.auth_routes.send_password_reset_email") as mock_send:
+            resp = await client.post("/api/auth/forgot-password", json={
+                "email": "nobody@example.com",
+            })
+
+        assert resp.status_code == 200
+        assert "reset code has been sent" in resp.json()["message"]
+        mock_send.assert_not_called()
+
+    async def test_forgot_password_limits_repeat_resends(self, client):
+        otp = await _register_and_get_otp(client)
+        await client.post("/api/auth/verify-otp", json={
+            "email": "alice@example.com",
+            "otp": otp,
+        })
+
+        with patch("app.routers.auth_routes.send_password_reset_email") as mock_send:
+            for _ in range(password_reset_cache.MAX_RESENDS + 2):
+                resp = await client.post("/api/auth/forgot-password", json={
+                    "email": "alice@example.com",
+                })
+                assert resp.status_code == 200
+
+        assert mock_send.call_count == password_reset_cache.MAX_RESENDS + 1
+
+    async def test_confirm_forgot_password_updates_password(self, client):
+        otp = await _register_and_get_otp(client)
+        await client.post("/api/auth/verify-otp", json={
+            "email": "alice@example.com",
+            "otp": otp,
+        })
+
+        captured_otp = None
+
+        def capture_email(to_email: str, reset_otp: str) -> None:
+            nonlocal captured_otp
+            captured_otp = reset_otp
+
+        with patch("app.routers.auth_routes.send_password_reset_email", side_effect=capture_email):
+            request_resp = await client.post("/api/auth/forgot-password", json={
+                "email": "alice@example.com",
+            })
+        assert request_resp.status_code == 200
+        assert captured_otp is not None
+
+        confirm_resp = await client.post("/api/auth/forgot-password/confirm", json={
+            "email": "alice@example.com",
+            "otp": captured_otp,
+            "new_password": "NewStrongPass1",
+        })
+        assert confirm_resp.status_code == 200
+        assert "Password reset successful" in confirm_resp.json()["message"]
+
+        login_resp = await client.post("/api/auth/login", json={
+            "email": "alice@example.com",
+            "password": "NewStrongPass1",
+        })
+        assert login_resp.status_code == 200
+
+    async def test_confirm_forgot_password_wrong_code(self, client):
+        otp = await _register_and_get_otp(client)
+        await client.post("/api/auth/verify-otp", json={
+            "email": "alice@example.com",
+            "otp": otp,
+        })
+
+        with patch("app.routers.auth_routes.send_password_reset_email"):
+            await client.post("/api/auth/forgot-password", json={
+                "email": "alice@example.com",
+            })
+
+        resp = await client.post("/api/auth/forgot-password/confirm", json={
+            "email": "alice@example.com",
+            "otp": "000000",
+            "new_password": "NewStrongPass1",
+        })
+        assert resp.status_code == 400
+        assert "Invalid reset code" in resp.json()["detail"]

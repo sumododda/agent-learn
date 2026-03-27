@@ -61,12 +61,15 @@ async def seeded(worker_db):
         email="worker-test@example.com",
         password_hash="hashed",
     )
+    session.add(user)
+    await session.commit()
+
     course = Course(
         id=uuid.uuid4(),
         topic="Worker Test Course",
-        user_id=str(user.id),
+        user_id=user.id,
     )
-    session.add_all([user, course])
+    session.add(course)
     await session.commit()
     return user, course, session
 
@@ -320,6 +323,65 @@ async def test_resolve_credentials_with_search(seeded):
 
     assert creds == llm_creds
     assert s_creds == search_creds
+
+
+@pytest.mark.asyncio
+async def test_resolve_credentials_with_duckduckgo_search():
+    """_resolve_credentials returns empty credentials for DuckDuckGo."""
+    pepper = settings.ENCRYPTION_PEPPER.encode() if settings.ENCRYPTION_PEPPER else b"test-pepper-key!"
+    salt = generate_salt()
+    key = derive_key(salt, pepper)
+    llm_creds = {"api_key": "sk-llm-key"}
+    encrypted = encrypt_credentials(key, json.dumps(llm_creds))
+
+    job = PipelineJob(
+        id=uuid.uuid4(),
+        course_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        status="claimed",
+        config={
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-20250514",
+            "search_provider": "duckduckgo",
+        },
+    )
+
+    class _ScalarResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one(self):
+            return self._value
+
+    fake_session = AsyncMock()
+    fake_session.execute = AsyncMock(side_effect=[
+        _ScalarResult(UserKeySalt(user_id=job.user_id, salt=salt)),
+        _ScalarResult(ProviderConfig(
+            user_id=job.user_id,
+            provider="anthropic",
+            encrypted_credentials=encrypted,
+            credential_hint="****-key",
+        )),
+    ])
+
+    class _FakeSessionCtx:
+        def __init__(self, s):
+            self._s = s
+
+        async def __aenter__(self):
+            return self._s
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch("app.worker.async_session", return_value=_FakeSessionCtx(fake_session)):
+        with patch("app.worker.settings") as mock_settings:
+            mock_settings.ENCRYPTION_PEPPER = pepper.decode() if isinstance(pepper, bytes) else pepper
+            creds, s_creds = await _resolve_credentials(job)
+
+    assert creds == llm_creds
+    assert s_creds == {}
+    assert fake_session.execute.await_count == 2
 
 
 # ---------------------------------------------------------------------------

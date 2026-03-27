@@ -250,6 +250,22 @@ class OtpResendResponse(BaseModel):
     message: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordConfirmRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=8, max_length=128)
+
+    _check_password_strength = field_validator('new_password')(_validate_password_strength)
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Provider schemas (Phase 2: Multi-provider)
 # ---------------------------------------------------------------------------

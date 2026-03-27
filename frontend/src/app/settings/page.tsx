@@ -240,8 +240,31 @@ function OpenRouterSection({
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-foreground">AI Provider</h2>
-        <p className="text-xs text-muted-foreground mt-1">Powered by <a href="https://openrouter.ai/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">OpenRouter</a></p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Powered by <a href="https://openrouter.ai/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">OpenRouter</a> (more providers will be added soon)
+        </p>
       </div>
+
+      <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
+        You can use multiple providers through OpenRouter BYOK. See the{' '}
+        <a
+          href="https://openrouter.ai/docs/guides/overview/auth/byok"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary hover:underline"
+        >
+          BYOK docs
+        </a>{' '}
+        or open the{' '}
+        <a
+          href="https://openrouter.ai/workspaces/default/byok"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary hover:underline"
+        >
+          BYOK console
+        </a>.
+      </p>
 
       {isConfigured && (
         <div className="flex items-center gap-2">
@@ -341,7 +364,9 @@ function SearchProviderSection({
   useEffect(() => {
     if (providerKeys.length === 0) return;
     if (!selectedProvider) {
-      setSelectedProvider(defaultProvider || providerKeys[0]);
+      setSelectedProvider(
+        defaultProvider || (providerKeys.includes('duckduckgo') ? 'duckduckgo' : providerKeys[0])
+      );
     }
   }, [providerKeys, defaultProvider, selectedProvider]);
 
@@ -361,6 +386,7 @@ function SearchProviderSection({
   const currentDef = selectedProvider ? registry[selectedProvider] : null;
   const currentConfig = configs.find((c) => c.provider === selectedProvider);
   const isConfigured = !!currentConfig;
+  const isDuckDuckGo = selectedProvider === 'duckduckgo';
   const hasFields = currentDef ? currentDef.fields.length > 0 : false;
 
   async function handleTest() {
@@ -433,6 +459,11 @@ function SearchProviderSection({
     <div className="space-y-5">
       <h2 className="text-lg font-semibold text-foreground">Search Provider</h2>
 
+      <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
+        DuckDuckGo is enabled by default as a last fallback option. Add as many providers as you
+        want. Fallbacks kick in automatically.
+      </p>
+
       <div className="space-y-2">
         <Label>Provider</Label>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -472,7 +503,9 @@ function SearchProviderSection({
 
       {currentDef && !hasFields && (
         <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
-          No API key required &mdash; works without authentication.
+          {isDuckDuckGo
+            ? 'No API key required. DuckDuckGo is available immediately and works without authentication.'
+            : 'No API key required &mdash; works without authentication.'}
         </p>
       )}
 
@@ -510,7 +543,7 @@ function SearchProviderSection({
         >
           {saving ? 'Saving...' : isConfigured ? 'Update' : 'Save'}
         </Button>
-        {isConfigured && (
+        {isConfigured && !isDuckDuckGo && (
           <Button
             variant="destructive"
             size="sm"

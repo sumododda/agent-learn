@@ -88,7 +88,7 @@ cp backend/.env.example backend/.env
 # Edit backend/.env with your database URL, API keys, JWT secrets, etc.
 ```
 
-Key variables: `DATABASE_URL`, `OPENROUTER_API_KEY`, `RESEND_API_KEY`, `JWT_SECRET`, `TURNSTILE_SECRET_KEY`, `ENCRYPTION_KEY`.
+Key variables: `DATABASE_URL`, `OPENROUTER_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `JWT_SECRET_KEY`, `TURNSTILE_SECRET_KEY`, `ENCRYPTION_PEPPER`.
 
 ### Start the database
 

@@ -59,3 +59,8 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: resend-api-key
+            - name: RESEND_FROM_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: resend-from-email

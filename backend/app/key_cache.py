@@ -85,11 +85,15 @@ def get_default_search(user_id: str) -> tuple[str, dict] | None:
     if datetime.now(timezone.utc) > entry.expires_at:
         del _cache[user_id]
         return None
+    if entry.default_search_provider == "duckduckgo":
+        return ("duckduckgo", {})
     if entry.default_search_provider and entry.default_search_provider in entry.credentials:
         return (entry.default_search_provider, entry.credentials[entry.default_search_provider])
     for provider in entry.credentials:
         if provider in SEARCH_PROVIDERS:
             return (provider, entry.credentials[provider])
+    if "duckduckgo" in SEARCH_PROVIDERS:
+        return ("duckduckgo", {})
     return None
 
 
