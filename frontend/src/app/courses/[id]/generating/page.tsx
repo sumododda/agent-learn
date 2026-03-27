@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import { Check } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { getPipelineStreamUrl, getCourse, resumeCourse, getSseTicket } from '@/lib/api';
 import { Navbar } from '@/components/Navbar';
@@ -19,6 +20,35 @@ interface SectionState {
 }
 
 type OverallStage = 'starting' | 'researching' | 'verifying' | 'writing' | 'editing' | 'complete' | 'stale' | 'error';
+
+const PIPELINE_STAGES = ['plan', 'research', 'verify', 'write', 'edit', 'complete'] as const;
+const PIPELINE_DISPLAY: Record<string, string> = {
+  plan: 'Plan',
+  research: 'Research',
+  verify: 'Verify',
+  write: 'Write',
+  edit: 'Edit',
+  complete: 'Complete',
+};
+const OVERALL_TO_PIPELINE: Record<OverallStage, string> = {
+  starting: 'plan',
+  researching: 'research',
+  verifying: 'verify',
+  writing: 'write',
+  editing: 'edit',
+  complete: 'complete',
+  stale: '',
+  error: '',
+};
+
+function getPipelineStageStatus(current: string, stage: string): 'completed' | 'active' | 'pending' {
+  const currentIdx = PIPELINE_STAGES.indexOf(current as typeof PIPELINE_STAGES[number]);
+  const stageIdx = PIPELINE_STAGES.indexOf(stage as typeof PIPELINE_STAGES[number]);
+  if (currentIdx < 0) return 'pending';
+  if (stageIdx < currentIdx) return 'completed';
+  if (stageIdx === currentIdx) return 'active';
+  return 'pending';
+}
 
 const STAGE_LABELS: Record<SectionStage, string> = {
   pending: 'Pending',
@@ -360,6 +390,11 @@ export default function GeneratingPage() {
   return (
     <>
       <Navbar />
+      {overallStage !== 'complete' && overallStage !== 'error' && overallStage !== 'stale' && (
+        <div className="w-full bg-primary/10 border-b border-primary/20 px-4 py-2 text-center text-sm text-primary">
+          Our workers are busy crafting your course behind the scenes. Feel free to close this tab and grab a coffee — your course will be waiting for you in your library when it&apos;s ready.
+        </div>
+      )}
       <div className="max-w-[720px] mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-6">
@@ -374,24 +409,62 @@ export default function GeneratingPage() {
           </p>
         </div>
 
-        {/* Overall progress bar */}
-        {totalCount > 0 && (
-          <div className="mb-6">
-            <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-primary transition-all duration-500"
-                style={{ width: `${(doneCount / totalCount) * 100}%` }}
-              />
-            </div>
-          </div>
-        )}
+        {/* Horizontal pipeline stages */}
+        <div className="flex items-center justify-between px-2 mb-6">
+          {PIPELINE_STAGES.map((stage, idx) => {
+            const pipelineStage = OVERALL_TO_PIPELINE[overallStage] || '';
+            const status = getPipelineStageStatus(pipelineStage, stage);
+            return (
+              <div key={stage} className="flex items-center flex-1 last:flex-none">
+                <div className="flex flex-col items-center gap-1.5">
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                      status === 'completed'
+                        ? 'bg-green-500'
+                        : status === 'active'
+                        ? 'bg-primary'
+                        : 'border border-border'
+                    }`}
+                  >
+                    {status === 'completed' && <Check className="w-4 h-4 text-white" />}
+                    {status === 'active' && <div className="w-2 h-2 rounded-full bg-white" />}
+                  </div>
+                  <span
+                    className={`text-xs font-medium ${
+                      status === 'completed'
+                        ? 'text-green-500'
+                        : status === 'active'
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  >
+                    {PIPELINE_DISPLAY[stage]}
+                  </span>
+                </div>
+                {idx < PIPELINE_STAGES.length - 1 && (
+                  <div className="flex-1 mx-2 mb-6">
+                    {(() => {
+                      const nextStatus = getPipelineStageStatus(pipelineStage, PIPELINE_STAGES[idx + 1]);
+                      if (status === 'completed' && nextStatus === 'completed') {
+                        return <div className="h-0.5 bg-green-500 w-full" />;
+                      }
+                      if (status === 'completed' && nextStatus === 'active') {
+                        return <div className="h-0.5 bg-primary w-full" />;
+                      }
+                      return <div className="w-full border-t border-dashed border-border" />;
+                    })()}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
-        {/* Active step indicator */}
-        {overallStage !== 'complete' && overallStage !== 'error' && overallStage !== 'stale' && (
-          <div className="flex items-center gap-2 mb-4">
-            <PulsingDot />
-            <span className="text-sm text-muted-foreground">{OVERALL_LABELS[overallStage]}</span>
-          </div>
+        {/* Section progress */}
+        {totalCount > 0 && overallStage !== 'complete' && overallStage !== 'error' && overallStage !== 'stale' && (
+          <p className="text-xs text-muted-foreground mb-4">
+            {doneCount}/{totalCount} sections complete
+          </p>
         )}
 
         {/* Section cards feed */}
