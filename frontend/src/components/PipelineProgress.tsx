@@ -376,6 +376,15 @@ export default function PipelineProgress({
         </p>
       )}
 
+      {!completeCalled.current && !error && !isStale && (
+        <div className="bg-muted/50 border border-border rounded-lg px-4 py-3 mt-2">
+          <p className="text-sm text-muted-foreground">
+            Our workers are busy crafting your course behind the scenes. Feel free to close this tab and grab a coffee — your course will be waiting for you in{' '}
+            <a href="/library" className="text-primary hover:underline">your library</a> when it&apos;s ready.
+          </p>
+        </div>
+      )}
+
       {!connected && !completeCalled.current && !error && !isStale && (
         <p className="text-xs text-muted-foreground">Waiting for pipeline to start...</p>
       )}
