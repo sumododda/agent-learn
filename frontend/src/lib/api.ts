@@ -146,9 +146,9 @@ export async function listCourses(token?: string | null): Promise<Course[]> {
 export async function deleteCourse(id: string, token?: string | null): Promise<void> {
   const res = await fetch(`${API_BASE}/api/courses/${id}`, {
     method: 'DELETE',
-    headers: authHeaders(token),
+    headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error('Delete failed');
+  if (!res.ok && res.status !== 404) throw new Error('Delete failed');
 }
 
 export async function getCourse(id: string, token?: string | null): Promise<Course> {
