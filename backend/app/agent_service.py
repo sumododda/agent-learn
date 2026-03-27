@@ -18,6 +18,7 @@ from app.agent import (
     create_section_researcher,
     create_verifier,
     CourseOutlineWithBriefs,
+    ResearchBriefItem,
     TopicBrief,
     EvidenceCardItem,
     EvidenceCardSet,
@@ -330,11 +331,24 @@ async def generate_outline(
 
     # Ensure we have a CourseOutlineWithBriefs
     if isinstance(result, CourseOutlineWithBriefs):
-        return result, ungrounded
+        outline = result
     elif isinstance(result, dict):
-        return CourseOutlineWithBriefs(**result), ungrounded
+        outline = CourseOutlineWithBriefs(**result)
     else:
         raise ValueError(f"Planner returned unexpected type: {type(result)}")
+
+    # Backfill missing research briefs — LLM sometimes omits them
+    brief_positions = {b.section_position for b in outline.research_briefs}
+    for section in outline.sections:
+        if section.position not in brief_positions:
+            logger.warning("[outline] Backfilling missing research brief for section %d (%s)", section.position, section.title)
+            outline.research_briefs.append(ResearchBriefItem(
+                section_position=section.position,
+                questions=[f"What are the key concepts of {section.title}?"],
+                source_policy={"preferred_tiers": [1, 2], "scope": section.summary, "out_of_scope": ""},
+            ))
+
+    return outline, ungrounded
 
 
 async def generate_lessons(
