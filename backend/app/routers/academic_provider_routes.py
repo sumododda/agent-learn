@@ -122,23 +122,13 @@ async def save_academic_provider(
     encrypted = encrypt_credentials(key, json.dumps(body.credentials))
     hint = generate_credential_hint(body.provider, body.credentials) if body.credentials else "No key required"
 
-    # Auto-set as default if first academic provider
-    db_keys = [_db_key(p) for p in _VALID_PROVIDERS]
-    existing_count = await session.execute(
-        select(ProviderConfig).where(
-            ProviderConfig.user_id == uid,
-            ProviderConfig.provider.in_(db_keys),
-        )
-    )
-    is_first = len(existing_count.scalars().all()) == 0
-
     config = ProviderConfig(
         user_id=uid,
         provider=db_name,
         encrypted_credentials=encrypted,
         credential_hint=hint,
         extra_fields=body.extra_fields or None,
-        is_default=is_first,
+        is_default=False,
     )
     session.add(config)
     await session.commit()
