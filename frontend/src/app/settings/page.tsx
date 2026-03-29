@@ -475,6 +475,9 @@ function SearchProviderSection({
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {providerKeys.map((key) => {
             const configured = configs.find((c) => c.provider === key);
+            const def = registry[key];
+            const noFieldsRequired = def && def.fields.length === 0;
+            const isActive = !!configured || noFieldsRequired;
             const isSelected = selectedProvider === key;
             return (
               <button
@@ -489,7 +492,7 @@ function SearchProviderSection({
                 } disabled:opacity-50`}
               >
                 <span className="font-medium">{registry[key].name}</span>
-                {configured && (
+                {isActive && (
                   <span className="absolute top-1.5 right-1.5 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
                 )}
               </button>
@@ -498,14 +501,19 @@ function SearchProviderSection({
         </div>
       </div>
 
-      {isConfigured && (
+      {isConfigured ? (
         <div className="flex items-center gap-2">
           <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
           <span className="text-xs text-green-500">
             Active{currentConfig?.credential_hint ? ` \u2014 ${currentConfig.credential_hint}` : ''}
           </span>
         </div>
-      )}
+      ) : currentDef && !hasFields ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+          <span className="text-xs text-green-500">Enabled by default</span>
+        </div>
+      ) : null}
 
       {currentDef && !hasFields && (
         <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
@@ -702,6 +710,9 @@ function AcademicProviderSection({
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {providerKeys.map((key) => {
             const configured = configs.find((c) => c.provider === key);
+            const def = registry[key];
+            const noRequiredFields = def && def.fields.every((f: { required?: boolean }) => !f.required);
+            const isActive = !!configured || noRequiredFields;
             const isSelected = selectedProvider === key;
             return (
               <button
@@ -716,7 +727,7 @@ function AcademicProviderSection({
                 } disabled:opacity-50`}
               >
                 <span className="font-medium">{registry[key].name}</span>
-                {configured && (
+                {isActive && (
                   <span className="absolute top-1.5 right-1.5 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
                 )}
               </button>
@@ -725,14 +736,19 @@ function AcademicProviderSection({
         </div>
       </div>
 
-      {isConfigured && (
+      {isConfigured ? (
         <div className="flex items-center gap-2">
           <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
           <span className="text-xs text-green-500">
             Active{currentConfig?.credential_hint ? ` \u2014 ${currentConfig.credential_hint}` : ''}
           </span>
         </div>
-      )}
+      ) : currentDef && currentDef.fields.every((f: { required?: boolean }) => !f.required) ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+          <span className="text-xs text-green-500">Enabled by default</span>
+        </div>
+      ) : null}
 
       {currentDef && !hasFields && (
         <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
