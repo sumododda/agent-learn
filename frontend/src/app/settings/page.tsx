@@ -21,6 +21,12 @@ import {
   deleteSearchProvider,
   testSearchProvider,
   setDefaultSearchProvider,
+  getAcademicProviderRegistry,
+  getAcademicProviders,
+  saveAcademicProvider,
+  updateAcademicProvider,
+  deleteAcademicProvider,
+  testAcademicProvider,
 } from '@/lib/api';
 import type { ProviderDefinition, ProviderConfig } from '@/lib/types';
 
@@ -567,6 +573,227 @@ function SearchProviderSection({
 }
 
 // ---------------------------------------------------------------------------
+// Academic Search Provider Section
+// ---------------------------------------------------------------------------
+
+function AcademicProviderSection({
+  registry,
+  configs,
+  getToken,
+  onRefresh,
+}: {
+  registry: Record<string, ProviderDefinition>;
+  configs: ProviderConfig[];
+  getToken: () => Promise<string | null>;
+  onRefresh: () => Promise<void>;
+}) {
+  const providerKeys = useMemo(() => Object.keys(registry), [registry]);
+  const [selectedProvider, setSelectedProvider] = useState<string>('');
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (providerKeys.length === 0) return;
+    if (!selectedProvider) {
+      setSelectedProvider(providerKeys[0]);
+    }
+  }, [providerKeys, selectedProvider]);
+
+  useEffect(() => {
+    if (!selectedProvider) return;
+    const def = registry[selectedProvider];
+    if (def) {
+      const vals: Record<string, string> = {};
+      for (const field of def.fields) vals[field.key] = '';
+      setFormValues(vals);
+    }
+    setTestResult(null);
+    setError(null);
+    setSuccessMsg(null);
+  }, [selectedProvider, registry]);
+
+  const currentDef = selectedProvider ? registry[selectedProvider] : null;
+  const currentConfig = configs.find((c) => c.provider === selectedProvider);
+  const isConfigured = !!currentConfig;
+  const hasFields = currentDef ? currentDef.fields.length > 0 : false;
+
+  async function handleTest() {
+    if (!selectedProvider || !currentDef) return;
+    setTesting(true);
+    setTestResult(null);
+    setError(null);
+    try {
+      const token = await getToken();
+      const credentials: Record<string, string> = {};
+      for (const field of currentDef.fields) {
+        if (formValues[field.key]) credentials[field.key] = formValues[field.key];
+      }
+      await testAcademicProvider(selectedProvider, { provider: selectedProvider, credentials }, token);
+      setTestResult({ ok: true, message: 'Connection successful' });
+    } catch (err) {
+      setTestResult({ ok: false, message: err instanceof Error ? err.message : 'Test failed' });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!selectedProvider || !currentDef) return;
+    setSaving(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const token = await getToken();
+      const credentials: Record<string, string> = {};
+      for (const field of currentDef.fields) {
+        if (formValues[field.key]) credentials[field.key] = formValues[field.key];
+      }
+      if (isConfigured) {
+        await updateAcademicProvider(selectedProvider, { provider: selectedProvider, credentials }, token);
+      } else {
+        await saveAcademicProvider({ provider: selectedProvider, credentials }, token);
+      }
+      setSuccessMsg('Saved');
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (!selectedProvider || !isConfigured) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      await deleteAcademicProvider(selectedProvider, token);
+      setSuccessMsg('Removed');
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Remove failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (providerKeys.length === 0) return null;
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Academic Search Providers</h2>
+        <p className="text-xs text-muted-foreground mt-1">
+          Configure providers for research paper search (Semantic Scholar, arXiv, OpenAlex).
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label>Provider</Label>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {providerKeys.map((key) => {
+            const configured = configs.find((c) => c.provider === key);
+            const isSelected = selectedProvider === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSelectedProvider(key)}
+                disabled={saving}
+                className={`relative rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                  isSelected
+                    ? 'border-primary bg-primary/5 text-foreground'
+                    : 'border-border bg-card text-foreground hover:bg-accent'
+                } disabled:opacity-50`}
+              >
+                <span className="font-medium">{registry[key].name}</span>
+                {configured && (
+                  <span className="absolute top-1.5 right-1.5 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {isConfigured && (
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+          <span className="text-xs text-green-500">
+            Active{currentConfig?.credential_hint ? ` \u2014 ${currentConfig.credential_hint}` : ''}
+          </span>
+        </div>
+      )}
+
+      {currentDef && !hasFields && (
+        <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
+          No API key required &mdash; works without authentication.
+        </p>
+      )}
+
+      {currentDef?.fields.map((field) => (
+        <div key={field.key} className="space-y-2">
+          <Label>
+            {field.label}
+            {field.required && <span className="text-destructive ml-1">*</span>}
+          </Label>
+          <Input
+            type={field.secret ? 'password' : 'text'}
+            value={formValues[field.key] || ''}
+            onChange={(e) => setFormValues((p) => ({ ...p, [field.key]: e.target.value }))}
+            placeholder={isConfigured && field.secret ? 'Leave blank to keep existing' : field.placeholder || ''}
+            disabled={saving}
+          />
+        </div>
+      ))}
+
+      <div className="flex flex-wrap gap-3 pt-1">
+        {hasFields && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTest}
+            disabled={testing || saving}
+          >
+            {testing ? 'Testing...' : 'Test'}
+          </Button>
+        )}
+        <Button
+          size="sm"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? 'Saving...' : isConfigured ? 'Update' : 'Save'}
+        </Button>
+        {isConfigured && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleRemove}
+            disabled={saving}
+          >
+            Remove
+          </Button>
+        )}
+      </div>
+
+      {testResult && (
+        <p className={`text-sm ${testResult.ok ? 'text-green-500' : 'text-destructive'}`}>
+          {testResult.message}
+        </p>
+      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {successMsg && <p className="text-sm text-green-500">{successMsg}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Account Section
 // ---------------------------------------------------------------------------
 
@@ -603,19 +830,26 @@ export default function SettingsPage() {
   const [llmConfigs, setLlmConfigs] = useState<ProviderConfig[]>([]);
   const [searchRegistry, setSearchRegistry] = useState<Record<string, ProviderDefinition>>({});
   const [searchConfigs, setSearchConfigs] = useState<ProviderConfig[]>([]);
+  const [academicRegistry, setAcademicRegistry] = useState<Record<string, ProviderDefinition>>({});
+  const [academicConfigs, setAcademicConfigs] = useState<ProviderConfig[]>([]);
   const [loadingData, setLoadingData] = useState(true);
 
   const fetchData = useCallback(async () => {
     const token = await getToken();
-    const [cfgs, sReg, sCfgs] = await Promise.all([
+    const [cfgs, sReg, sCfgs, aReg, aCfgs] = await Promise.all([
       getProviders(token),
       getSearchProviderRegistry(token),
       getSearchProviders(token),
+      getAcademicProviderRegistry(token).catch(() => ({})),
+      getAcademicProviders(token).catch(() => []),
     ]);
     setLlmConfigs(cfgs);
     const searchRegInner = (sReg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
     setSearchRegistry(searchRegInner || sReg);
     setSearchConfigs(sCfgs);
+    const academicRegInner = (aReg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
+    setAcademicRegistry(academicRegInner || aReg);
+    setAcademicConfigs(aCfgs);
     setLoadingData(false);
   }, [getToken]);
 
@@ -647,7 +881,8 @@ export default function SettingsPage() {
           <TabsList>
             <TabsTrigger value={0}>AI Provider</TabsTrigger>
             <TabsTrigger value={1}>Search</TabsTrigger>
-            <TabsTrigger value={2}>Account</TabsTrigger>
+            <TabsTrigger value={2}>Academic</TabsTrigger>
+            <TabsTrigger value={3}>Account</TabsTrigger>
           </TabsList>
           <TabsContent value={0} className="pt-6">
             <OpenRouterSection config={openrouterConfig} getToken={getToken} onRefresh={fetchData} />
@@ -656,6 +891,9 @@ export default function SettingsPage() {
             <SearchProviderSection registry={searchRegistry} configs={searchConfigs} getToken={getToken} onRefresh={fetchData} />
           </TabsContent>
           <TabsContent value={2} className="pt-6">
+            <AcademicProviderSection registry={academicRegistry} configs={academicConfigs} getToken={getToken} onRefresh={fetchData} />
+          </TabsContent>
+          <TabsContent value={3} className="pt-6">
             <AccountSection email={userEmail} />
           </TabsContent>
         </Tabs>
