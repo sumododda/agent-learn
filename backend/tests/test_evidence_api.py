@@ -269,6 +269,54 @@ async def test_get_evidence_card_fields(
     assert tiers == {1, 2, 3}
 
 
+@pytest.mark.anyio
+async def test_get_evidence_includes_academic_metadata(evidence_db, api_client):
+    """Academic evidence card metadata is returned by the API."""
+    async with evidence_db() as session:
+        course = Course(topic="Academic Evidence", status="completed", user_id=TEST_USER_UUID)
+        session.add(course)
+        await session.commit()
+
+        section = Section(
+            course_id=course.id,
+            position=1,
+            title="Research",
+            summary="Research summary",
+        )
+        session.add(section)
+        await session.commit()
+
+        card = EvidenceCard(
+            course_id=course.id,
+            section_position=1,
+            claim="Transformers improved sequence modeling performance",
+            source_url="https://arxiv.org/abs/1706.03762",
+            source_title="Attention Is All You Need",
+            source_tier=1,
+            passage="The Transformer achieves better results than recurrent models.",
+            retrieved_date=date.today(),
+            confidence=0.98,
+            explanation="Foundational paper",
+            is_academic=True,
+            academic_authors="Vaswani, A., et al.",
+            academic_year=2017,
+            academic_venue="NeurIPS",
+            academic_doi="10.48550/arXiv.1706.03762",
+        )
+        session.add(card)
+        await session.commit()
+
+    response = await api_client.get(f"/api/courses/{course.id}/evidence")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["is_academic"] is True
+    assert data[0]["academic_authors"] == "Vaswani, A., et al."
+    assert data[0]["academic_year"] == 2017
+    assert data[0]["academic_venue"] == "NeurIPS"
+    assert data[0]["academic_doi"] == "10.48550/arXiv.1706.03762"
+
+
 # ---------------------------------------------------------------------------
 # Tests: GET /api/courses/{id}/blackboard
 # ---------------------------------------------------------------------------

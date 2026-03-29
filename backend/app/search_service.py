@@ -395,10 +395,10 @@ def _year_range_to_s2_param(year_range: str) -> str | None:
 import asyncio as _asyncio
 import time as _time
 
-# Rate limit locks — serialise concurrent coroutines through a single lock + timestamp
-# Semantic Scholar: 1 req/s (keyed) or 1 req/3s (unkeyed, shared global pool)
-_s2_lock = _asyncio.Lock()
-_s2_last_request: float = 0.0
+# Rate limit state by access bucket so keyed users do not block one another.
+# Semantic Scholar: 1 req/s with a key, 1 req/3s for the shared anonymous pool.
+_s2_locks: dict[str, _asyncio.Lock] = {}
+_s2_last_request: dict[str, float] = {}
 
 
 async def _search_semantic_scholar(
@@ -408,7 +408,6 @@ async def _search_semantic_scholar(
     search_depth: str,
     academic_options: dict | None = None,
 ) -> list[SearchResult]:
-    global _s2_last_request
     opts = academic_options or {}
     params: dict = {
         "query": query,
@@ -427,18 +426,21 @@ async def _search_semantic_scholar(
     if api_key:
         headers["x-api-key"] = api_key
 
-    # Rate limit: 1 req/s with key, 1 req/3s without. Lock serialises concurrent callers.
+    # Rate limit per key, with a shared bucket for anonymous traffic.
     min_interval = 1.0 if api_key else 3.0
+    bucket = api_key or "__anonymous__"
+    lock = _s2_locks.setdefault(bucket, _asyncio.Lock())
     data: dict = {}
-    async with _s2_lock:
+    async with lock:
         now = _time.monotonic()
-        wait = min_interval - (now - _s2_last_request)
+        last_request = _s2_last_request.get(bucket, 0.0)
+        wait = min_interval - (now - last_request)
         if wait > 0:
             await _asyncio.sleep(wait)
 
         async with httpx.AsyncClient() as client:
             for attempt in range(3):
-                _s2_last_request = _time.monotonic()
+                _s2_last_request[bucket] = _time.monotonic()
                 resp = await client.get(
                     "https://api.semanticscholar.org/graph/v1/paper/search",
                     params=params,
