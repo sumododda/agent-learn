@@ -22,7 +22,10 @@ from app.agent import (
     BlackboardUpdates,
     EditorResult,
 )
-from app.models import Base, Blackboard, Course, EvidenceCard, Section
+from app.models import Base, Blackboard, Course, EvidenceCard, Section, User
+
+# Deterministic test user UUID for phase5 tests
+_TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-cccccccccccc")
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +49,12 @@ async def db_session():
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
+    # Create a User row so FK constraints are satisfied
+    async with session_factory() as session:
+        user = User(id=_TEST_USER_UUID, email="phase5@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
     async with session_factory() as session:
         yield session
 
@@ -56,7 +65,7 @@ async def db_session():
 @pytest.fixture
 async def course_with_cards(db_session):
     """Create a course with verified and unverified evidence cards."""
-    course = Course(topic="Python Basics", status="writing")
+    course = Course(topic="Python Basics", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -198,7 +207,7 @@ def test_editor_result_schema():
 @pytest.mark.anyio
 async def test_create_blackboard(setup_db, db_session):
     """create_blackboard creates an empty row and returns it."""
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -215,7 +224,7 @@ async def test_create_blackboard(setup_db, db_session):
 @pytest.mark.anyio
 async def test_get_blackboard(setup_db, db_session):
     """get_blackboard retrieves by course_id."""
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -240,7 +249,7 @@ async def test_get_blackboard_returns_none(setup_db, db_session):
 @pytest.mark.anyio
 async def test_update_blackboard_merges(setup_db, db_session, sample_blackboard_updates):
     """update_blackboard merges new data into existing fields."""
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -262,7 +271,7 @@ async def test_update_blackboard_merges(setup_db, db_session, sample_blackboard_
 @pytest.mark.anyio
 async def test_update_blackboard_merges_multiple_times(setup_db, db_session):
     """update_blackboard merges across multiple calls without overwriting."""
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -315,7 +324,7 @@ async def test_update_blackboard_merges_multiple_times(setup_db, db_session):
 @pytest.mark.anyio
 async def test_update_blackboard_invalid_data_doesnt_crash(setup_db, db_session):
     """update_blackboard logs warning and skips on invalid data."""
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -389,7 +398,7 @@ async def test_format_blackboard_for_agent_populated(setup_db, db_session):
     """_format_blackboard_for_agent formats populated blackboard."""
     from app.agent_service import _format_blackboard_for_agent, create_blackboard, update_blackboard
 
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 
@@ -418,7 +427,7 @@ async def test_format_blackboard_for_agent_empty_fields(setup_db, db_session):
     """_format_blackboard_for_agent handles blackboard with empty fields."""
     from app.agent_service import _format_blackboard_for_agent, create_blackboard
 
-    course = Course(topic="Test", status="writing")
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
     db_session.add(course)
     await db_session.commit()
 

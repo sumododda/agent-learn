@@ -21,9 +21,13 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import event as sa_event
 
 from app.main import app
-from app.models import Base, Blackboard, Course, EvidenceCard, Section
+from app.models import Base, Blackboard, Course, EvidenceCard, Section, User
 from app.database import get_session
 from app.auth import get_current_user
+
+# Deterministic test user UUID
+TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-bbbbbbbbbbbb")
+TEST_USER_ID = str(TEST_USER_UUID)
 
 
 # ---------------------------------------------------------------------------
@@ -47,12 +51,18 @@ async def evidence_db():
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
+    # Create a User row so FK constraints are satisfied
+    async with session_factory() as session:
+        user = User(id=TEST_USER_UUID, email="evidence@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
     async def override_session():
         async with session_factory() as session:
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
     yield session_factory
 
     async with engine.begin() as conn:
@@ -73,7 +83,7 @@ async def course_with_evidence(evidence_db):
     """Create a course with sections and evidence cards in the DB."""
     async with evidence_db() as session:
         # Create course
-        course = Course(topic="Python Testing", status="completed", user_id="test-user-id")
+        course = Course(topic="Python Testing", status="completed", user_id=TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -117,7 +127,7 @@ async def course_with_evidence(evidence_db):
 async def course_with_blackboard(evidence_db):
     """Create a course with a populated blackboard."""
     async with evidence_db() as session:
-        course = Course(topic="Python Blackboard", status="completed", user_id="test-user-id")
+        course = Course(topic="Python Blackboard", status="completed", user_id=TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -339,7 +349,7 @@ async def test_evidence_round_trip_via_service(evidence_db):
     from app.agent_service import save_evidence_cards, get_evidence_cards
 
     async with evidence_db() as session:
-        course = Course(topic="Round Trip", status="researching")
+        course = Course(topic="Round Trip", status="researching", user_id=TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -388,7 +398,7 @@ async def test_blackboard_round_trip_via_service(evidence_db):
     from app.agent_service import create_blackboard, get_blackboard, update_blackboard
 
     async with evidence_db() as session:
-        course = Course(topic="BB Round Trip", status="writing")
+        course = Course(topic="BB Round Trip", status="writing", user_id=TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
