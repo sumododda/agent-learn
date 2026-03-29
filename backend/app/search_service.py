@@ -44,6 +44,30 @@ SEARCH_PROVIDERS = {
     },
 }
 
+ACADEMIC_SEARCH_PROVIDERS = {
+    "semantic_scholar": {
+        "name": "Semantic Scholar",
+        "fields": [
+            {"key": "api_key", "label": "API Key (optional)", "type": "password", "required": False, "secret": True},
+        ],
+    },
+    "arxiv": {
+        "name": "arXiv",
+        "fields": [],
+    },
+    "openalex": {
+        "name": "OpenAlex",
+        "fields": [
+            {"key": "api_key", "label": "API Key", "type": "password", "required": True, "secret": True},
+        ],
+    },
+}
+
+
+def get_academic_search_provider_registry() -> dict:
+    """Return academic search provider definitions for frontend form rendering."""
+    return ACADEMIC_SEARCH_PROVIDERS
+
 
 @dataclass
 class SearchResult:
@@ -606,6 +630,65 @@ async def _search_openalex(
         ))
 
     return results
+
+
+_ACADEMIC_ADAPTERS: dict[str, str] = {
+    "semantic_scholar": "_search_semantic_scholar",
+    "arxiv": "_search_arxiv",
+    "openalex": "_search_openalex",
+}
+
+
+def _get_academic_adapter(name: str):
+    """Resolve an academic adapter function by provider name.
+
+    Uses string-based lookup so that unittest.mock.patch on the module-level
+    function names is respected at call time.
+    """
+    func_name = _ACADEMIC_ADAPTERS.get(name)
+    if not func_name:
+        return None
+    import sys
+    return getattr(sys.modules[__name__], func_name, None)
+
+
+async def academic_search(
+    query: str,
+    academic_credentials: dict[str, dict],
+    academic_options: dict,
+    max_results: int = 5,
+) -> list[SearchResult]:
+    """Search all configured academic providers, deduplicate, return merged results."""
+    import asyncio
+
+    async def _run_provider(name: str, creds: dict) -> list[SearchResult]:
+        adapter = _get_academic_adapter(name)
+        if not adapter:
+            return []
+        try:
+            return await adapter(query, creds, max_results, "basic", academic_options)
+        except Exception as e:
+            logger.warning("[academic_search] %s failed for '%s': %s", name, query[:60], e)
+            return []
+
+    # S2 + OpenAlex in parallel, arXiv sequential (rate limit)
+    parallel_providers = {}
+    arxiv_creds = None
+    for name, creds in academic_credentials.items():
+        if name == "arxiv":
+            arxiv_creds = creds
+        elif name in _ACADEMIC_ADAPTERS:
+            parallel_providers[name] = creds
+
+    tasks = [_run_provider(name, creds) for name, creds in parallel_providers.items()]
+    parallel_results = await asyncio.gather(*tasks)
+    all_results = [r for batch in parallel_results for r in batch]
+
+    if arxiv_creds is not None:
+        arxiv_results = await _run_provider("arxiv", arxiv_creds)
+        all_results.extend(arxiv_results)
+
+    return deduplicate_academic_results(all_results)
 
 
 _ADAPTERS = {
