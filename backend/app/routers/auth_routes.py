@@ -71,7 +71,7 @@ async def _load_provider_keys(user_id_str: str, user_id_uuid, session) -> bool:
         try:
             decrypted = decrypt_credentials(key, config.encrypted_credentials)
             credentials[config.provider] = json.loads(decrypted)
-            if config.is_default:
+            if config.is_default and not config.provider.startswith("academic:"):
                 if config.provider in SEARCH_PROVIDERS:
                     default_search_provider = config.provider
                 else:
