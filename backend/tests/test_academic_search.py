@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results
+from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results, rank_for_deep_reading
 
 
 def test_search_result_academic_fields_default():
@@ -396,3 +396,39 @@ def test_search_result_pdf_url_default():
 def test_search_result_pdf_url_populated():
     r = SearchResult(title="T", url="u", content="c", pdf_url="https://arxiv.org/pdf/1234.pdf")
     assert r.pdf_url == "https://arxiv.org/pdf/1234.pdf"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: rank_for_deep_reading tests
+# ---------------------------------------------------------------------------
+
+
+def test_rank_excludes_no_pdf():
+    r = SearchResult(title="T", url="u", content="c", is_academic=True,
+                     citation_count=1000, year=2023, pdf_url=None)
+    assert rank_for_deep_reading(r) == -1
+
+
+def test_rank_higher_for_more_citations():
+    r1 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=100, year=2023, pdf_url="https://pdf.com/1")
+    r2 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=1000, year=2023, pdf_url="https://pdf.com/2")
+    assert rank_for_deep_reading(r2) > rank_for_deep_reading(r1)
+
+
+def test_rank_recency_boost():
+    old = SearchResult(title="T", url="u", content="c", is_academic=True,
+                       citation_count=200, year=2018, pdf_url="https://pdf.com/1")
+    new = SearchResult(title="T", url="u", content="c", is_academic=True,
+                       citation_count=80, year=2025, pdf_url="https://pdf.com/2")
+    assert rank_for_deep_reading(new) > rank_for_deep_reading(old)
+
+
+def test_rank_log_scale_diminishing_returns():
+    r1 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=1000, year=2023, pdf_url="https://pdf.com/1")
+    r2 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=10000, year=2023, pdf_url="https://pdf.com/2")
+    ratio = rank_for_deep_reading(r2) / rank_for_deep_reading(r1)
+    assert ratio < 2.0

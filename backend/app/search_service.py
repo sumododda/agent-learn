@@ -4,6 +4,7 @@ Mirrors provider_service.py pattern but for web search providers.
 Each adapter normalizes results into SearchResult dataclass.
 """
 import logging
+import math
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -147,6 +148,23 @@ def deduplicate_academic_results(results: list[SearchResult]) -> list[SearchResu
         output.append(r)
 
     return output
+
+
+def rank_for_deep_reading(result: SearchResult) -> float:
+    """Rank an academic paper for deep reading. Returns -1 if no PDF available."""
+    if not result.pdf_url:
+        return -1
+    citations = result.citation_count or 0
+    year = result.year or 2020
+    from datetime import date
+    age = date.today().year - year
+    if age <= 2:
+        recency = 3.0
+    elif age <= 5:
+        recency = 2.0
+    else:
+        recency = 1.0
+    return math.log1p(citations) * recency
 
 
 def get_search_provider_registry() -> dict:
