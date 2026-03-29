@@ -294,3 +294,86 @@ async def test_search_openalex_parses_response():
     assert r.citation_count == 150
     assert r.doi == "10.1234/test"
     assert r.content == "Deep learning has transformed AI research"
+
+
+@pytest.mark.asyncio
+async def test_academic_search_all_providers():
+    from app.search_service import academic_search
+
+    s2_result = SearchResult(
+        title="S2 Paper", url="s2.com", content="S2 abstract",
+        doi="10.1/s2", is_academic=True, authors=["A"], year=2023,
+        venue="NeurIPS", citation_count=50,
+    )
+    arxiv_result = SearchResult(
+        title="arXiv Paper", url="arxiv.org", content="arXiv abstract",
+        doi=None, is_academic=True, authors=["B"], year=2023,
+    )
+    openalex_result = SearchResult(
+        title="OA Paper", url="openalex.org", content="OA abstract",
+        doi="10.1/oa", is_academic=True, authors=["C"], year=2023,
+        citation_count=30,
+    )
+
+    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[s2_result]) as mock_s2, \
+         patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[arxiv_result]) as mock_arxiv, \
+         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[openalex_result]) as mock_oa:
+
+        results = await academic_search(
+            query="test",
+            academic_credentials={"semantic_scholar": {}, "arxiv": {}, "openalex": {"api_key": "k"}},
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+            max_results=5,
+        )
+
+    assert len(results) == 3
+    assert all(r.is_academic for r in results)
+
+
+@pytest.mark.asyncio
+async def test_academic_search_deduplicates():
+    from app.search_service import academic_search
+
+    paper = SearchResult(
+        title="Same Paper", url="s2.com", content="Abstract",
+        doi="10.1/same", is_academic=True, authors=["A"], year=2023,
+        citation_count=50,
+    )
+    paper_dup = SearchResult(
+        title="Same Paper", url="oa.org", content="Abstract",
+        doi="10.1/same", is_academic=True, authors=["A"], year=2023,
+    )
+
+    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[paper]), \
+         patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[]), \
+         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[paper_dup]):
+
+        results = await academic_search(
+            query="test",
+            academic_credentials={"semantic_scholar": {}, "openalex": {"api_key": "k"}},
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    assert results[0].citation_count == 50
+
+
+@pytest.mark.asyncio
+async def test_academic_search_skips_missing_providers():
+    from app.search_service import academic_search
+
+    paper = SearchResult(title="P", url="u", content="c", is_academic=True)
+
+    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[paper]), \
+         patch("app.search_service._search_arxiv", new_callable=AsyncMock) as mock_arxiv, \
+         patch("app.search_service._search_openalex", new_callable=AsyncMock) as mock_oa:
+
+        results = await academic_search(
+            query="test",
+            academic_credentials={"semantic_scholar": {}},
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    mock_arxiv.assert_not_called()
+    mock_oa.assert_not_called()
