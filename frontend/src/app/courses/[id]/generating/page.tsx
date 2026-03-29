@@ -90,6 +90,7 @@ export default function GeneratingPage() {
   const [overallStage, setOverallStage] = useState<OverallStage>('starting');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false);
+  const [hasAcademicSearch, setHasAcademicSearch] = useState(false);
 
   const feedRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -108,6 +109,7 @@ export default function GeneratingPage() {
       const token = await getToken();
       const course = await getCourse(courseId, token);
       setTopic(course.topic);
+      setHasAcademicSearch(!!course.academic_search?.enabled);
       if (course.sections && course.sections.length > 0) {
         setSectionStates((prev) => {
           if (prev.length > 0) return prev; // Already initialized
@@ -393,6 +395,11 @@ export default function GeneratingPage() {
       {overallStage !== 'complete' && overallStage !== 'error' && overallStage !== 'stale' && (
         <div className="w-full bg-primary/10 border-b border-primary/20 px-4 py-2 text-center text-sm text-primary">
           Our workers are busy crafting your course behind the scenes. Feel free to close this tab and grab a coffee — your course will be waiting for you in your library when it&apos;s ready.
+          {hasAcademicSearch && (
+            <span className="block mt-1 text-xs opacity-75">
+              Scouring research papers from Semantic Scholar, arXiv & OpenAlex — good science takes a minute, but your course will be worth the wait.
+            </span>
+          )}
         </div>
       )}
       <div className="max-w-[720px] mx-auto px-4 py-8">

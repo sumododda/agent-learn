@@ -84,6 +84,7 @@ class CourseResponse(BaseModel):
     instructions: str | None
     status: str
     ungrounded: bool = False
+    academic_search: dict | None = None
     sections: list[SectionFull]
     pipeline_status: PipelineStatusResponse | None = None
 
