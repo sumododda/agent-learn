@@ -246,7 +246,7 @@ async def test_academic_provider(
                 creds = json.loads(_decrypt(key, config.encrypted_credentials))
 
     try:
-        results = await adapter("test query", creds, 1, "basic", None)
+        results = await adapter("machine learning", creds, 5, "basic", None)
         if len(results) > 0:
             return {"status": "ok", "message": "Academic credentials validated successfully"}
         raise HTTPException(400, "Academic credential validation failed — no results returned")
