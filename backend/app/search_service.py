@@ -48,6 +48,13 @@ class SearchResult:
     url: str
     content: str
     score: float = 0.0
+    # Academic metadata (populated by academic search adapters)
+    authors: list[str] | None = None
+    year: int | None = None
+    venue: str | None = None
+    citation_count: int | None = None
+    doi: str | None = None
+    is_academic: bool = False
 
 
 def get_search_provider_registry() -> dict:
