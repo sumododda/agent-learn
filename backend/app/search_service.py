@@ -417,15 +417,25 @@ async def _search_semantic_scholar(
     if api_key:
         headers["x-api-key"] = api_key
 
+    import asyncio as _asyncio
+
+    data: dict = {}
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
-            params=params,
-            headers=headers,
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        for attempt in range(3):
+            resp = await client.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params=params,
+                headers=headers,
+                timeout=30.0,
+            )
+            if resp.status_code == 429:
+                delay = (attempt + 1) * 2
+                logger.info("[semantic_scholar] Rate limited, retrying in %ds...", delay)
+                await _asyncio.sleep(delay)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            break
 
     open_access_only = opts.get("open_access_only", False)
     results = []
@@ -476,9 +486,9 @@ async def _search_arxiv(
     if date_filter:
         search_query += date_filter
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
-            "http://export.arxiv.org/api/query",
+            "https://export.arxiv.org/api/query",
             params={
                 "search_query": search_query,
                 "start": 0,
