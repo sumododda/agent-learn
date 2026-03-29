@@ -16,7 +16,6 @@ Add dedicated academic search (Semantic Scholar, arXiv, OpenAlex) to the course 
 - **URL construction:** API returns `url` field when requested. Fallback: `https://www.semanticscholar.org/paper/{paperId}`
 - **Open access filter:** No server-side param. Request `openAccessPdf` field, filter client-side: keep results where `openAccessPdf` is not null.
 - **Null abstracts:** Some papers have abstracts elided by publishers. Skip these results (no content to ground on).
-- **Env var:** `SEMANTIC_SCHOLAR_API_KEY` (optional, improves reliability)
 
 ### arXiv
 
@@ -39,7 +38,7 @@ Add dedicated academic search (Semantic Scholar, arXiv, OpenAlex) to the course 
 - **Limits:** 100 per page. Credit-based rate limiting (not request-based).
 - **Response:** JSON `{ meta: { count, page, per_page }, results[] }`. Each work: `{ id, doi, title, display_name, relevance_score, publication_year, publication_date, type, authorships: [{ author: { display_name, orcid }, author_position }], abstract_inverted_index, primary_location: { source: { display_name }, landing_page_url, pdf_url }, open_access: { is_oa, oa_status, oa_url }, cited_by_count }`
 - **Abstract reconstruction:** `abstract_inverted_index` is a dict mapping words to position arrays (e.g. `{"machine": [0, 5], "learning": [1]}`). Adapter must reconstruct plain text by inverting: sort all (word, position) pairs by position, join with spaces.
-- **Env var:** `OPENALEX_API_KEY` (required)
+- **Credentials:** Per-user API key stored encrypted in settings (same as other providers).
 
 ### Filter Application Per API
 
@@ -122,14 +121,72 @@ Options stored in `PipelineJob.config["academic_search"]` so the worker has acce
 
 `createCourse` and `createCourseStream` pass `academic_search` object in the request body. The `Course` type does not need changes — academic search is a pipeline concern, not a course property.
 
-## Configuration
+## Configuration — Per-User Provider Settings
 
-Two new optional environment variables:
+Academic search providers follow the same pattern as existing search/LLM providers: per-user encrypted credentials stored via the settings page.
 
-- `SEMANTIC_SCHOLAR_API_KEY` — Optional. Improves rate limit reliability (guaranteed 1 RPS vs shared unauthenticated pool). Passed as `x-api-key` header.
-- `OPENALEX_API_KEY` — **Required** for academic search to work. Free tier (100k credits/day) is sufficient. Without this key, the OpenAlex adapter is disabled and logged as warning.
+### New Provider Registry: `ACADEMIC_SEARCH_PROVIDERS`
 
-These are app-level env vars (not per-user) since the keys are free/shared infrastructure.
+Added to `search_service.py` alongside `SEARCH_PROVIDERS`:
+
+```python
+ACADEMIC_SEARCH_PROVIDERS = {
+    "semantic_scholar": {
+        "name": "Semantic Scholar",
+        "fields": [
+            {"key": "api_key", "label": "API Key (optional)", "type": "password", "required": False, "secret": True},
+        ],
+    },
+    "arxiv": {
+        "name": "arXiv",
+        "fields": [],  # No API key required
+    },
+    "openalex": {
+        "name": "OpenAlex",
+        "fields": [
+            {"key": "api_key", "label": "API Key", "type": "password", "required": True, "secret": True},
+        ],
+    },
+}
+```
+
+### Settings UI — New "Academic Search" Section
+
+The settings page (`frontend/src/app/settings/page.tsx`) gains a third section below the existing "Search Provider" section:
+
+- **"Academic Search Providers"** — shows all 3 providers as buttons (same pattern as search providers)
+- Each button shows a green dot when configured
+- Clicking a provider shows its form fields (driven by `ACADEMIC_SEARCH_PROVIDERS` registry)
+- arXiv shows as pre-configured (no credentials needed, always green)
+- Semantic Scholar shows API key as optional (works without it, green when saved even without key)
+- OpenAlex requires an API key (free at openalex.org/settings/api)
+- Save/Update/Delete/Test buttons, same as existing providers
+
+### Backend Routes
+
+New router: `academic_provider_routes.py` (follows `search_provider_routes.py` pattern):
+
+- `GET /api/academic-providers/registry` — returns `ACADEMIC_SEARCH_PROVIDERS` dict
+- `GET /api/academic-providers` — list user's configured academic providers
+- `POST /api/academic-providers` — save credentials (encrypted per-user, same crypto)
+- `PUT /api/academic-providers/{provider}` — update credentials
+- `DELETE /api/academic-providers/{provider}` — delete credentials
+- `POST /api/academic-providers/{provider}/test` — validate credentials with a test query
+
+Credentials stored in the existing `ProviderConfig` table (same encryption, same `key_cache` integration). Provider names are prefixed to avoid collisions: stored as `academic:semantic_scholar`, `academic:arxiv`, `academic:openalex`.
+
+### Credential Flow at Pipeline Time
+
+The worker's `_resolve_credentials()` is extended to also resolve academic provider credentials:
+
+1. Read `PipelineJob.config["academic_search"]` — if `enabled` is `True`, look up academic provider configs for the user.
+2. Decrypt credentials for each configured academic provider (same `UserKeySalt` + `derive_key` pattern).
+3. Pass as `academic_credentials: dict[str, dict]` to `run_pipeline()`.
+4. If OpenAlex has no credentials and academic search is enabled, log warning and skip OpenAlex (Semantic Scholar + arXiv still run).
+
+### Toggle Availability
+
+The "Use Research Papers" toggle on the course creation form is only enabled when at least one academic provider is configured in settings (checked via `/api/academic-providers` on page load). If none configured, the toggle is disabled with a tooltip: "Configure academic search providers in Settings first."
 
 ## Pipeline Integration
 
@@ -212,14 +269,18 @@ The editor appends a References block at the end of each section, after Key Take
 
 | File | Change |
 |------|--------|
-| `backend/app/search_service.py` | 3 new adapters (Semantic Scholar, arXiv, OpenAlex), `SearchResult` fields, `SEARCH_PROVIDERS` entries, deduplication helper, abstract reconstruction for OpenAlex |
+| `backend/app/search_service.py` | 3 new adapters (Semantic Scholar, arXiv, OpenAlex), `ACADEMIC_SEARCH_PROVIDERS` registry, `SearchResult` fields, deduplication helper, abstract reconstruction for OpenAlex |
+| `backend/app/routers/academic_provider_routes.py` | New router: CRUD for academic provider credentials (follows `search_provider_routes.py` pattern) |
 | `backend/app/schemas.py` | `AcademicSearchOptions` model, `CourseCreate` gains `academic_search` field |
 | `backend/app/models.py` | 5 new columns on `EvidenceCard` |
 | `backend/app/agent_service.py` | Parallel academic search calls in discovery + section research, dedup before merge |
 | `backend/app/agent.py` | Updated prompts for discovery researcher, writer, editor |
-| `backend/app/pipeline.py` | Pass academic config through to agent_service calls |
-| `frontend/src/app/page.tsx` | Toggle + sub-options UI on Step 2 |
-| `frontend/src/lib/api.ts` | Pass `academic_search` in course creation payload |
+| `backend/app/pipeline.py` | Pass academic config + credentials through to agent_service calls |
+| `backend/app/worker.py` | Extend `_resolve_credentials()` to decrypt academic provider keys |
+| `backend/app/key_cache.py` | Support academic provider credential caching |
+| `frontend/src/app/settings/page.tsx` | New "Academic Search Providers" section with provider buttons + forms |
+| `frontend/src/app/page.tsx` | Toggle + sub-options UI on Step 2, disabled if no academic providers configured |
+| `frontend/src/lib/api.ts` | Academic provider CRUD functions + pass `academic_search` in course creation payload |
 | DB migration | Add 5 columns to `evidence_cards` |
 
 ## What Stays the Same
