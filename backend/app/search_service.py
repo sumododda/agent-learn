@@ -351,6 +351,81 @@ async def _search_duckduckgo(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Academic search adapters
+# ---------------------------------------------------------------------------
+
+
+def _year_range_to_s2_param(year_range: str) -> str | None:
+    """Convert year_range option to Semantic Scholar year param."""
+    if year_range == "all":
+        return None
+    from datetime import date
+    current_year = date.today().year
+    years_back = {"5y": 5, "10y": 10, "20y": 20}
+    n = years_back.get(year_range, 5)
+    return f"{current_year - n}-"
+
+
+async def _search_semantic_scholar(
+    query: str,
+    credentials: dict,
+    max_results: int,
+    search_depth: str,
+    academic_options: dict | None = None,
+) -> list[SearchResult]:
+    opts = academic_options or {}
+    params: dict = {
+        "query": query,
+        "fields": "title,url,abstract,year,authors,venue,citationCount,externalIds,openAccessPdf,publicationTypes",
+        "limit": min(max_results, 100),
+    }
+    year_param = _year_range_to_s2_param(opts.get("year_range", "all"))
+    if year_param:
+        params["year"] = year_param
+    min_cit = opts.get("min_citations", 0)
+    if min_cit and min_cit > 0:
+        params["minCitationCount"] = str(min_cit)
+
+    headers: dict[str, str] = {}
+    api_key = credentials.get("api_key")
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params=params,
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    open_access_only = opts.get("open_access_only", False)
+    results = []
+    for paper in data.get("data", []):
+        abstract = paper.get("abstract")
+        if not abstract:
+            continue
+        if open_access_only and not paper.get("openAccessPdf"):
+            continue
+        ext_ids = paper.get("externalIds") or {}
+        results.append(SearchResult(
+            title=paper.get("title", ""),
+            url=paper.get("url") or f"https://www.semanticscholar.org/paper/{paper.get('paperId', '')}",
+            content=abstract,
+            score=0.0,
+            authors=[a["name"] for a in paper.get("authors", [])],
+            year=paper.get("year"),
+            venue=paper.get("venue") or None,
+            citation_count=paper.get("citationCount"),
+            doi=ext_ids.get("DOI"),
+            is_academic=True,
+        ))
+    return results
+
+
 _ADAPTERS = {
     "tavily": _search_tavily,
     "exa": _search_exa,

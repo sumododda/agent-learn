@@ -1,3 +1,6 @@
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results
 
 
@@ -78,3 +81,116 @@ def test_dedup_different_papers():
     ]
     deduped = deduplicate_academic_results(results)
     assert len(deduped) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_semantic_scholar_parses_response():
+    from app.search_service import _search_semantic_scholar
+
+    mock_response = {
+        "total": 1,
+        "offset": 0,
+        "data": [
+            {
+                "paperId": "abc123",
+                "title": "Test Paper",
+                "url": "https://www.semanticscholar.org/paper/abc123",
+                "abstract": "This is a test abstract about machine learning.",
+                "year": 2023,
+                "authors": [{"authorId": "1", "name": "Smith, J."}, {"authorId": "2", "name": "Lee, K."}],
+                "venue": "NeurIPS",
+                "citationCount": 42,
+                "externalIds": {"DOI": "10.1234/test"},
+                "openAccessPdf": {"url": "https://example.com/paper.pdf", "status": "GREEN"},
+                "publicationTypes": ["JournalArticle"],
+            }
+        ],
+    }
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = mock_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = await _search_semantic_scholar(
+            query="machine learning",
+            credentials={},
+            max_results=5,
+            search_depth="basic",
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.title == "Test Paper"
+    assert r.is_academic is True
+    assert r.authors == ["Smith, J.", "Lee, K."]
+    assert r.year == 2023
+    assert r.venue == "NeurIPS"
+    assert r.citation_count == 42
+    assert r.doi == "10.1234/test"
+    assert "test abstract" in r.content
+
+
+@pytest.mark.asyncio
+async def test_search_semantic_scholar_skips_null_abstract():
+    from app.search_service import _search_semantic_scholar
+
+    mock_response = {
+        "total": 2, "offset": 0,
+        "data": [
+            {"paperId": "1", "title": "No Abstract", "url": "u1", "abstract": None,
+             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
+             "externalIds": {}, "openAccessPdf": None, "publicationTypes": []},
+            {"paperId": "2", "title": "Has Abstract", "url": "u2", "abstract": "Real content",
+             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
+             "externalIds": {}, "openAccessPdf": None, "publicationTypes": []},
+        ],
+    }
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = mock_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = await _search_semantic_scholar(
+            "test", {}, 5, "basic",
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    assert results[0].title == "Has Abstract"
+
+
+@pytest.mark.asyncio
+async def test_search_semantic_scholar_open_access_filter():
+    from app.search_service import _search_semantic_scholar
+
+    mock_response = {
+        "total": 2, "offset": 0,
+        "data": [
+            {"paperId": "1", "title": "OA Paper", "url": "u1", "abstract": "Abstract 1",
+             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
+             "externalIds": {}, "openAccessPdf": {"url": "https://pdf.com", "status": "GREEN"},
+             "publicationTypes": []},
+            {"paperId": "2", "title": "Closed Paper", "url": "u2", "abstract": "Abstract 2",
+             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
+             "externalIds": {}, "openAccessPdf": None, "publicationTypes": []},
+        ],
+    }
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = mock_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = await _search_semantic_scholar(
+            "test", {}, 5, "basic",
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": True},
+        )
+
+    assert len(results) == 1
+    assert results[0].title == "OA Paper"
