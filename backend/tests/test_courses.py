@@ -1,7 +1,9 @@
+import uuid
+
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from tests.conftest import TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS
+from tests.conftest import TEST_PROVIDER, TEST_MODEL, TEST_CREDENTIALS, TEST_EXTRA_FIELDS, TEST_USER_UUID
 
 
 def _mock_get_user_provider():
@@ -14,9 +16,58 @@ def _mock_get_user_search_provider():
     return AsyncMock(return_value=("", {}))
 
 
+# ---------------------------------------------------------------------------
+# Helper: create a course with sections directly in the DB
+# ---------------------------------------------------------------------------
+
+
+async def _create_course_with_sections(client, setup_db):
+    """Insert a course + 3 sections directly into the test DB and return the course id."""
+    from app.database import get_session
+    from app.main import app
+    from app.models import Course, Section
+
+    # We need to get a session via the override
+    session_gen = app.dependency_overrides[get_session]()
+    session = await session_gen.__anext__()
+
+    course = Course(
+        topic="Testing",
+        status="outline_ready",
+        user_id=TEST_USER_UUID,
+    )
+    session.add(course)
+    await session.flush()
+
+    for i, (title, summary) in enumerate(
+        [("Introduction", "Getting started"), ("Core Concepts", "Key ideas"), ("Practice", "Hands-on exercises")],
+        start=1,
+    ):
+        section = Section(
+            course_id=course.id,
+            position=i,
+            title=title,
+            summary=summary,
+        )
+        session.add(section)
+    await session.commit()
+
+    try:
+        await session_gen.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    return str(course.id)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Course creation (now returns "researching" immediately)
+# ---------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_create_course(client, mock_outline_with_briefs):
+    """POST /api/courses now returns status='researching' immediately."""
     mock_return = (mock_outline_with_briefs, False)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
@@ -28,14 +79,15 @@ async def test_create_course(client, mock_outline_with_briefs):
     assert response.status_code == 200
     data = response.json()
     assert data["topic"] == "Python basics"
-    assert data["status"] == "outline_ready"
+    # Course creation now kicks off a background discovery task and returns immediately
+    assert data["status"] == "researching"
     assert data["ungrounded"] is False
-    assert len(data["sections"]) == 3
-    assert data["sections"][0]["title"] == "Introduction"
+    assert data["sections"] == []
 
 
 @pytest.mark.anyio
 async def test_create_course_ungrounded(client, mock_outline_with_briefs):
+    """POST /api/courses always returns ungrounded=False in the immediate response."""
     mock_return = (mock_outline_with_briefs, True)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
@@ -46,8 +98,10 @@ async def test_create_course_ungrounded(client, mock_outline_with_briefs):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "outline_ready"
-    assert data["ungrounded"] is True
+    # The immediate response always says researching/ungrounded=False;
+    # the background task updates these later.
+    assert data["status"] == "researching"
+    assert data["ungrounded"] is False
 
 
 @pytest.mark.anyio
@@ -73,17 +127,10 @@ async def test_create_and_get_course(client, mock_outline_with_briefs):
 
 
 @pytest.mark.anyio
-async def test_generate_course_creates_pipeline_job(client, mock_outline_with_briefs):
+async def test_generate_course_creates_pipeline_job(setup_db, client, mock_outline_with_briefs):
     """POST /generate creates a PipelineJob row and returns its job_id."""
-    mock_return = (mock_outline_with_briefs, False)
-    with (
-        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
-        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
-        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
-    ):
-        create_response = await client.post("/api/courses", json={"topic": "Testing"})
-
-    course_id = create_response.json()["id"]
+    # Create a course with outline_ready status directly in the DB
+    course_id = await _create_course_with_sections(client, setup_db)
 
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
@@ -100,17 +147,9 @@ async def test_generate_course_creates_pipeline_job(client, mock_outline_with_br
 
 
 @pytest.mark.anyio
-async def test_generate_course_requires_outline_ready(client, mock_outline_with_briefs):
+async def test_generate_course_requires_outline_ready(setup_db, client, mock_outline_with_briefs):
     """POST /generate rejects courses not in 'outline_ready' status."""
-    mock_return = (mock_outline_with_briefs, False)
-    with (
-        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
-        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
-        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
-    ):
-        create_response = await client.post("/api/courses", json={"topic": "Testing"})
-
-    course_id = create_response.json()["id"]
+    course_id = await _create_course_with_sections(client, setup_db)
 
     # First generate call transitions to "generating"
     with (
@@ -125,16 +164,8 @@ async def test_generate_course_requires_outline_ready(client, mock_outline_with_
 
 
 @pytest.mark.anyio
-async def test_regenerate_course(client, mock_outline_with_briefs):
-    mock_return = (mock_outline_with_briefs, False)
-    with (
-        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
-        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
-        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
-    ):
-        create_response = await client.post("/api/courses", json={"topic": "Testing"})
-
-    course_id = create_response.json()["id"]
+async def test_regenerate_course(setup_db, client, mock_outline_with_briefs):
+    course_id = await _create_course_with_sections(client, setup_db)
 
     mock_return_2 = (mock_outline_with_briefs, False)
     with (
@@ -154,20 +185,27 @@ async def test_regenerate_course(client, mock_outline_with_briefs):
 
 
 @pytest.mark.anyio
-async def test_regenerate_course_passes_current_outline_and_targeted_feedback(client, mock_outline_with_briefs):
+async def test_regenerate_course_passes_current_outline_and_targeted_feedback(setup_db, client, mock_outline_with_briefs):
+    course_id = await _create_course_with_sections(client, setup_db)
+
+    # Add instructions to the course
+    from app.database import get_session
+    from app.main import app
+    from app.models import Course
+
+    session_gen = app.dependency_overrides[get_session]()
+    session = await session_gen.__anext__()
+    from sqlalchemy import select
+    result = await session.execute(select(Course).where(Course.id == uuid.UUID(course_id)))
+    course = result.scalar_one()
+    course.instructions = "Beginner-friendly."
+    await session.commit()
+    try:
+        await session_gen.__anext__()
+    except StopAsyncIteration:
+        pass
+
     mock_return = (mock_outline_with_briefs, False)
-    with (
-        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
-        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
-        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return),
-    ):
-        create_response = await client.post(
-            "/api/courses",
-            json={"topic": "Machine Learning", "instructions": "Beginner-friendly."},
-        )
-
-    course_id = create_response.json()["id"]
-
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),

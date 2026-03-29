@@ -4,12 +4,13 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { createCourse, getProviders } from '@/lib/api';
+import { createCourse, getProviders, getAcademicProviders } from '@/lib/api';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 
 const STYLE_OPTIONS = [
   { id: 'practical', label: 'Hands-on & Practical', instruction: 'Focus on practical examples and real-world applications.' },
@@ -58,6 +59,11 @@ function HomePageInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasProvider, setHasProvider] = useState<boolean | null>(null);
+  const [useResearchPapers, setUseResearchPapers] = useState(false);
+  const [yearRange, setYearRange] = useState('5y');
+  const [minCitations, setMinCitations] = useState(0);
+  const [openAccessOnly, setOpenAccessOnly] = useState(false);
+  const [hasAcademicProviders, setHasAcademicProviders] = useState(false);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
@@ -67,6 +73,17 @@ function HomePageInner() {
     getToken().then((token) =>
       getProviders(token).then((providers) => setHasProvider(providers.length > 0))
     );
+  }, [isLoaded, isSignedIn, getToken]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    getToken().then((token) => {
+      if (token) {
+        getAcademicProviders(token).then(providers => {
+          setHasAcademicProviders(providers.length > 0);
+        }).catch(() => {});
+      }
+    });
   }, [isLoaded, isSignedIn, getToken]);
 
   function toggleStyle(id: string) {
@@ -106,7 +123,10 @@ function HomePageInner() {
 
     try {
       const token = await getToken();
-      const course = await createCourse(topic.trim(), buildInstructions(), token);
+      const academicSearch = useResearchPapers
+        ? { enabled: true, year_range: yearRange, min_citations: minCitations, open_access_only: openAccessOnly }
+        : null;
+      const course = await createCourse(topic.trim(), buildInstructions(), token, academicSearch);
       router.push(`/courses/${course.id}/discover`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
@@ -295,6 +315,77 @@ function HomePageInner() {
               />
             </div>
 
+            {/* Research Papers */}
+            <div className="mb-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="research-toggle">Use Research Papers</Label>
+                <button
+                  id="research-toggle"
+                  role="switch"
+                  aria-checked={useResearchPapers}
+                  disabled={!hasAcademicProviders}
+                  onClick={() => setUseResearchPapers(!useResearchPapers)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    useResearchPapers ? 'bg-primary' : 'bg-muted'
+                  } ${!hasAcademicProviders ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  title={!hasAcademicProviders ? 'Configure academic search providers in Settings first' : ''}
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                    useResearchPapers ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+
+              {useResearchPapers && (
+                <div className="space-y-3 pl-1 border-l-2 border-primary/20 ml-1">
+                  <div className="space-y-1">
+                    <Label className="text-sm">Year Range</Label>
+                    <select
+                      value={yearRange}
+                      onChange={(e) => setYearRange(e.target.value)}
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="5y">Last 5 years</option>
+                      <option value="10y">Last 10 years</option>
+                      <option value="20y">Last 20 years</option>
+                      <option value="all">All time</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-sm">Minimum Citations</Label>
+                    <select
+                      value={minCitations}
+                      onChange={(e) => setMinCitations(Number(e.target.value))}
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    >
+                      <option value={0}>Any</option>
+                      <option value={10}>10+</option>
+                      <option value={50}>50+</option>
+                      <option value={100}>100+</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm" htmlFor="oa-toggle">Open Access Only</Label>
+                    <button
+                      id="oa-toggle"
+                      role="switch"
+                      aria-checked={openAccessOnly}
+                      onClick={() => setOpenAccessOnly(!openAccessOnly)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                        openAccessOnly ? 'bg-primary' : 'bg-muted'
+                      } cursor-pointer`}
+                    >
+                      <span className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
+                        openAccessOnly ? 'translate-x-5' : 'translate-x-1'
+                      }`} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" size="lg" onClick={() => setStep(1)}>
                 Back
@@ -339,6 +430,16 @@ function HomePageInner() {
                   <div>
                     <div className="text-muted-foreground text-xs uppercase tracking-wider mb-1">Extra instructions</div>
                     <div className="text-foreground text-sm">{extraInstructions.trim()}</div>
+                  </div>
+                )}
+                {useResearchPapers && (
+                  <div>
+                    <div className="text-muted-foreground text-xs uppercase tracking-wider mb-1">Research papers</div>
+                    <div className="text-foreground text-sm">
+                      {yearRange === 'all' ? 'All time' : `Last ${yearRange.replace('y', ' years')}`}
+                      {minCitations > 0 ? `, ${minCitations}+ citations` : ''}
+                      {openAccessOnly ? ', open access only' : ''}
+                    </div>
                   </div>
                 )}
               </CardContent>

@@ -6,9 +6,17 @@ import re
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
+class AcademicSearchOptions(BaseModel):
+    enabled: bool = False
+    year_range: str = Field(default="5y", pattern=r"^(5y|10y|20y|all)$")
+    min_citations: int = Field(default=0, ge=0)
+    open_access_only: bool = False
+
+
 class CourseCreate(BaseModel):
     topic: str = Field(max_length=500)
     instructions: str | None = Field(default=None, max_length=5000)
+    academic_search: AcademicSearchOptions | None = None
 
 
 class SectionComment(BaseModel):

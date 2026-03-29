@@ -15,8 +15,11 @@ import pytest
 from sqlalchemy import select
 
 from app.agent import EvidenceCardItem, EvidenceCardSet
-from app.models import EvidenceCard, ResearchBrief
+from app.models import EvidenceCard, ResearchBrief, User
 from app.search_service import SearchResult
+
+# Deterministic test user UUID for section researcher tests
+_TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-eeeeeeeeeeee")
 
 
 def _mock_structured_agent(structured_response):
@@ -156,9 +159,10 @@ async def test_research_section_handles_partial_search_failure(
             "app.search_service.search",
             new_callable=AsyncMock,
             side_effect=[
-                mock_search_results,
-                RuntimeError("Search timeout"),
-                mock_search_results,
+                mock_search_results,           # Q1 primary: success
+                RuntimeError("Search timeout"), # Q2 primary: fail
+                mock_search_results,           # Q2 DuckDuckGo fallback: success
+                mock_search_results,           # Q3 primary: success
             ],
         ) as mock_search,
         patch(
@@ -175,7 +179,9 @@ async def test_research_section_handles_partial_search_failure(
 
     # Should still succeed with partial results
     assert len(result) == 3
-    assert mock_search.call_count == 3
+    # 3 questions: Q1 succeeds on primary (1 call), Q2 fails primary + succeeds fallback (2 calls),
+    # Q3 succeeds on primary (1 call) = 4 calls total
+    assert mock_search.call_count == 4
 
 
 @pytest.mark.anyio
@@ -250,8 +256,12 @@ async def test_research_all_sections_parallel(setup_db):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        # Create a course
-        course = Course(topic="Python", status="researching")
+        # Create a user and course
+        user = User(id=_TEST_USER_UUID, email="researcher@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
         course_id = course.id
@@ -359,7 +369,11 @@ async def test_research_all_sections_no_section_briefs(setup_db):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="Test", status="researching")
+        user = User(id=_TEST_USER_UUID, email="researcher2@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Test", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -413,7 +427,11 @@ async def test_save_evidence_cards(setup_db, sample_evidence_cards):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="Python", status="researching")
+        user = User(id=_TEST_USER_UUID, email="save@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -476,7 +494,11 @@ async def test_get_evidence_cards(setup_db, sample_evidence_cards):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="Python", status="researching")
+        user = User(id=_TEST_USER_UUID, email="getev@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
