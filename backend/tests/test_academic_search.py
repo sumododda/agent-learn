@@ -238,3 +238,59 @@ async def test_search_arxiv_parses_xml():
     assert r.doi == "10.48550/arXiv.1706.03762"
     assert "sequence transduction" in r.content
     assert "arxiv.org" in r.url
+
+
+@pytest.mark.asyncio
+async def test_search_openalex_parses_response():
+    from app.search_service import _search_openalex
+
+    mock_response = {
+        "meta": {"count": 1, "page": 1, "per_page": 25},
+        "results": [
+            {
+                "id": "https://openalex.org/W12345",
+                "doi": "https://doi.org/10.1234/test",
+                "title": "Test Paper on Deep Learning",
+                "display_name": "Test Paper on Deep Learning",
+                "relevance_score": 42.5,
+                "publication_year": 2023,
+                "publication_date": "2023-06-15",
+                "cited_by_count": 150,
+                "authorships": [
+                    {"author": {"display_name": "Chen, W."}, "author_position": "first"},
+                    {"author": {"display_name": "Davis, M."}, "author_position": "last"},
+                ],
+                "abstract_inverted_index": {
+                    "Deep": [0], "learning": [1], "has": [2],
+                    "transformed": [3], "AI": [4], "research": [5],
+                },
+                "primary_location": {
+                    "source": {"display_name": "Nature Machine Intelligence"},
+                    "landing_page_url": "https://nature.com/articles/test",
+                },
+                "open_access": {"is_oa": True, "oa_url": "https://nature.com/articles/test.pdf"},
+            }
+        ],
+    }
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = mock_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = await _search_openalex(
+            "deep learning", {"api_key": "test_key"}, 5, "basic",
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.title == "Test Paper on Deep Learning"
+    assert r.is_academic is True
+    assert r.authors == ["Chen, W.", "Davis, M."]
+    assert r.year == 2023
+    assert r.venue == "Nature Machine Intelligence"
+    assert r.citation_count == 150
+    assert r.doi == "10.1234/test"
+    assert r.content == "Deep learning has transformed AI research"

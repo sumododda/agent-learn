@@ -520,6 +520,94 @@ async def _search_arxiv(
     return results
 
 
+def _year_range_to_openalex_filter(year_range: str) -> str:
+    """Convert year_range to OpenAlex publication_year filter."""
+    if year_range == "all":
+        return ""
+    from datetime import date
+    current_year = date.today().year
+    years_back = {"5y": 5, "10y": 10, "20y": 20}
+    n = years_back.get(year_range, 5)
+    return f"publication_year:>{current_year - n}"
+
+
+async def _search_openalex(
+    query: str,
+    credentials: dict,
+    max_results: int,
+    search_depth: str,
+    academic_options: dict | None = None,
+) -> list[SearchResult]:
+    opts = academic_options or {}
+    api_key = credentials.get("api_key")
+    if not api_key:
+        logger.warning("[openalex] No API key configured, skipping")
+        return []
+
+    params: dict = {
+        "search": query,
+        "per_page": min(max_results, 100),
+        "api_key": api_key,
+    }
+
+    filters: list[str] = []
+    year_filter = _year_range_to_openalex_filter(opts.get("year_range", "all"))
+    if year_filter:
+        filters.append(year_filter)
+    min_cit = opts.get("min_citations", 0)
+    if min_cit and min_cit > 0:
+        filters.append(f"cited_by_count:>{min_cit}")
+    if opts.get("open_access_only", False):
+        filters.append("is_oa:true")
+    if filters:
+        params["filter"] = ",".join(filters)
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = []
+    for work in data.get("results", []):
+        abstract = reconstruct_abstract(work.get("abstract_inverted_index"))
+        if not abstract:
+            continue
+
+        authors = [
+            a["author"]["display_name"]
+            for a in work.get("authorships", [])
+            if a.get("author", {}).get("display_name")
+        ]
+
+        doi_raw = work.get("doi") or ""
+        doi = doi_raw.replace("https://doi.org/", "") if doi_raw else None
+
+        loc = work.get("primary_location") or {}
+        source = loc.get("source") or {}
+        venue = source.get("display_name")
+
+        url = loc.get("landing_page_url") or work.get("id", "")
+
+        results.append(SearchResult(
+            title=work.get("title") or work.get("display_name", ""),
+            url=url,
+            content=abstract,
+            score=work.get("relevance_score", 0.0),
+            authors=authors,
+            year=work.get("publication_year"),
+            venue=venue,
+            citation_count=work.get("cited_by_count"),
+            doi=doi,
+            is_academic=True,
+        ))
+
+    return results
+
+
 _ADAPTERS = {
     "tavily": _search_tavily,
     "exa": _search_exa,
