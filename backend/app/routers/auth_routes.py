@@ -292,6 +292,20 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 
+@router.post("/refresh", response_model=AuthResponse)
+@limiter.limit("30/minute")
+async def refresh_token(request: Request, session: SessionDep, user_id: str = Depends(get_current_user)):
+    """Issue a fresh access token if the current one is still valid."""
+    uid = uuid_mod.UUID(user_id)
+    result = await session.execute(select(User).where(User.id == uid))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    token = create_access_token(user_id)
+    keys_loaded = await _load_provider_keys(user_id, uid, session)
+    return AuthResponse(token=token, user_id=user_id, provider_keys_loaded=keys_loaded)
+
+
 @router.post("/sse-ticket")
 @limiter.limit("60/minute")
 async def get_sse_ticket(request: Request, user_id: str = Depends(get_current_user)):
