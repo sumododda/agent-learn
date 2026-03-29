@@ -130,6 +130,8 @@ EVIDENCE AND CITATIONS:
 - Do NOT fabricate claims without evidence card support.
 - If an evidence card has a caveat, mention it naturally in the text.
 
+For evidence cards marked as academic sources, naturally incorporate the author(s) and year into the text before the citation marker. Example: "According to Smith et al. (2023), transformers outperform RNNs on sequence tasks [3]."
+
 BLACKBOARD AWARENESS:
 - You will receive a blackboard with glossary, concept ownership, and coverage map.
 - Glossary: Do NOT re-define terms already in the glossary. Use them directly and reference where they were introduced if helpful.
@@ -199,7 +201,9 @@ Guidelines:
 - Consider different skill levels when suggesting learning progression
 - Be specific about authoritative sources — include names and URLs when available
 
-Output a structured TopicBrief with all fields populated based on the search results."""
+Output a structured TopicBrief with all fields populated based on the search results.
+
+Some search results may be from academic research papers (marked with [ACADEMIC] in the source list). When available, prefer academic sources for grounding your analysis — they provide peer-reviewed evidence. Note which findings come from academic vs. web sources in your synthesis."""
 
 SECTION_RESEARCHER_PROMPT = """You are a section researcher. Your job is to analyze web search results and produce structured evidence cards — one per factual claim discovered.
 
@@ -258,7 +262,13 @@ After editing, generate updates for the blackboard:
 - key_points_summary: A 1-2 sentence summary of the key points from this section.
 - new_sources: List of new sources cited. Format: [{url: "...", title: "..."}]
 
-Output a structured EditorResult with the edited content and blackboard updates."""
+Output a structured EditorResult with the edited content and blackboard updates.
+
+After the "What Comes Next" section, if the section cites any academic evidence cards (those with is_academic=True), append a "## References" section listing only the academic papers. Format each entry in APA style:
+
+[N] Last, F., Last, F., & Last, F. (Year). Title. *Venue*. DOI_URL
+
+Only include papers actually cited with [N] markers in the section. If no academic papers are cited, do not add a References section."""
 
 
 VERIFIER_PROMPT = """You are an evidence verifier. Your job is to review evidence cards collected for a course section and judge their quality against the research brief's must-answer questions.
