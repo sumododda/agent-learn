@@ -1,4 +1,4 @@
-from app.search_service import SearchResult
+from app.search_service import SearchResult, reconstruct_abstract
 
 
 def test_search_result_academic_fields_default():
@@ -28,3 +28,18 @@ def test_search_result_academic_fields_populated():
     assert r.authors == ["Vaswani, A.", "Shazeer, N."]
     assert r.year == 2017
     assert r.citation_count == 90000
+
+
+def test_reconstruct_abstract_basic():
+    inverted = {"Machine": [0], "learning": [1], "is": [2], "great": [3]}
+    assert reconstruct_abstract(inverted) == "Machine learning is great"
+
+
+def test_reconstruct_abstract_repeated_words():
+    inverted = {"the": [0, 4], "cat": [1], "sat": [2], "on": [3], "mat": [5]}
+    assert reconstruct_abstract(inverted) == "the cat sat on the mat"
+
+
+def test_reconstruct_abstract_empty():
+    assert reconstruct_abstract({}) == ""
+    assert reconstruct_abstract(None) == ""

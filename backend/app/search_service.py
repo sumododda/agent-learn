@@ -57,6 +57,18 @@ class SearchResult:
     is_academic: bool = False
 
 
+def reconstruct_abstract(inverted_index: dict | None) -> str:
+    """Reconstruct plain text from OpenAlex abstract_inverted_index format."""
+    if not inverted_index:
+        return ""
+    words: list[tuple[int, str]] = []
+    for word, positions in inverted_index.items():
+        for pos in positions:
+            words.append((pos, word))
+    words.sort(key=lambda x: x[0])
+    return " ".join(w for _, w in words)
+
+
 def get_search_provider_registry() -> dict:
     """Return search provider definitions for frontend form rendering."""
     return SEARCH_PROVIDERS
