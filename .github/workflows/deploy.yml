@@ -138,8 +138,11 @@ jobs:
       # Update backend if changed
       - name: Deploy backend
         if: needs.changes.outputs.backend == 'true'
+        env:
+          FULL_SHA: ${{ github.sha }}
         run: |
-          IMAGE="${{ env.IMAGE_BASE }}/backend:${{ github.sha }}"
+          SHORT=${FULL_SHA:0:7}
+          IMAGE="${{ env.IMAGE_BASE }}/backend:${SHORT}"
           kubectl set image deployment/backend-api backend-api=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
           kubectl set image deployment/backend-worker backend-worker=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
           kubectl rollout status deployment/backend-api -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
@@ -148,8 +151,11 @@ jobs:
       # Run migrations if backend changed
       - name: Run migrations
         if: needs.changes.outputs.backend == 'true'
+        env:
+          FULL_SHA: ${{ github.sha }}
         run: |
-          IMAGE="${{ env.IMAGE_BASE }}/backend:${{ github.sha }}"
+          SHORT=${FULL_SHA:0:7}
+          IMAGE="${{ env.IMAGE_BASE }}/backend:${SHORT}"
           NAMESPACE="${{ vars.GKE_NAMESPACE }}"
 
           # Delete previous job if exists
@@ -170,8 +176,11 @@ jobs:
       # Update frontend if changed
       - name: Deploy frontend
         if: needs.changes.outputs.frontend == 'true'
+        env:
+          FULL_SHA: ${{ github.sha }}
         run: |
-          IMAGE="${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}"
+          SHORT=${FULL_SHA:0:7}
+          IMAGE="${{ env.IMAGE_BASE }}/frontend:${SHORT}"
           kubectl set image deployment/frontend frontend=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
           kubectl rollout status deployment/frontend -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
 
