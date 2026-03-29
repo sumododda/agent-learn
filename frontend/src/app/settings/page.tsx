@@ -752,6 +752,22 @@ function AcademicProviderSection({
         </div>
       ))}
 
+      {selectedProvider === 'semantic_scholar' && (
+        <p className="text-xs text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
+          Works without a key using a shared rate limit (1,000 req/s pool). Adding a key guarantees
+          a dedicated 1 req/s.{' '}
+          <a
+            href="https://www.semanticscholar.org/product/api#api-key-form"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            Request a key
+          </a>{' '}
+          &mdash; you&apos;ll receive it via email after review.
+        </p>
+      )}
+
       <div className="flex flex-wrap gap-3 pt-1">
         {hasFields && (
           <Button
