@@ -13,7 +13,7 @@ After abstract-level academic search per section, select top 2-3 papers for deep
 **Prerequisite:** Add `pdf_url: str | None = None` field to `SearchResult` dataclass. Each adapter populates it:
 - Semantic Scholar: from `openAccessPdf.url` in API response
 - OpenAlex: from `primary_location.pdf_url` or `open_access.oa_url`
-- arXiv: construct `https://arxiv.org/pdf/{arxiv_id}` from the entry URL (all arXiv papers have PDFs)
+- arXiv: extract from `<link rel="related" title="pdf" href="..."/>` in XML response (always present). Replace `http://` with `https://` in the href.
 
 **Filter:** Must have `pdf_url` set. No PDF URL = skip.
 
