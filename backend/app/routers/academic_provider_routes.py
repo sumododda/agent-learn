@@ -214,6 +214,7 @@ async def test_academic_provider(
     provider: str,
     body: ProviderTestRequest,
     user_id: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ):
     if provider not in _VALID_PROVIDERS:
         raise HTTPException(400, f"Invalid academic provider: {provider}")
@@ -222,8 +223,30 @@ async def test_academic_provider(
     if not adapter:
         raise HTTPException(400, f"No adapter found for academic provider: {provider}")
 
+    # Use provided credentials, or fall back to stored credentials if form was blank
+    creds = body.credentials
+    if not any(creds.values()):
+        uid = _uid(user_id)
+        db_name = _db_key(provider)
+        result = await session.execute(
+            select(ProviderConfig).where(
+                ProviderConfig.user_id == uid,
+                ProviderConfig.provider == db_name,
+            )
+        )
+        config = result.scalar_one_or_none()
+        if config:
+            salt_result = await session.execute(
+                select(UserKeySalt).where(UserKeySalt.user_id == uid)
+            )
+            salt_row = salt_result.scalar_one_or_none()
+            if salt_row:
+                from app.crypto import decrypt_credentials as _decrypt
+                key = derive_key(salt_row.salt, settings.ENCRYPTION_PEPPER.encode("utf-8"))
+                creds = json.loads(_decrypt(key, config.encrypted_credentials))
+
     try:
-        results = await adapter("test query", body.credentials, 1, "basic", None)
+        results = await adapter("test query", creds, 1, "basic", None)
         if len(results) > 0:
             return {"status": "ok", "message": "Academic credentials validated successfully"}
         raise HTTPException(400, "Academic credential validation failed — no results returned")
