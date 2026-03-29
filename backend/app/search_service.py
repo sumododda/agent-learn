@@ -4,6 +4,7 @@ Mirrors provider_service.py pattern but for web search providers.
 Each adapter normalizes results into SearchResult dataclass.
 """
 import logging
+import math
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -82,6 +83,7 @@ class SearchResult:
     citation_count: int | None = None
     doi: str | None = None
     is_academic: bool = False
+    pdf_url: str | None = None
 
 
 def reconstruct_abstract(inverted_index: dict | None) -> str:
@@ -146,6 +148,23 @@ def deduplicate_academic_results(results: list[SearchResult]) -> list[SearchResu
         output.append(r)
 
     return output
+
+
+def rank_for_deep_reading(result: SearchResult) -> float:
+    """Rank an academic paper for deep reading. Returns -1 if no PDF available."""
+    if not result.pdf_url:
+        return -1
+    citations = result.citation_count or 0
+    year = result.year or 2020
+    from datetime import date
+    age = date.today().year - year
+    if age <= 2:
+        recency = 3.0
+    elif age <= 5:
+        recency = 2.0
+    else:
+        recency = 1.0
+    return math.log1p(citations) * recency
 
 
 def get_search_provider_registry() -> dict:
@@ -476,6 +495,7 @@ async def _search_semantic_scholar(
             citation_count=paper.get("citationCount"),
             doi=ext_ids.get("DOI"),
             is_academic=True,
+            pdf_url=(paper.get("openAccessPdf") or {}).get("url"),
         ))
     return results
 
@@ -563,10 +583,12 @@ async def _search_arxiv(
         doi = doi_el.text if doi_el is not None else None
 
         url = ""
+        pdf_link = ""
         for link_el in entry.findall("atom:link", ns):
             if link_el.get("rel") == "alternate":
                 url = link_el.get("href", "")
-                break
+            if link_el.get("title") == "pdf":
+                pdf_link = (link_el.get("href", "")).replace("http://", "https://")
         if not url:
             id_el = entry.find("atom:id", ns)
             url = id_el.text if id_el is not None else ""
@@ -582,6 +604,7 @@ async def _search_arxiv(
             citation_count=None,
             doi=doi,
             is_academic=True,
+            pdf_url=pdf_link or None,
         ))
 
     return results
@@ -659,6 +682,7 @@ async def _search_openalex(
         venue = source.get("display_name")
 
         url = loc.get("landing_page_url") or work.get("id", "")
+        pdf_url = loc.get("pdf_url") or (work.get("open_access") or {}).get("oa_url")
 
         results.append(SearchResult(
             title=work.get("title") or work.get("display_name", ""),
@@ -671,6 +695,7 @@ async def _search_openalex(
             citation_count=work.get("cited_by_count"),
             doi=doi,
             is_academic=True,
+            pdf_url=pdf_url,
         ))
 
     return results

@@ -229,15 +229,29 @@ async def discover_topic(
             except Exception as e:
                 logger.warning("[discover] Academic search failed for query '%s': %s", q[:60], e)
         academic_results = deduplicate_academic_results(academic_results)
-        for r in academic_results:
+        # Sort academic results by citation count (highest first)
+        academic_results.sort(key=lambda r: r.citation_count or 0, reverse=True)
+        # Take top 10 academic results with full metadata
+        for r in academic_results[:10]:
             all_search_results.append({
                 "title": f"[ACADEMIC] {r.title}",
                 "url": r.url,
                 "content": r.content,
                 "score": r.score,
+                "authors": ", ".join(r.authors) if r.authors else None,
+                "year": r.year,
+                "venue": r.venue,
+                "citations": r.citation_count,
+                "doi": r.doi,
             })
         if academic_results:
             logger.info("[discover] Added %d academic results to discovery", len(academic_results))
+
+    # Cap total results: academic (already limited to 10) + top 15 web by score
+    web_results = [r for r in all_search_results if not str(r.get("title", "")).startswith("[ACADEMIC]")]
+    academic_in_list = [r for r in all_search_results if str(r.get("title", "")).startswith("[ACADEMIC]")]
+    web_results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    all_search_results = academic_in_list + web_results[:15]
 
     if not all_search_results:
         logger.error("[discover] All %d searches failed — no results to synthesize", len(queries))
@@ -571,6 +585,7 @@ async def research_section(
 
     logger.info("[research] Section %s: researching %d questions", brief.section_position, len(brief.questions))
     all_results: list[dict] = []
+    academic_raw_results: list = []  # Keep raw SearchResults for deep reading
 
     search_tasks = [
         search_service.search_with_fallback(
@@ -602,15 +617,37 @@ async def research_section(
                 acad_results = await run_academic_search(
                     question, academic_credentials, academic_options, max_results=5,
                 )
+                academic_raw_results.extend(acad_results)
                 for r in acad_results:
                     all_results.append({
                         "title": f"[ACADEMIC] {r.title}",
                         "url": r.url,
                         "content": r.content,
                         "score": r.score,
+                        "authors": ", ".join(r.authors) if r.authors else None,
+                        "year": r.year,
+                        "venue": r.venue,
+                        "citations": r.citation_count,
+                        "doi": r.doi,
                     })
             except Exception as e:
                 logger.warning("[research] Academic search failed for '%s': %s", question[:60], e)
+
+    # Deep-read top papers (if academic search is enabled and returned results)
+    deep_readings: list[dict] = []
+    if academic_raw_results and academic_credentials and academic_options and academic_options.get("enabled"):
+        from app.paper_reader import deep_read_top_papers
+        try:
+            deep_readings = await deep_read_top_papers(
+                academic_raw_results,
+                brief.questions,
+                provider, model, credentials or {}, extra_fields,
+                max_papers=3,
+            )
+            if deep_readings:
+                logger.info("[research] Section %d: deep-read %d papers", brief.section_position, len(deep_readings))
+        except Exception as e:
+            logger.warning("[research] Deep reading failed for section %d: %s", brief.section_position, e)
 
     if not all_results:
         logger.error("[research] Section %s: all %d searches failed", brief.section_position, len(brief.questions))
@@ -624,6 +661,26 @@ async def research_section(
         f"Questions: {json.dumps(brief.questions)}\n\n"
         f"Search results:\n{json.dumps(all_results, indent=2)}"
     )
+
+    if deep_readings:
+        deep_text = "\n\nDeep paper readings:\n"
+        for dr in deep_readings:
+            sr = dr["search_result"]
+            reading = dr["reading"]
+            authors_str = ", ".join(sr.authors) if sr.authors else "Unknown"
+            deep_text += f'\n[DEEP-READ] "{sr.title}" ({authors_str}, {sr.year or "n.d."})\n'
+            deep_text += f'  Methodology: {reading.get("methodology_summary", "N/A")}\n'
+            lims = reading.get("limitations", [])
+            if lims:
+                deep_text += f'  Limitations: {"; ".join(lims)}\n'
+            for i, f in enumerate(reading.get("findings", []), 1):
+                deep_text += f'\n  Finding {i} ({f.get("finding_type", "observation")}, answers: {f.get("answers_question", "N/A")}):\n'
+                deep_text += f'    Claim: {f.get("claim", "")}\n'
+                if f.get("data_point"):
+                    deep_text += f'    Data: {f["data_point"]}\n'
+                deep_text += f'    Source section: {f.get("paper_section", "Unknown")}\n'
+                deep_text += f'    Supporting text: "{f.get("supporting_text", "")}"\n'
+        message += deep_text
 
     researcher = create_section_researcher(provider, model, credentials, extra_fields)
     result = await _invoke_agent(researcher, message)

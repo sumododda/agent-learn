@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results
+from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results, rank_for_deep_reading
 
 
 def test_search_result_academic_fields_default():
@@ -130,6 +130,7 @@ async def test_search_semantic_scholar_parses_response():
     assert r.venue == "NeurIPS"
     assert r.citation_count == 42
     assert r.doi == "10.1234/test"
+    assert r.pdf_url == "https://example.com/paper.pdf"
     assert "test abstract" in r.content
 
 
@@ -238,6 +239,7 @@ async def test_search_arxiv_parses_xml():
     assert r.doi == "10.48550/arXiv.1706.03762"
     assert "sequence transduction" in r.content
     assert "arxiv.org" in r.url
+    assert r.pdf_url == "https://arxiv.org/pdf/1706.03762v5"
 
 
 @pytest.mark.asyncio
@@ -267,6 +269,7 @@ async def test_search_openalex_parses_response():
                 "primary_location": {
                     "source": {"display_name": "Nature Machine Intelligence"},
                     "landing_page_url": "https://nature.com/articles/test",
+                    "pdf_url": "https://nature.com/articles/test.pdf",
                 },
                 "open_access": {"is_oa": True, "oa_url": "https://nature.com/articles/test.pdf"},
             }
@@ -293,6 +296,7 @@ async def test_search_openalex_parses_response():
     assert r.venue == "Nature Machine Intelligence"
     assert r.citation_count == 150
     assert r.doi == "10.1234/test"
+    assert r.pdf_url == "https://nature.com/articles/test.pdf"
     assert r.content == "Deep learning has transformed AI research"
 
 
@@ -377,3 +381,54 @@ async def test_academic_search_skips_missing_providers():
     assert len(results) == 1
     mock_arxiv.assert_not_called()
     mock_oa.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 1: pdf_url field tests
+# ---------------------------------------------------------------------------
+
+
+def test_search_result_pdf_url_default():
+    r = SearchResult(title="T", url="u", content="c")
+    assert r.pdf_url is None
+
+
+def test_search_result_pdf_url_populated():
+    r = SearchResult(title="T", url="u", content="c", pdf_url="https://arxiv.org/pdf/1234.pdf")
+    assert r.pdf_url == "https://arxiv.org/pdf/1234.pdf"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: rank_for_deep_reading tests
+# ---------------------------------------------------------------------------
+
+
+def test_rank_excludes_no_pdf():
+    r = SearchResult(title="T", url="u", content="c", is_academic=True,
+                     citation_count=1000, year=2023, pdf_url=None)
+    assert rank_for_deep_reading(r) == -1
+
+
+def test_rank_higher_for_more_citations():
+    r1 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=100, year=2023, pdf_url="https://pdf.com/1")
+    r2 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=1000, year=2023, pdf_url="https://pdf.com/2")
+    assert rank_for_deep_reading(r2) > rank_for_deep_reading(r1)
+
+
+def test_rank_recency_boost():
+    old = SearchResult(title="T", url="u", content="c", is_academic=True,
+                       citation_count=200, year=2018, pdf_url="https://pdf.com/1")
+    new = SearchResult(title="T", url="u", content="c", is_academic=True,
+                       citation_count=80, year=2025, pdf_url="https://pdf.com/2")
+    assert rank_for_deep_reading(new) > rank_for_deep_reading(old)
+
+
+def test_rank_log_scale_diminishing_returns():
+    r1 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=1000, year=2023, pdf_url="https://pdf.com/1")
+    r2 = SearchResult(title="T", url="u", content="c", is_academic=True,
+                      citation_count=10000, year=2023, pdf_url="https://pdf.com/2")
+    ratio = rank_for_deep_reading(r2) / rank_for_deep_reading(r1)
+    assert ratio < 2.0
