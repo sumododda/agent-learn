@@ -395,9 +395,9 @@ def _year_range_to_s2_param(year_range: str) -> str | None:
 import asyncio as _asyncio
 import time as _time
 
-# Semantic Scholar: track last request time for rate limiting
-# Authenticated: 1 req/s for /paper/search
-# Unauthenticated: 5,000 req/5min shared pool — we self-limit to ~1 req/3s to be safe
+# Rate limit locks — serialise concurrent coroutines through a single lock + timestamp
+# Semantic Scholar: 1 req/s (keyed) or 1 req/3s (unkeyed, shared global pool)
+_s2_lock = _asyncio.Lock()
 _s2_last_request: float = 0.0
 
 
@@ -427,32 +427,32 @@ async def _search_semantic_scholar(
     if api_key:
         headers["x-api-key"] = api_key
 
-    # Rate limit: 1 req/s with key, 1 req/3s without (shared pool is unreliable)
+    # Rate limit: 1 req/s with key, 1 req/3s without. Lock serialises concurrent callers.
     min_interval = 1.0 if api_key else 3.0
-    now = _time.monotonic()
-    wait = min_interval - (now - _s2_last_request)
-    if wait > 0:
-        await _asyncio.sleep(wait)
-    _s2_last_request = _time.monotonic()
-
     data: dict = {}
-    async with httpx.AsyncClient() as client:
-        for attempt in range(3):
-            resp = await client.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search",
-                params=params,
-                headers=headers,
-                timeout=30.0,
-            )
-            if resp.status_code == 429:
-                delay = 2 ** attempt * (1.0 if api_key else 3.0)
-                logger.info("[semantic_scholar] 429 rate limited, retrying in %.0fs (attempt %d/3)...", delay, attempt + 1)
-                await _asyncio.sleep(delay)
+    async with _s2_lock:
+        now = _time.monotonic()
+        wait = min_interval - (now - _s2_last_request)
+        if wait > 0:
+            await _asyncio.sleep(wait)
+
+        async with httpx.AsyncClient() as client:
+            for attempt in range(3):
                 _s2_last_request = _time.monotonic()
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            break
+                resp = await client.get(
+                    "https://api.semanticscholar.org/graph/v1/paper/search",
+                    params=params,
+                    headers=headers,
+                    timeout=30.0,
+                )
+                if resp.status_code == 429:
+                    delay = 2 ** attempt * (1.0 if api_key else 3.0)
+                    logger.info("[semantic_scholar] 429 rate limited, retrying in %.0fs (attempt %d/3)...", delay, attempt + 1)
+                    await _asyncio.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
 
     open_access_only = opts.get("open_access_only", False)
     results = []
@@ -487,10 +487,11 @@ def _year_range_to_arxiv_date_filter(year_range: str) -> str:
     years_back = {"5y": 5, "10y": 10, "20y": 20}
     n = years_back.get(year_range, 5)
     start_year = current_year - n
-    return f"+AND+submittedDate:[{start_year}01010000+TO+{current_year}12312359]"
+    return f" AND submittedDate:[{start_year}01010000 TO {current_year}12312359]"
 
 
 # arXiv: hard limit 1 request per 3 seconds, single connection
+_arxiv_lock = _asyncio.Lock()
 _arxiv_last_request: float = 0.0
 
 
@@ -508,26 +509,27 @@ async def _search_arxiv(
     if date_filter:
         search_query += date_filter
 
-    # Enforce 3-second delay between arXiv requests (hard requirement)
-    now = _time.monotonic()
-    wait = 3.0 - (now - _arxiv_last_request)
-    if wait > 0:
-        await _asyncio.sleep(wait)
-    _arxiv_last_request = _time.monotonic()
+    # Enforce 3-second delay between arXiv requests. Lock serialises concurrent callers.
+    async with _arxiv_lock:
+        now = _time.monotonic()
+        wait = 3.0 - (now - _arxiv_last_request)
+        if wait > 0:
+            await _asyncio.sleep(wait)
+        _arxiv_last_request = _time.monotonic()
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        resp = await client.get(
-            "https://export.arxiv.org/api/query",
-            params={
-                "search_query": search_query,
-                "start": 0,
-                "max_results": min(max_results, 100),
-                "sortBy": "relevance",
-                "sortOrder": "descending",
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            resp = await client.get(
+                "https://export.arxiv.org/api/query",
+                params={
+                    "search_query": search_query,
+                    "start": 0,
+                    "max_results": min(max_results, 100),
+                    "sortBy": "relevance",
+                    "sortOrder": "descending",
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
 
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
