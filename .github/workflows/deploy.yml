@@ -1,121 +1,149 @@
-name: Build and Deploy
+name: Deploy to Cloud Run
 
 on:
   push:
     branches: [main]
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+permissions:
+  contents: read
+  packages: write
+  id-token: write
 
 jobs:
-  # ── Detect which folders changed ──────────────────────────────────
-  changes:
-    name: Detect Changes
+  deploy:
     runs-on: ubuntu-latest
-    outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            backend:
-              - 'backend/**'
-              - 'deploy/Dockerfile.backend'
-            frontend:
-              - 'frontend/**'
-              - 'deploy/Dockerfile.frontend'
+    env:
+      CLOUD_SQL: ${{ vars.GCP_CLOUD_SQL_INSTANCE }}
+      SECRETS: JWT_SECRET_KEY=jwt-secret-key:latest,ENCRYPTION_PEPPER=encryption-pepper:latest,TURNSTILE_SECRET_KEY=turnstile-secret-key:latest,RESEND_API_KEY=resend-api-key:latest,RESEND_FROM_EMAIL=resend-from-email:latest,POSTGRES_PASSWORD=db-password:latest
+      BACKEND_IMG: ${{ vars.GCP_AR_PROXY }}/sumododda/agent-learn/backend:${{ github.sha }}
+      FRONTEND_IMG: ${{ vars.GCP_AR_PROXY }}/sumododda/agent-learn/frontend:${{ github.sha }}
 
-  # ── Build Backend ─────────────────────────────────────────────────
-  build-backend:
-    name: Build Backend
-    needs: changes
-    if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: docker/login-action@v4
+      # ── Build & push images to ghcr.io ──────────────────────────
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v7
+      - name: Build & push backend image
+        uses: docker/build-push-action@v6
         with:
           context: ./backend
           file: ./deploy/Dockerfile.backend
           push: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/agentlearn-backend:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/agentlearn-backend:latest
+          tags: ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
 
-  # ── Build Frontend ────────────────────────────────────────────────
-  build-frontend:
-    name: Build Frontend
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v7
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v6
         with:
           context: ./frontend
           file: ./deploy/Dockerfile.frontend
           push: true
+          tags: ghcr.io/${{ github.repository }}/frontend:${{ github.sha }}
           build-args: |
-            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ secrets.TURNSTILE_SITE_KEY }}
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:latest
+            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
 
-  # ── Deploy on self-hosted runner ──────────────────────────────────
-  deploy:
-    name: Deploy
-    needs: [changes, build-backend, build-frontend]
-    if: |
-      always() && !failure() && !cancelled() &&
-      (needs.changes.outputs.backend == 'true' ||
-       needs.changes.outputs.frontend == 'true')
-    runs-on: [self-hosted, agentlearn]
-    steps:
-      - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      # ── Authenticate to GCP via Workload Identity ───────────────
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - name: Pull and restart
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── Deploy Cloud Run services ───────────────────────────────
+      - name: Deploy backend-api
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: agentlearn-backend
+          image: ${{ env.BACKEND_IMG }}
+          region: ${{ vars.GCP_REGION }}
+          flags: >-
+            --add-cloudsql-instances=${{ vars.GCP_CLOUD_SQL_INSTANCE }}
+            --min-instances=1
+            --max-instances=3
+            --memory=512Mi
+            --cpu=1
+            --port=8000
+            --allow-unauthenticated
+            --set-secrets=${{ env.SECRETS }}
+          env_vars: |
+            CLOUD_SQL_INSTANCE=${{ vars.GCP_CLOUD_SQL_INSTANCE }}
+            CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
+            DOCS_ENABLED=false
+
+      - name: Deploy backend-worker
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: agentlearn-worker
+          image: ${{ env.BACKEND_IMG }}
+          region: ${{ vars.GCP_REGION }}
+          flags: >-
+            --add-cloudsql-instances=${{ vars.GCP_CLOUD_SQL_INSTANCE }}
+            --min-instances=1
+            --max-instances=1
+            --memory=512Mi
+            --cpu=1
+            --no-cpu-throttling
+            --port=8080
+            --command=python,-m,app.worker
+            --allow-unauthenticated
+            --set-secrets=${{ env.SECRETS }}
+          env_vars: |
+            CLOUD_SQL_INSTANCE=${{ vars.GCP_CLOUD_SQL_INSTANCE }}
+            CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
+
+      - name: Deploy frontend
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: agentlearn-frontend
+          image: ${{ env.FRONTEND_IMG }}
+          region: ${{ vars.GCP_REGION }}
+          flags: >-
+            --min-instances=1
+            --max-instances=3
+            --memory=256Mi
+            --cpu=1
+            --port=3000
+            --allow-unauthenticated
+          env_vars: |
+            INTERNAL_API_URL=${{ vars.INTERNAL_API_URL }}
+
+      # ── Run database migrations ─────────────────────────────────
+      - name: Run Alembic migrations
         run: |
-          cd /home/agent/stacks/agentlearn
-          docker compose pull --ignore-pull-failures
-          docker compose up -d --remove-orphans
-          docker compose run --rm migration
-          docker image prune -f
+          if gcloud run jobs describe agentlearn-migrate --region=${{ vars.GCP_REGION }} --project=${{ vars.GCP_PROJECT_ID }} >/dev/null 2>&1; then
+            gcloud run jobs update agentlearn-migrate \
+              --image=${{ env.BACKEND_IMG }} \
+              --region=${{ vars.GCP_REGION }} \
+              --set-cloudsql-instances=${{ env.CLOUD_SQL }} \
+              --set-secrets=${{ env.SECRETS }} \
+              --set-env-vars="CLOUD_SQL_INSTANCE=${{ env.CLOUD_SQL }}" \
+              --command="/entrypoint.sh" \
+              --args="alembic,upgrade,head" \
+              --max-retries=2 \
+              --project=${{ vars.GCP_PROJECT_ID }}
+          else
+            gcloud run jobs create agentlearn-migrate \
+              --image=${{ env.BACKEND_IMG }} \
+              --region=${{ vars.GCP_REGION }} \
+              --set-cloudsql-instances=${{ env.CLOUD_SQL }} \
+              --set-secrets=${{ env.SECRETS }} \
+              --set-env-vars="CLOUD_SQL_INSTANCE=${{ env.CLOUD_SQL }}" \
+              --command="/entrypoint.sh" \
+              --args="alembic,upgrade,head" \
+              --max-retries=2 \
+              --project=${{ vars.GCP_PROJECT_ID }}
+          fi
 
-      - name: Health check
-        run: |
-          echo "Waiting for backend to be healthy..."
-          for i in $(seq 1 30); do
-            if docker inspect --format='{{.State.Health.Status}}' agentlearn-backend 2>/dev/null | grep -q healthy; then
-              echo "backend is healthy!"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Health check timed out"
-          docker logs agentlearn-backend --tail 20
-          exit 1
+          gcloud run jobs execute agentlearn-migrate \
+            --region=${{ vars.GCP_REGION }} \
+            --wait \
+            --project=${{ vars.GCP_PROJECT_ID }}
