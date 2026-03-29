@@ -582,6 +582,7 @@ async def _search_openalex(
         "search": query,
         "per_page": min(max_results, 100),
         "api_key": api_key,
+        "select": "id,doi,title,display_name,relevance_score,publication_year,cited_by_count,authorships,abstract_inverted_index,primary_location,open_access",
     }
 
     filters: list[str] = []
