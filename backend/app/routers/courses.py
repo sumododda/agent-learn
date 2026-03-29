@@ -140,7 +140,14 @@ async def create_course(
     stream: bool = Query(False),
 ):
     # Create course row first with "researching" status
-    course = Course(topic=body.topic, instructions=body.instructions, status="researching", user_id=uuid.UUID(user_id))
+    academic_search_dict = body.academic_search.model_dump() if body.academic_search and body.academic_search.enabled else None
+    course = Course(
+        topic=body.topic,
+        instructions=body.instructions,
+        status="researching",
+        user_id=uuid.UUID(user_id),
+        academic_search=academic_search_dict,
+    )
     session.add(course)
     await session.commit()  # commit (not flush) so background task's own session can see it
 
@@ -331,15 +338,18 @@ async def generate_course(
     search_provider, _search_creds = await _get_user_search_provider(user_id, session)
 
     # Create a PipelineJob row for the worker to pick up
+    config = {
+        "provider": provider,
+        "model": model,
+        "extra_fields": extra_fields,
+        "search_provider": search_provider,
+    }
+    if course.academic_search:
+        config["academic_search"] = course.academic_search
     job = PipelineJob(
         course_id=course_id,
         user_id=uuid.UUID(user_id),
-        config={
-            "provider": provider,
-            "model": model,
-            "extra_fields": extra_fields,
-            "search_provider": search_provider,
-        },
+        config=config,
     )
     session.add(job)
     await session.commit()
@@ -395,16 +405,19 @@ async def resume_course(
     search_provider, _search_creds = await _get_user_search_provider(user_id, session)
 
     # Create new PipelineJob with checkpoint copied from stale job
+    resume_config = {
+        "provider": provider,
+        "model": model,
+        "extra_fields": extra_fields,
+        "search_provider": search_provider,
+    }
+    if course.academic_search:
+        resume_config["academic_search"] = course.academic_search
     new_job = PipelineJob(
         course_id=course_id,
         user_id=uuid.UUID(user_id),
         checkpoint=checkpoint,
-        config={
-            "provider": provider,
-            "model": model,
-            "extra_fields": extra_fields,
-            "search_provider": search_provider,
-        },
+        config=resume_config,
     )
     session.add(new_job)
 

@@ -10,11 +10,20 @@ function authHeaders(token?: string | null): Record<string, string> {
   return headers;
 }
 
-export async function createCourse(topic: string, instructions?: string, token?: string | null): Promise<Course> {
+export async function createCourse(
+  topic: string,
+  instructions?: string,
+  token?: string | null,
+  academicSearch?: { enabled: boolean; year_range: string; min_citations: number; open_access_only: boolean } | null,
+): Promise<Course> {
   const res = await fetch(`${API_BASE}/api/courses`, {
     method: 'POST',
     headers: authHeaders(token),
-    body: JSON.stringify({ topic, instructions: instructions || null }),
+    body: JSON.stringify({
+      topic,
+      instructions: instructions || null,
+      academic_search: academicSearch || null,
+    }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Failed to create course' }));
@@ -51,11 +60,16 @@ export async function createCourseStream(
   topic: string,
   instructions?: string,
   token?: string | null,
+  academicSearch?: { enabled: boolean; year_range: string; min_citations: number; open_access_only: boolean } | null,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/api/courses?stream=true`, {
     method: 'POST',
     headers: authHeaders(token),
-    body: JSON.stringify({ topic, instructions: instructions || null }),
+    body: JSON.stringify({
+      topic,
+      instructions: instructions || null,
+      academic_search: academicSearch || null,
+    }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Failed to create course' }));
