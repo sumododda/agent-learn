@@ -29,6 +29,7 @@ class Course(Base):
     status: Mapped[str] = mapped_column(Text, default="outline_ready")
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     ungrounded: Mapped[bool] = mapped_column(default=False)
+    academic_search: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=datetime.now
@@ -111,6 +112,11 @@ class EvidenceCard(Base):
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     verified: Mapped[bool] = mapped_column(default=False)
     verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_academic: Mapped[bool] = mapped_column(default=False)
+    academic_authors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    academic_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    academic_venue: Mapped[str | None] = mapped_column(Text, nullable=True)
+    academic_doi: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     course: Mapped["Course"] = relationship(back_populates="evidence_cards")

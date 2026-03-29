@@ -164,6 +164,8 @@ async def discover_topic(
     search_credentials: dict | None = None,
     on_event: EventCallback | None = None,
     user_id: str = "",
+    academic_credentials: dict[str, dict] | None = None,
+    academic_options: dict | None = None,
 ) -> TopicBrief:
     """Run discovery research on a topic using web search + synthesis agent.
 
@@ -215,6 +217,27 @@ async def discover_topic(
             for r in result:
                 await on_event("source", {"query_index": i, "title": r.title, "url": r.url, "snippet": r.content[:200] if r.content else ""})
             await on_event("query_done", {"index": i, "result_count": len(result)})
+
+    # Academic search (if enabled)
+    if academic_credentials and academic_options and academic_options.get("enabled"):
+        from app.search_service import academic_search as run_academic_search, deduplicate_academic_results
+        academic_results: list = []
+        for q in queries:
+            try:
+                batch = await run_academic_search(q, academic_credentials, academic_options, max_results=5)
+                academic_results.extend(batch)
+            except Exception as e:
+                logger.warning("[discover] Academic search failed for query '%s': %s", q[:60], e)
+        academic_results = deduplicate_academic_results(academic_results)
+        for r in academic_results:
+            all_search_results.append({
+                "title": f"[ACADEMIC] {r.title}",
+                "url": r.url,
+                "content": r.content,
+                "score": r.score,
+            })
+        if academic_results:
+            logger.info("[discover] Added %d academic results to discovery", len(academic_results))
 
     if not all_search_results:
         logger.error("[discover] All %d searches failed — no results to synthesize", len(queries))
@@ -270,6 +293,8 @@ async def generate_outline(
     on_event: EventCallback | None = None,
     user_id: str = "",
     current_outline: Sequence | None = None,
+    academic_credentials: dict[str, dict] | None = None,
+    academic_options: dict | None = None,
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
@@ -290,6 +315,8 @@ async def generate_outline(
                 topic, instructions, provider, model, credentials, extra_fields,
                 search_provider, search_credentials,
                 on_event=on_event, user_id=user_id,
+                academic_credentials=academic_credentials,
+                academic_options=academic_options,
             )
             logger.info("[outline] Discovery research completed successfully")
         else:
@@ -528,6 +555,8 @@ async def research_section(
     search_provider: str = "",
     search_credentials: dict | None = None,
     user_id: str = "",
+    academic_credentials: dict[str, dict] | None = None,
+    academic_options: dict | None = None,
 ) -> list[EvidenceCardItem]:
     """Research a single section by searching each must-answer question.
 
@@ -564,6 +593,24 @@ async def research_section(
                 "content": r.content,
                 "score": r.score,
             })
+
+    # Academic search (if enabled)
+    if academic_credentials and academic_options and academic_options.get("enabled"):
+        from app.search_service import academic_search as run_academic_search
+        for question in brief.questions:
+            try:
+                acad_results = await run_academic_search(
+                    question, academic_credentials, academic_options, max_results=5,
+                )
+                for r in acad_results:
+                    all_results.append({
+                        "title": f"[ACADEMIC] {r.title}",
+                        "url": r.url,
+                        "content": r.content,
+                        "score": r.score,
+                    })
+            except Exception as e:
+                logger.warning("[research] Academic search failed for '%s': %s", question[:60], e)
 
     if not all_results:
         logger.error("[research] Section %s: all %d searches failed", brief.section_position, len(brief.questions))
@@ -665,6 +712,11 @@ async def save_evidence_cards(
             confidence=card.confidence,
             caveat=card.caveat,
             explanation=card.explanation,
+            is_academic=getattr(card, "is_academic", False),
+            academic_authors=getattr(card, "academic_authors", None),
+            academic_year=getattr(card, "academic_year", None),
+            academic_venue=getattr(card, "academic_venue", None),
+            academic_doi=getattr(card, "academic_doi", None),
         )
         for card in cards
     ]
@@ -1190,6 +1242,8 @@ async def run_discover_and_plan(
     *,
     skip_status_update: bool = False,
     user_id: str = "",
+    academic_credentials: dict[str, dict] | None = None,
+    academic_options: dict | None = None,
 ) -> dict:
     """Run discovery research + planning for a course.
 
@@ -1222,6 +1276,8 @@ async def run_discover_and_plan(
     outline_with_briefs, ungrounded = await generate_outline(
         course.topic, course.instructions, provider, model, credentials, extra_fields,
         search_provider, search_credentials, user_id=user_id,
+        academic_credentials=academic_credentials,
+        academic_options=academic_options,
     )
 
     # Set ungrounded flag
@@ -1319,6 +1375,8 @@ async def run_research_section(
     search_provider: str = "",
     search_credentials: dict | None = None,
     user_id: str = "",
+    academic_credentials: dict[str, dict] | None = None,
+    academic_options: dict | None = None,
 ) -> dict:
     """Run section researcher for one section.
 
@@ -1348,7 +1406,7 @@ async def run_research_section(
         )
 
     # Run section researcher (search + agent)
-    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id)
+    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id, academic_credentials=academic_credentials, academic_options=academic_options)
 
     # Save evidence cards to DB
     await save_evidence_cards(course_id, section_position, card_items, session)

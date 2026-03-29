@@ -21,7 +21,11 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.main import app
 from app.database import get_session
 from app.auth import get_current_user
-from app.models import Base, Course, LearnerProgress, Section
+from app.models import Base, Course, LearnerProgress, Section, User
+
+# Deterministic test user UUID
+TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-aaaaaaaaaaaa")
+TEST_USER_ID = str(TEST_USER_UUID)
 
 
 # ---------------------------------------------------------------------------
@@ -45,12 +49,18 @@ async def progress_db():
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
+    # Create a User row so FK constraints are satisfied
+    async with session_factory() as session:
+        user = User(id=TEST_USER_UUID, email="progress@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
     async def override_session():
         async with session_factory() as session:
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
     yield session_factory
 
     async with engine.begin() as conn:
@@ -73,7 +83,7 @@ async def course_with_sections(progress_db):
         course = Course(
             topic="Progress Test Course",
             status="completed",
-            user_id="test-user-id",
+            user_id=TEST_USER_UUID,
         )
         session.add(course)
         await session.flush()
@@ -349,12 +359,12 @@ async def test_my_courses_multiple_courses_sorted(progress_db, progress_client):
         course_a = Course(
             topic="Course A",
             status="completed",
-            user_id="test-user-id",
+            user_id=TEST_USER_UUID,
         )
         course_b = Course(
             topic="Course B",
             status="completed",
-            user_id="test-user-id",
+            user_id=TEST_USER_UUID,
         )
         session.add_all([course_a, course_b])
         await session.flush()
@@ -418,7 +428,7 @@ async def progress_db_user_b():
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: "user-b"
+    app.dependency_overrides[get_current_user] = lambda: str(uuid.uuid4())
     yield session_factory
 
     async with engine.begin() as conn:
@@ -434,7 +444,7 @@ async def test_progress_per_user_isolation(progress_db, progress_client):
         course = Course(
             topic="Shared Course",
             status="completed",
-            user_id="test-user-id",
+            user_id=TEST_USER_UUID,
         )
         session.add(course)
         await session.flush()
@@ -462,14 +472,14 @@ async def test_progress_per_user_isolation(progress_db, progress_client):
     assert resp_a.json()["current_section"] == 2
 
     # Now switch to user B
-    app.dependency_overrides[get_current_user] = lambda: "user-b"
+    app.dependency_overrides[get_current_user] = lambda: str(uuid.uuid4())
 
     # user B should be denied access to user A's course
     resp_b = await progress_client.get(f"/api/courses/{course_id}/progress")
     assert resp_b.status_code == 403
 
     # Restore override
-    app.dependency_overrides[get_current_user] = lambda: "test-user-id"
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
 
 
 # ---------------------------------------------------------------------------

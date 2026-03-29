@@ -39,12 +39,15 @@ async def user_and_course(db_session):
         email="test@example.com",
         password_hash="hashed",
     )
+    db_session.add(user)
+    await db_session.commit()
+
     course = Course(
         id=uuid.uuid4(),
         topic="Test Course",
-        user_id=str(user.id),
+        user_id=user.id,
     )
-    db_session.add_all([user, course])
+    db_session.add(course)
     await db_session.commit()
     return user, course
 
