@@ -351,6 +351,7 @@ function HomePageInner() {
                     </select>
                   </div>
 
+                  <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <Label className="text-sm" htmlFor="oa-toggle">Open Access Only</Label>
                     <button
@@ -366,6 +367,8 @@ function HomePageInner() {
                         openAccessOnly ? 'translate-x-5' : 'translate-x-1'
                       }`} />
                     </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Only include papers with free full-text PDFs</p>
                   </div>
                 </div>
               )}
