@@ -142,8 +142,8 @@ jobs:
           IMAGE="${{ env.IMAGE_BASE }}/backend:${{ github.sha }}"
           kubectl set image deployment/backend-api backend-api=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
           kubectl set image deployment/backend-worker backend-worker=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
-          kubectl rollout status deployment/backend-api -n ${{ vars.GKE_NAMESPACE }} --timeout=180s
-          kubectl rollout status deployment/backend-worker -n ${{ vars.GKE_NAMESPACE }} --timeout=180s
+          kubectl rollout status deployment/backend-api -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/backend-worker -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
 
       # Run migrations if backend changed
       - name: Run migrations
@@ -165,7 +165,7 @@ jobs:
             kubectl apply -f -
 
           kubectl wait --for=condition=complete job/alembic-migrate \
-            -n ${NAMESPACE} --timeout=180s
+            -n ${NAMESPACE} --timeout=300s
 
       # Update frontend if changed
       - name: Deploy frontend
@@ -173,7 +173,7 @@ jobs:
         run: |
           IMAGE="${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}"
           kubectl set image deployment/frontend frontend=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
-          kubectl rollout status deployment/frontend -n ${{ vars.GKE_NAMESPACE }} --timeout=180s
+          kubectl rollout status deployment/frontend -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
 
       # Verify
       - name: Health check
