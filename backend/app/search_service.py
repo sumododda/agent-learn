@@ -6,6 +6,7 @@ Each adapter normalizes results into SearchResult dataclass.
 import logging
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 import httpx
@@ -423,6 +424,99 @@ async def _search_semantic_scholar(
             doi=ext_ids.get("DOI"),
             is_academic=True,
         ))
+    return results
+
+
+def _year_range_to_arxiv_date_filter(year_range: str) -> str:
+    """Convert year_range to arXiv submittedDate query fragment."""
+    if year_range == "all":
+        return ""
+    from datetime import date
+    current_year = date.today().year
+    years_back = {"5y": 5, "10y": 10, "20y": 20}
+    n = years_back.get(year_range, 5)
+    start_year = current_year - n
+    return f"+AND+submittedDate:[{start_year}01010000+TO+{current_year}12312359]"
+
+
+async def _search_arxiv(
+    query: str,
+    credentials: dict,
+    max_results: int,
+    search_depth: str,
+    academic_options: dict | None = None,
+) -> list[SearchResult]:
+    opts = academic_options or {}
+    search_query = f"all:{query}"
+    date_filter = _year_range_to_arxiv_date_filter(opts.get("year_range", "all"))
+    if date_filter:
+        search_query += date_filter
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "http://export.arxiv.org/api/query",
+            params={
+                "search_query": search_query,
+                "start": 0,
+                "max_results": min(max_results, 100),
+                "sortBy": "relevance",
+                "sortOrder": "descending",
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "arxiv": "http://arxiv.org/schemas/atom",
+    }
+    root = ET.fromstring(resp.text)
+    results = []
+
+    for entry in root.findall("atom:entry", ns):
+        title_el = entry.find("atom:title", ns)
+        summary_el = entry.find("atom:summary", ns)
+        title = " ".join((title_el.text or "").split()) if title_el is not None else ""
+        abstract = " ".join((summary_el.text or "").split()) if summary_el is not None else ""
+        if not abstract:
+            continue
+
+        authors = []
+        for author_el in entry.findall("atom:author", ns):
+            name_el = author_el.find("atom:name", ns)
+            if name_el is not None and name_el.text:
+                authors.append(name_el.text)
+
+        published_el = entry.find("atom:published", ns)
+        year = None
+        if published_el is not None and published_el.text:
+            year = int(published_el.text[:4])
+
+        doi_el = entry.find("arxiv:doi", ns)
+        doi = doi_el.text if doi_el is not None else None
+
+        url = ""
+        for link_el in entry.findall("atom:link", ns):
+            if link_el.get("rel") == "alternate":
+                url = link_el.get("href", "")
+                break
+        if not url:
+            id_el = entry.find("atom:id", ns)
+            url = id_el.text if id_el is not None else ""
+
+        results.append(SearchResult(
+            title=title,
+            url=url,
+            content=abstract,
+            score=0.0,
+            authors=authors,
+            year=year,
+            venue="arXiv",
+            citation_count=None,
+            doi=doi,
+            is_academic=True,
+        ))
+
     return results
 
 
