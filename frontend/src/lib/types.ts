@@ -28,6 +28,7 @@ export interface Course {
   status: string;
   sections: Section[];
   ungrounded: boolean;
+  academic_search: { enabled: boolean } | null;
   pipeline_status: PipelineStatus | null;
 }
 
