@@ -145,10 +145,11 @@ async def _heartbeat_loop(job_id: uuid.UUID, stop_event: asyncio.Event) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None]:
-    """Read ProviderConfig + UserKeySalt, decrypt, and return (creds, search_creds).
+async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None, dict[str, dict]]:
+    """Read ProviderConfig + UserKeySalt, decrypt, and return (creds, search_creds, academic_creds).
 
-    Returns a tuple of (llm_credentials_dict, search_credentials_dict_or_None).
+    Returns a 3-tuple of (llm_credentials_dict, search_credentials_dict_or_None,
+    academic_credentials_dict).
     """
     pepper = settings.ENCRYPTION_PEPPER.encode()
 
@@ -189,7 +190,25 @@ async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None]:
                     decrypt_credentials(key, search_row.encrypted_credentials)
                 )
 
-    return creds, search_creds
+        # Fetch academic provider configs if academic search enabled
+        academic_creds: dict[str, dict] = {}
+        academic_config = job.config.get("academic_search", {})
+        if academic_config.get("enabled"):
+            academic_result = await session.execute(
+                select(ProviderConfig).where(
+                    ProviderConfig.user_id == job.user_id,
+                    ProviderConfig.provider.like("academic:%"),
+                )
+            )
+            for ac in academic_result.scalars().all():
+                provider_name = ac.provider.removeprefix("academic:")
+                try:
+                    ac_creds = json.loads(decrypt_credentials(key, ac.encrypted_credentials))
+                    academic_creds[provider_name] = ac_creds
+                except Exception as e:
+                    logger.warning("Failed to decrypt academic provider %s: %s", ac.provider, e)
+
+    return creds, search_creds, academic_creds
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +223,7 @@ async def process_job(job: PipelineJob, shutdown_event: asyncio.Event) -> None:
 
     try:
         # Resolve credentials
-        creds, search_creds = await _resolve_credentials(job)
+        creds, search_creds, academic_creds = await _resolve_credentials(job)
 
         # Mark job as running
         async with async_session() as session:
@@ -228,6 +247,8 @@ async def process_job(job: PipelineJob, shutdown_event: asyncio.Event) -> None:
             search_credentials=search_creds,
             shutdown_event=shutdown_event,
             user_id=str(job.user_id),
+            academic_credentials=academic_creds,
+            academic_options=job.config.get("academic_search"),
         )
 
         # If pipeline returned "pending" (graceful shutdown), set job back to pending
