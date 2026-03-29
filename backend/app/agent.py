@@ -60,6 +60,12 @@ class EvidenceCardItem(BaseModel):
     confidence: float
     caveat: str | None = None
     explanation: str
+    # Academic metadata
+    is_academic: bool = False
+    academic_authors: str | None = None
+    academic_year: int | None = None
+    academic_venue: str | None = None
+    academic_doi: str | None = None
 
 
 class EvidenceCardSet(BaseModel):
@@ -230,6 +236,15 @@ Your task:
      - Below 0.5: speculative, contradicted, or poorly sourced
    - caveat: any important caveat, limitation, or condition (null if none)
    - explanation: brief explanation of why this claim matters for the section
+
+ACADEMIC SOURCE DETECTION:
+Some search results come from academic papers and will have titles prefixed with [ACADEMIC] or URLs from academic repositories (arxiv.org, doi.org, semanticscholar.org, etc.). For evidence cards extracted from these academic sources, set the following additional fields:
+   - is_academic: True
+   - academic_authors: the author(s) as a string, e.g. "Smith, J., Doe, A., & Lee, K."
+   - academic_year: the publication year as an integer (e.g. 2023), or null if unknown
+   - academic_venue: the journal or conference name (e.g. "Nature", "NeurIPS 2023"), or null if unknown
+   - academic_doi: the DOI URL if available (e.g. "https://doi.org/10.1234/example"), or null if unknown
+For non-academic sources, set is_academic to False and leave the academic_* fields as null.
 
 Guidelines:
 - Produce one card per distinct factual claim — do NOT merge multiple claims into one card
