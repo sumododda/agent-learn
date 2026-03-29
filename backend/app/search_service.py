@@ -48,7 +48,7 @@ ACADEMIC_SEARCH_PROVIDERS = {
     "semantic_scholar": {
         "name": "Semantic Scholar",
         "fields": [
-            {"key": "api_key", "label": "API Key (optional)", "type": "password", "required": False, "secret": True},
+            {"key": "api_key", "label": "API Key (optional, request at semanticscholar.org/product/api)", "type": "password", "required": False, "secret": True},
         ],
     },
     "arxiv": {
