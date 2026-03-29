@@ -12,9 +12,12 @@ Graceful shutdown on SIGTERM/SIGINT, stale-job recovery every ~60 s.
 import asyncio
 import json
 import logging
+import os
 import signal
 import uuid
 from datetime import datetime, timezone
+
+from aiohttp import web
 
 from sqlalchemy import select, text, update
 
@@ -293,6 +296,28 @@ async def process_job(job: PipelineJob, shutdown_event: asyncio.Event) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Health check server (Cloud Run requires HTTP health probes)
+# ---------------------------------------------------------------------------
+
+
+async def _health_handler(request: web.Request) -> web.Response:
+    return web.json_response({"status": "ok"})
+
+
+async def start_health_server(port: int | None = None) -> tuple[web.AppRunner, web.TCPSite]:
+    """Start a minimal HTTP health server for Cloud Run probes."""
+    app = web.Application()
+    app.router.add_get("/", _health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = port or int(os.environ.get("PORT", "8080"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health server listening on port %d", port)
+    return runner, site
+
+
+# ---------------------------------------------------------------------------
 # Main worker loop
 # ---------------------------------------------------------------------------
 
@@ -301,6 +326,9 @@ async def run_worker() -> None:
     """Main worker loop: claim jobs, process them, handle shutdown."""
     worker_id = f"worker-{uuid.uuid4().hex[:8]}"
     shutdown_event = asyncio.Event()
+
+    # Start health check server for Cloud Run
+    health_runner, _health_site = await start_health_server()
 
     loop = asyncio.get_running_loop()
 
@@ -364,6 +392,7 @@ async def run_worker() -> None:
         iteration += 1
 
     logger.info("Worker %s shutting down", worker_id)
+    await health_runner.cleanup()
 
 
 # ---------------------------------------------------------------------------

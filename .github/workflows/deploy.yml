@@ -1,15 +1,20 @@
-name: Build and Deploy
+name: CI/CD
 
 on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
 
 jobs:
-  # ── Detect which folders changed ──────────────────────────────────
+  # ── Detect which folders changed ────────────────────────────────
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
@@ -29,44 +34,54 @@ jobs:
               - 'frontend/**'
               - 'deploy/Dockerfile.frontend'
 
-  # ── Build Backend ─────────────────────────────────────────────────
+  # ── Build Backend ───────────────────────────────────────────────
   build-backend:
     name: Build Backend
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
     steps:
       - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/backend
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
 
       - uses: docker/build-push-action@v7
         with:
           context: ./backend
           file: ./deploy/Dockerfile.backend
           push: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/agentlearn-backend:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/agentlearn-backend:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  # ── Build Frontend ────────────────────────────────────────────────
+  # ── Build Frontend ──────────────────────────────────────────────
   build-frontend:
     name: Build Frontend
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
     steps:
       - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
         with:
@@ -74,48 +89,96 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/frontend
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
       - uses: docker/build-push-action@v7
         with:
           context: ./frontend
           file: ./deploy/Dockerfile.frontend
           push: true
+          tags: ${{ steps.meta.outputs.tags }}
           build-args: |
-            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ secrets.TURNSTILE_SITE_KEY }}
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/agentlearn-frontend:latest
+            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+            INTERNAL_API_URL=${{ vars.INTERNAL_API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  # ── Deploy on self-hosted runner ──────────────────────────────────
+  # ── Deploy to GKE ──────────────────────────────────────────────
   deploy:
-    name: Deploy
+    name: Deploy to GKE
     needs: [changes, build-backend, build-frontend]
-    if: |
+    if: >-
       always() && !failure() && !cancelled() &&
-      (needs.changes.outputs.backend == 'true' ||
-       needs.changes.outputs.frontend == 'true')
-    runs-on: [self-hosted, agentlearn]
+      (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true')
+    runs-on: ubuntu-latest
+    environment: production
+
     steps:
-      - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - uses: actions/checkout@v6
 
-      - name: Pull and restart
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - uses: google-github-actions/get-gke-credentials@v3
+        with:
+          cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
+          location: ${{ vars.GCP_REGION }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      # Update backend if changed
+      - name: Deploy backend
+        if: needs.changes.outputs.backend == 'true'
         run: |
-          cd /home/agent/stacks/agentlearn
-          docker compose pull --ignore-pull-failures
-          docker compose up -d --remove-orphans
-          docker compose run --rm migration
-          docker image prune -f
+          IMAGE="${{ env.IMAGE_BASE }}/backend:${{ github.sha }}"
+          kubectl set image deployment/backend-api backend-api=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
+          kubectl set image deployment/backend-worker backend-worker=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
+          kubectl rollout status deployment/backend-api -n ${{ vars.GKE_NAMESPACE }} --timeout=180s
+          kubectl rollout status deployment/backend-worker -n ${{ vars.GKE_NAMESPACE }} --timeout=180s
 
+      # Run migrations if backend changed
+      - name: Run migrations
+        if: needs.changes.outputs.backend == 'true'
+        run: |
+          IMAGE="${{ env.IMAGE_BASE }}/backend:${{ github.sha }}"
+          NAMESPACE="${{ vars.GKE_NAMESPACE }}"
+
+          # Delete previous job if exists
+          kubectl delete job alembic-migrate -n ${NAMESPACE} --ignore-not-found
+
+          # Create and run migration job with the new image
+          kubectl create job alembic-migrate \
+            --from=cronjob/placeholder --dry-run=client -o yaml 2>/dev/null || true
+
+          # Apply migration job with updated image
+          cat deploy/k8s/migration-job.yaml | \
+            sed "s|image:.*|image: ${IMAGE}|" | \
+            kubectl apply -f -
+
+          kubectl wait --for=condition=complete job/alembic-migrate \
+            -n ${NAMESPACE} --timeout=180s
+
+      # Update frontend if changed
+      - name: Deploy frontend
+        if: needs.changes.outputs.frontend == 'true'
+        run: |
+          IMAGE="${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}"
+          kubectl set image deployment/frontend frontend=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
+          kubectl rollout status deployment/frontend -n ${{ vars.GKE_NAMESPACE }} --timeout=180s
+
+      # Verify
       - name: Health check
         run: |
-          echo "Waiting for backend to be healthy..."
-          for i in $(seq 1 30); do
-            if docker inspect --format='{{.State.Health.Status}}' agentlearn-backend 2>/dev/null | grep -q healthy; then
-              echo "backend is healthy!"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Health check timed out"
-          docker logs agentlearn-backend --tail 20
-          exit 1
+          kubectl get pods -n ${{ vars.GKE_NAMESPACE }}
+          echo "---"
+          kubectl exec deployment/frontend -n ${{ vars.GKE_NAMESPACE }} -- \
+            wget -qO- http://backend-api:8000/api/health || true

@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: us-central1-docker.pkg.dev/agent-learn-490805/agent-learn/frontend:latest
+          image: us-central1-docker.pkg.dev/agent-learn-491717/agent-learn/frontend:v3
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
