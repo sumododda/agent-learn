@@ -392,6 +392,15 @@ def _year_range_to_s2_param(year_range: str) -> str | None:
     return f"{current_year - n}-"
 
 
+import asyncio as _asyncio
+import time as _time
+
+# Semantic Scholar: track last request time for rate limiting
+# Authenticated: 1 req/s for /paper/search
+# Unauthenticated: 5,000 req/5min shared pool — we self-limit to ~1 req/3s to be safe
+_s2_last_request: float = 0.0
+
+
 async def _search_semantic_scholar(
     query: str,
     credentials: dict,
@@ -399,6 +408,7 @@ async def _search_semantic_scholar(
     search_depth: str,
     academic_options: dict | None = None,
 ) -> list[SearchResult]:
+    global _s2_last_request
     opts = academic_options or {}
     params: dict = {
         "query": query,
@@ -417,7 +427,13 @@ async def _search_semantic_scholar(
     if api_key:
         headers["x-api-key"] = api_key
 
-    import asyncio as _asyncio
+    # Rate limit: 1 req/s with key, 1 req/3s without (shared pool is unreliable)
+    min_interval = 1.0 if api_key else 3.0
+    now = _time.monotonic()
+    wait = min_interval - (now - _s2_last_request)
+    if wait > 0:
+        await _asyncio.sleep(wait)
+    _s2_last_request = _time.monotonic()
 
     data: dict = {}
     async with httpx.AsyncClient() as client:
@@ -429,9 +445,10 @@ async def _search_semantic_scholar(
                 timeout=30.0,
             )
             if resp.status_code == 429:
-                delay = (attempt + 1) * 2
-                logger.info("[semantic_scholar] Rate limited, retrying in %ds...", delay)
+                delay = 2 ** attempt * (1.0 if api_key else 3.0)
+                logger.info("[semantic_scholar] 429 rate limited, retrying in %.0fs (attempt %d/3)...", delay, attempt + 1)
                 await _asyncio.sleep(delay)
+                _s2_last_request = _time.monotonic()
                 continue
             resp.raise_for_status()
             data = resp.json()
@@ -473,6 +490,10 @@ def _year_range_to_arxiv_date_filter(year_range: str) -> str:
     return f"+AND+submittedDate:[{start_year}01010000+TO+{current_year}12312359]"
 
 
+# arXiv: hard limit 1 request per 3 seconds, single connection
+_arxiv_last_request: float = 0.0
+
+
 async def _search_arxiv(
     query: str,
     credentials: dict,
@@ -480,11 +501,19 @@ async def _search_arxiv(
     search_depth: str,
     academic_options: dict | None = None,
 ) -> list[SearchResult]:
+    global _arxiv_last_request
     opts = academic_options or {}
     search_query = f"all:{query}"
     date_filter = _year_range_to_arxiv_date_filter(opts.get("year_range", "all"))
     if date_filter:
         search_query += date_filter
+
+    # Enforce 3-second delay between arXiv requests (hard requirement)
+    now = _time.monotonic()
+    wait = 3.0 - (now - _arxiv_last_request)
+    if wait > 0:
+        await _asyncio.sleep(wait)
+    _arxiv_last_request = _time.monotonic()
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(
@@ -682,22 +711,34 @@ async def academic_search(
             logger.warning("[academic_search] %s failed for '%s': %s", name, query[:60], e)
             return []
 
-    # S2 + OpenAlex in parallel, arXiv sequential (rate limit)
-    parallel_providers = {}
-    arxiv_creds = None
+    # Rate-limited providers (S2, arXiv) run sequentially via their internal timers.
+    # OpenAlex has no strict per-request limit — runs in parallel with the rest.
+    # Strategy: kick off OpenAlex in background, run S2 + arXiv sequentially, merge.
+    rate_limited = {}  # sequential: semantic_scholar, arxiv
+    parallel = {}      # can run concurrently: openalex
     for name, creds in academic_credentials.items():
-        if name == "arxiv":
-            arxiv_creds = creds
-        elif name in _ACADEMIC_ADAPTERS:
-            parallel_providers[name] = creds
+        if name not in _ACADEMIC_ADAPTERS:
+            continue
+        if name == "openalex":
+            parallel[name] = creds
+        else:
+            rate_limited[name] = creds
 
-    tasks = [_run_provider(name, creds) for name, creds in parallel_providers.items()]
-    parallel_results = await asyncio.gather(*tasks)
-    all_results = [r for batch in parallel_results for r in batch]
+    # Start OpenAlex in parallel (if configured)
+    parallel_tasks = [_run_provider(name, creds) for name, creds in parallel.items()]
+    openalex_future = asyncio.gather(*parallel_tasks) if parallel_tasks else None
 
-    if arxiv_creds is not None:
-        arxiv_results = await _run_provider("arxiv", arxiv_creds)
-        all_results.extend(arxiv_results)
+    # Run rate-limited providers sequentially (their adapters enforce timing)
+    all_results: list[SearchResult] = []
+    for name, creds in rate_limited.items():
+        results = await _run_provider(name, creds)
+        all_results.extend(results)
+
+    # Collect OpenAlex results
+    if openalex_future is not None:
+        parallel_results = await openalex_future
+        for batch in parallel_results:
+            all_results.extend(batch)
 
     return deduplicate_academic_results(all_results)
 
