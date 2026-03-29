@@ -72,6 +72,24 @@ class EvidenceCardSet(BaseModel):
     cards: list[EvidenceCardItem]
 
 
+# --- Structured output schemas for paper reader ---
+
+
+class DeepFinding(BaseModel):
+    claim: str
+    supporting_text: str
+    paper_section: str
+    data_point: str | None = None
+    finding_type: str  # "quantitative_result" | "methodology" | "theoretical" | "observation"
+    answers_question: str
+
+
+class PaperReading(BaseModel):
+    findings: list[DeepFinding]
+    methodology_summary: str
+    limitations: list[str]
+
+
 # --- Structured output schemas for verifier ---
 
 
@@ -319,6 +337,26 @@ Output a structured VerificationResult with:
 - needs_more_research: True if coverage is insufficient (< half questions answered)
 - gaps: list of unanswered questions or weak areas that need more research"""
 
+PAPER_READER_PROMPT = """You are a research paper reader. You receive sections of an academic paper
+and research questions. Your job is to extract specific, concrete findings from the paper that
+answer the research questions.
+
+RULES:
+- Extract 3-8 findings per paper, targeted to the provided research questions.
+- `supporting_text` MUST be a real passage from the provided paper text, not paraphrased.
+  Copy the relevant sentences exactly as they appear.
+- `data_point` is REQUIRED when the paper contains specific numbers, metrics, or benchmarks.
+  Example: "94.3% accuracy on MMLU", "3.2x speedup over baseline", "p < 0.001".
+- `finding_type` must be one of: "quantitative_result", "methodology", "theoretical", "observation".
+- `answers_question` must reference which research question this finding addresses.
+- `methodology_summary`: 2-3 sentences on how the research was conducted. Be specific about
+  models, datasets, and evaluation methods used.
+- `limitations`: only what the authors EXPLICITLY state as limitations. Do not invent limitations.
+  If no limitations are mentioned, return an empty list.
+
+Focus on what the abstract CANNOT tell you: specific numbers, methodology details, limitations,
+nuanced findings, and supporting evidence."""
+
 
 # --- Agent creators (langchain create_agent — no built-in tools) ---
 
@@ -356,6 +394,18 @@ def create_section_researcher(provider: str, model: str, credentials: dict, extr
         system_prompt=SECTION_RESEARCHER_PROMPT,
         response_format=ToolStrategy(EvidenceCardSet),
         name="agent-learn-section-researcher",
+    )
+
+
+def create_paper_reader(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
+    """Create a paper reader agent with structured PaperReading output."""
+    logger.info("[agent:paper_reader] Creating paper reader agent (model=%s)", model)
+    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
+    return create_agent(
+        model=llm,
+        system_prompt=PAPER_READER_PROMPT,
+        response_format=ToolStrategy(PaperReading),
+        name="agent-learn-paper-reader",
     )
 
 
