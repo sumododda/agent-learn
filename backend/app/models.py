@@ -111,6 +111,11 @@ class EvidenceCard(Base):
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     verified: Mapped[bool] = mapped_column(default=False)
     verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_academic: Mapped[bool] = mapped_column(default=False)
+    academic_authors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    academic_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    academic_venue: Mapped[str | None] = mapped_column(Text, nullable=True)
+    academic_doi: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     course: Mapped["Course"] = relationship(back_populates="evidence_cards")
