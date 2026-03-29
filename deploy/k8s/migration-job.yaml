@@ -15,17 +15,15 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: us-central1-docker.pkg.dev/agent-learn-490805/agent-learn/backend:latest
+          image: us-central1-docker.pkg.dev/agent-learn-491717/agent-learn/backend:v2
           imagePullPolicy: Always
-          command: ["alembic", "upgrade", "head"]
+          args: ["alembic", "upgrade", "head"]
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
                   key: postgres-password
-            - name: DATABASE_URL
-              value: "postgresql+asyncpg://agentlearn:$(POSTGRES_PASSWORD)@postgres:5432/agentlearn"
             - name: JWT_SECRET_KEY
               valueFrom:
                 secretKeyRef:

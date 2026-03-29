@@ -12,13 +12,6 @@ spec:
     - host: learn.blekcipher.com
       http:
         paths:
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: backend-api
-                port:
-                  number: 8000
           - path: /
             pathType: Prefix
             backend:
