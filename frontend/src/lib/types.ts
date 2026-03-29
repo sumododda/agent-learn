@@ -46,6 +46,11 @@ export interface EvidenceCard {
   explanation: string;
   verified: boolean;
   verification_note: string | null;
+  is_academic: boolean;
+  academic_authors: string | null;
+  academic_year: number | null;
+  academic_venue: string | null;
+  academic_doi: string | null;
 }
 
 export interface BlackboardState {

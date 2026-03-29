@@ -653,7 +653,11 @@ function AcademicProviderSection({
         if (formValues[field.key]) credentials[field.key] = formValues[field.key];
       }
       if (isConfigured) {
-        await updateAcademicProvider(selectedProvider, { provider: selectedProvider, credentials }, token);
+        const payload =
+          Object.keys(credentials).length > 0
+            ? { provider: selectedProvider, credentials }
+            : { provider: selectedProvider };
+        await updateAcademicProvider(selectedProvider, payload, token);
       } else {
         await saveAcademicProvider({ provider: selectedProvider, credentials }, token);
       }

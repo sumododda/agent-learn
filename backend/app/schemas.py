@@ -114,6 +114,11 @@ class EvidenceCardResponse(BaseModel):
     explanation: str
     verified: bool = False
     verification_note: str | None = None
+    is_academic: bool = False
+    academic_authors: str | None = None
+    academic_year: int | None = None
+    academic_venue: str | None = None
+    academic_doi: str | None = None
     created_at: datetime
 
 

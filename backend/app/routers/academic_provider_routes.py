@@ -254,4 +254,4 @@ async def test_academic_provider(
         raise
     except Exception as e:
         logger.warning("Academic credential validation failed for %s: %s", provider, e)
-        raise HTTPException(400, f"Academic credential validation failed: {e}")
+        raise HTTPException(400, "Academic credential validation failed")

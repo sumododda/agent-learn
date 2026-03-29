@@ -16,6 +16,11 @@ def _mock_get_user_search_provider():
     return AsyncMock(return_value=("", {}))
 
 
+def _mock_get_user_academic_credentials():
+    """Return a coroutine mock that resolves to built-in academic providers."""
+    return AsyncMock(return_value={"semantic_scholar": {}, "arxiv": {}})
+
+
 # ---------------------------------------------------------------------------
 # Helper: create a course with sections directly in the DB
 # ---------------------------------------------------------------------------
@@ -102,6 +107,39 @@ async def test_create_course_ungrounded(client, mock_outline_with_briefs):
     # the background task updates these later.
     assert data["status"] == "researching"
     assert data["ungrounded"] is False
+
+
+@pytest.mark.anyio
+async def test_create_course_passes_academic_search_context(client, mock_outline_with_briefs):
+    mock_return = (mock_outline_with_briefs, False)
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
+        patch("app.routers.courses._get_user_academic_credentials", new_callable=_mock_get_user_academic_credentials),
+        patch("app.routers.courses.generate_outline", new_callable=AsyncMock, return_value=mock_return) as mock_generate_outline,
+    ):
+        response = await client.post(
+            "/api/courses",
+            json={
+                "topic": "Python basics",
+                "academic_search": {
+                    "enabled": True,
+                    "year_range": "10y",
+                    "min_citations": 25,
+                    "open_access_only": True,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_generate_outline.await_args.kwargs
+    assert call_kwargs["academic_credentials"] == {"semantic_scholar": {}, "arxiv": {}}
+    assert call_kwargs["academic_options"] == {
+        "enabled": True,
+        "year_range": "10y",
+        "min_citations": 25,
+        "open_access_only": True,
+    }
 
 
 @pytest.mark.anyio

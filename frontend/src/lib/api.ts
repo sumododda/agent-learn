@@ -494,7 +494,7 @@ export async function saveAcademicProvider(
 
 export async function updateAcademicProvider(
   provider: string,
-  data: { provider: string; credentials: Record<string, string>; extra_fields?: Record<string, string> },
+  data: { provider: string; credentials?: Record<string, string>; extra_fields?: Record<string, string> },
   token?: string | null
 ): Promise<ProviderConfig> {
   const res = await fetch(`${API_BASE}/api/academic-providers/${provider}`, {
