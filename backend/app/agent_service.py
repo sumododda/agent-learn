@@ -712,6 +712,11 @@ async def save_evidence_cards(
             confidence=card.confidence,
             caveat=card.caveat,
             explanation=card.explanation,
+            is_academic=getattr(card, "is_academic", False),
+            academic_authors=getattr(card, "academic_authors", None),
+            academic_year=getattr(card, "academic_year", None),
+            academic_venue=getattr(card, "academic_venue", None),
+            academic_doi=getattr(card, "academic_doi", None),
         )
         for card in cards
     ]
