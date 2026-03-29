@@ -229,15 +229,29 @@ async def discover_topic(
             except Exception as e:
                 logger.warning("[discover] Academic search failed for query '%s': %s", q[:60], e)
         academic_results = deduplicate_academic_results(academic_results)
-        for r in academic_results:
+        # Sort academic results by citation count (highest first)
+        academic_results.sort(key=lambda r: r.citation_count or 0, reverse=True)
+        # Take top 10 academic results with full metadata
+        for r in academic_results[:10]:
             all_search_results.append({
                 "title": f"[ACADEMIC] {r.title}",
                 "url": r.url,
                 "content": r.content,
                 "score": r.score,
+                "authors": ", ".join(r.authors) if r.authors else None,
+                "year": r.year,
+                "venue": r.venue,
+                "citations": r.citation_count,
+                "doi": r.doi,
             })
         if academic_results:
             logger.info("[discover] Added %d academic results to discovery", len(academic_results))
+
+    # Cap total results: academic (already limited to 10) + top 15 web by score
+    web_results = [r for r in all_search_results if not str(r.get("title", "")).startswith("[ACADEMIC]")]
+    academic_in_list = [r for r in all_search_results if str(r.get("title", "")).startswith("[ACADEMIC]")]
+    web_results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    all_search_results = academic_in_list + web_results[:15]
 
     if not all_search_results:
         logger.error("[discover] All %d searches failed — no results to synthesize", len(queries))
