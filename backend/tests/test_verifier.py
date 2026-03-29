@@ -23,7 +23,10 @@ from app.agent import (
     EvidenceCardItem,
     EvidenceCardSet,
 )
-from app.models import Base, Course, EvidenceCard, ResearchBrief
+from app.models import Base, Course, EvidenceCard, ResearchBrief, User
+
+# Deterministic test user UUID for verifier tests
+_TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-ffffffffffff")
 
 
 def _mock_structured_agent(structured_response):
@@ -267,8 +270,12 @@ async def test_verify_evidence_good_set(setup_db, sample_research_brief, good_ve
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        # Create course and cards in DB
-        course = Course(topic="Python", status="researching")
+        # Create user and course in DB
+        user = User(id=_TEST_USER_UUID, email="verify1@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -340,7 +347,11 @@ async def test_verify_evidence_bad_set(setup_db, sample_research_brief, bad_veri
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="Python", status="researching")
+        user = User(id=_TEST_USER_UUID, email="verify2@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -405,7 +416,11 @@ async def test_verify_evidence_handles_dict_result(setup_db):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="Python", status="researching")
+        user = User(id=_TEST_USER_UUID, email="verify3@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -467,7 +482,11 @@ async def test_verify_evidence_skips_out_of_range_index(setup_db):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="Python", status="researching")
+        user = User(id=_TEST_USER_UUID, email="verify4@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="Python", status="researching", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 

@@ -27,7 +27,10 @@ from app.agent import (
     ResearchBriefItem,
     VerificationResult,
 )
-from app.models import Base, Blackboard, Course, EvidenceCard, ResearchBrief, Section
+from app.models import Base, Blackboard, Course, EvidenceCard, ResearchBrief, Section, User
+
+# Deterministic test user UUID for error-handling tests
+_TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-dddddddddddd")
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +53,12 @@ async def error_session():
         await conn.run_sync(Base.metadata.create_all)
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Create a User row so FK constraints are satisfied
+    async with session_factory() as session:
+        user = User(id=_TEST_USER_UUID, email="error@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
 
     async with session_factory() as session:
         yield session
@@ -110,9 +119,11 @@ async def test_tavily_failure_creates_ungrounded_course(setup_db, client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["ungrounded"] is True
-    assert data["status"] == "outline_ready"
-    assert len(data["sections"]) == 2
+    # Course creation now returns immediately with status="researching";
+    # the background task eventually sets ungrounded and outline_ready.
+    assert data["status"] == "researching"
+    assert data["ungrounded"] is False  # immediate response before background task runs
+    assert data["sections"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +134,7 @@ async def test_tavily_failure_creates_ungrounded_course(setup_db, client):
 @pytest.mark.anyio
 async def test_all_cards_rejected_writer_still_runs(setup_db, error_session):
     """When verifier rejects all cards, writer still runs (with all cards passed)."""
-    course = Course(topic="Error Test", status="outline_ready")
+    course = Course(topic="Error Test", status="outline_ready", user_id=_TEST_USER_UUID)
     error_session.add(course)
     await error_session.commit()
 
@@ -245,7 +256,11 @@ async def test_bad_blackboard_update_doesnt_corrupt(setup_db):
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        course = Course(topic="BB Error Test", status="writing")
+        user = User(id=_TEST_USER_UUID, email="bberror@test.com", password_hash="hashed")
+        session.add(user)
+        await session.commit()
+
+        course = Course(topic="BB Error Test", status="writing", user_id=_TEST_USER_UUID)
         session.add(course)
         await session.commit()
 
@@ -304,7 +319,7 @@ async def test_bad_blackboard_update_doesnt_corrupt(setup_db):
 @pytest.mark.anyio
 async def test_pipeline_unhandled_error_sets_failed(setup_db, error_session):
     """An unrecoverable error in the pipeline sets course.status='failed'."""
-    course = Course(topic="Crash Test", status="outline_ready")
+    course = Course(topic="Crash Test", status="outline_ready", user_id=_TEST_USER_UUID)
     error_session.add(course)
     await error_session.commit()
 
@@ -388,7 +403,7 @@ def test_extract_citations_large_numbers_ignored():
 @pytest.mark.anyio
 async def test_pipeline_no_section_briefs(setup_db, error_session):
     """Pipeline handles course with no section-level research briefs."""
-    course = Course(topic="No Briefs", status="outline_ready")
+    course = Course(topic="No Briefs", status="outline_ready", user_id=_TEST_USER_UUID)
     error_session.add(course)
     await error_session.commit()
 

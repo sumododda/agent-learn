@@ -931,9 +931,10 @@ async def get_progress(
     if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
+    user_uuid = uuid.UUID(user_id)
     result = await session.execute(
         select(LearnerProgress).where(
-            LearnerProgress.user_id == user_id,
+            LearnerProgress.user_id == user_uuid,
             LearnerProgress.course_id == course_id,
         )
     )
@@ -967,9 +968,10 @@ async def update_progress(
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
 
     # Fetch existing progress or create new
+    user_uuid = uuid.UUID(user_id)
     result = await session.execute(
         select(LearnerProgress).where(
-            LearnerProgress.user_id == user_id,
+            LearnerProgress.user_id == user_uuid,
             LearnerProgress.course_id == course_id,
         )
     )

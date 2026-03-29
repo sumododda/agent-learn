@@ -81,7 +81,7 @@ async def seeded(pipeline_db):
     session.add(user)
     await session.commit()
 
-    course = Course(topic="Python Basics", status="outline_ready")
+    course = Course(topic="Python Basics", status="outline_ready", user_id=user.id)
     session.add(course)
     await session.commit()
 
@@ -526,7 +526,7 @@ async def test_no_sections_returns_failed(setup_db, pipeline_db):
     session.add(user)
     await session.commit()
 
-    course = Course(topic="Empty Course", status="outline_ready")
+    course = Course(topic="Empty Course", status="outline_ready", user_id=user.id)
     session.add(course)
     await session.commit()
 

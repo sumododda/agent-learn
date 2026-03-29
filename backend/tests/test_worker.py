@@ -251,10 +251,11 @@ async def test_resolve_credentials(seeded):
     with patch("app.worker.async_session", return_value=_FakeSessionCtx(session)):
         with patch("app.worker.settings") as mock_settings:
             mock_settings.ENCRYPTION_PEPPER = pepper.decode() if isinstance(pepper, bytes) else pepper
-            creds, search_creds = await _resolve_credentials(job)
+            creds, search_creds, academic_creds = await _resolve_credentials(job)
 
     assert creds == llm_creds
     assert search_creds is None
+    assert academic_creds == {}
 
 
 @pytest.mark.asyncio
@@ -319,10 +320,11 @@ async def test_resolve_credentials_with_search(seeded):
     with patch("app.worker.async_session", return_value=_FakeSessionCtx(session)):
         with patch("app.worker.settings") as mock_settings:
             mock_settings.ENCRYPTION_PEPPER = pepper.decode() if isinstance(pepper, bytes) else pepper
-            creds, s_creds = await _resolve_credentials(job)
+            creds, s_creds, academic_creds = await _resolve_credentials(job)
 
     assert creds == llm_creds
     assert s_creds == search_creds
+    assert academic_creds == {}
 
 
 @pytest.mark.asyncio
@@ -377,10 +379,11 @@ async def test_resolve_credentials_with_duckduckgo_search():
     with patch("app.worker.async_session", return_value=_FakeSessionCtx(fake_session)):
         with patch("app.worker.settings") as mock_settings:
             mock_settings.ENCRYPTION_PEPPER = pepper.decode() if isinstance(pepper, bytes) else pepper
-            creds, s_creds = await _resolve_credentials(job)
+            creds, s_creds, academic_creds = await _resolve_credentials(job)
 
     assert creds == llm_creds
     assert s_creds == {}
+    assert academic_creds == {}
     assert fake_session.execute.await_count == 2
 
 
