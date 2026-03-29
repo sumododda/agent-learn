@@ -194,6 +194,10 @@ async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None, dic
         academic_creds: dict[str, dict] = {}
         academic_config = job.config.get("academic_search", {})
         if academic_config.get("enabled"):
+            # Always include free providers (no API key required)
+            academic_creds["semantic_scholar"] = {}
+            academic_creds["arxiv"] = {}
+            # Layer on user-configured providers (may override S2 with an API key, add OpenAlex, etc.)
             academic_result = await session.execute(
                 select(ProviderConfig).where(
                     ProviderConfig.user_id == job.user_id,
