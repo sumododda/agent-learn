@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { createCourse, getProviders, getAcademicProviders } from '@/lib/api';
+import { createCourse, getProviders } from '@/lib/api';
 import { Navbar } from '@/components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -63,8 +63,6 @@ function HomePageInner() {
   const [yearRange, setYearRange] = useState('5y');
   const [minCitations, setMinCitations] = useState(0);
   const [openAccessOnly, setOpenAccessOnly] = useState(false);
-  const [hasAcademicProviders, setHasAcademicProviders] = useState(false);
-
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
       setHasProvider(null);
@@ -73,17 +71,6 @@ function HomePageInner() {
     getToken().then((token) =>
       getProviders(token).then((providers) => setHasProvider(providers.length > 0))
     );
-  }, [isLoaded, isSignedIn, getToken]);
-
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn) return;
-    getToken().then((token) => {
-      if (token) {
-        getAcademicProviders(token).then(providers => {
-          setHasAcademicProviders(providers.length > 0);
-        }).catch(() => {});
-      }
-    });
   }, [isLoaded, isSignedIn, getToken]);
 
   function toggleStyle(id: string) {
@@ -323,12 +310,10 @@ function HomePageInner() {
                   id="research-toggle"
                   role="switch"
                   aria-checked={useResearchPapers}
-                  disabled={!hasAcademicProviders}
                   onClick={() => setUseResearchPapers(!useResearchPapers)}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                     useResearchPapers ? 'bg-primary' : 'bg-muted'
-                  } ${!hasAcademicProviders ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                  title={!hasAcademicProviders ? 'Configure academic search providers in Settings first' : ''}
+                  } cursor-pointer`}
                 >
                   <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
                     useResearchPapers ? 'translate-x-6' : 'translate-x-1'
