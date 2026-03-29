@@ -274,6 +274,11 @@ Guidelines:
 - Aim for 5-15 evidence cards depending on the richness of the search results
 - Do NOT fabricate claims — only extract what is present in the search results
 
+When deep paper readings ([DEEP-READ] entries) are provided, prefer them over abstract-based
+results for evidence cards. Deep readings contain verified passages from the actual papers.
+Set source_tier=1, is_academic=True, and confidence >= 0.9 for evidence cards derived from
+deep readings. Use the supporting_text as the passage field — it is a real quote from the paper.
+
 Output a structured EvidenceCardSet containing all extracted evidence cards."""
 
 EDITOR_PROMPT = """You are a course lesson editor. You receive a draft section, the course blackboard, evidence cards, and the section position in the course.
