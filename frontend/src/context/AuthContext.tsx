@@ -1,9 +1,12 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+// Refresh token when less than this many ms remain before expiry
+const REFRESH_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 interface AuthContextValue {
   getToken: () => Promise<string | null>;
@@ -40,24 +43,70 @@ function isTokenExpired(token: string): boolean {
   return payload.exp * 1000 <= Date.now() + 30_000;
 }
 
+function msUntilExpiry(token: string): number {
+  const payload = decodePayload(token);
+  if (!payload?.exp) return 0;
+  return payload.exp * 1000 - Date.now();
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [providerKeysLoaded, setProviderKeysLoaded] = useState(0);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Schedule a silent token refresh before it expires
+  const scheduleRefresh = useCallback((currentToken: string) => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    const remaining = msUntilExpiry(currentToken);
+    // Refresh when REFRESH_THRESHOLD_MS remains, but at least 10s from now
+    const delay = Math.max(remaining - REFRESH_THRESHOLD_MS, 10_000);
+    refreshTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+          },
+        });
+        if (res.ok) {
+          const data: { token: string } = await res.json();
+          localStorage.setItem('token', data.token);
+          setToken(data.token);
+          scheduleRefresh(data.token);
+        } else {
+          // Token rejected — force logout
+          localStorage.removeItem('token');
+          localStorage.removeItem('userEmail');
+          setToken(null);
+          setUserEmail(null);
+        }
+      } catch {
+        // Network error — retry in 30s
+        refreshTimer.current = setTimeout(() => {
+          const t = localStorage.getItem('token');
+          if (t && !isTokenExpired(t)) scheduleRefresh(t);
+        }, 30_000);
+      }
+    }, delay);
+  }, []);
 
   useEffect(() => {
     const stored = localStorage.getItem('token');
     if (stored && !isTokenExpired(stored)) {
       setToken(stored);
       setUserEmail(localStorage.getItem('userEmail'));
+      scheduleRefresh(stored);
     } else if (stored) {
       localStorage.removeItem('token');
       localStorage.removeItem('userEmail');
     }
     setIsLoaded(true);
-  }, []);
+    return () => { if (refreshTimer.current) clearTimeout(refreshTimer.current); };
+  }, [scheduleRefresh]);
 
   const getToken = useCallback(async (): Promise<string | null> => {
     let resolvedToken = token;
@@ -99,10 +148,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('userEmail', email);
     setToken(data.token);
     setUserEmail(email);
+    scheduleRefresh(data.token);
     if (typeof data.provider_keys_loaded === 'number') {
       setProviderKeysLoaded(data.provider_keys_loaded);
     }
-  }, []);
+  }, [scheduleRefresh]);
 
   const register = useCallback(async (email: string, password: string, turnstileToken: string): Promise<{ email: string; message: string }> => {
     const res = await fetch(`${API_BASE}/api/auth/register`, {
@@ -135,10 +185,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('userEmail', email);
     setToken(data.token);
     setUserEmail(email);
+    scheduleRefresh(data.token);
     if (typeof data.provider_keys_loaded === 'number') {
       setProviderKeysLoaded(data.provider_keys_loaded);
     }
-  }, []);
+  }, [scheduleRefresh]);
 
   const resendOtp = useCallback(async (email: string): Promise<{ message: string }> => {
     const res = await fetch(`${API_BASE}/api/auth/resend-otp`, {
@@ -184,6 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
     localStorage.removeItem('token');
     localStorage.removeItem('userEmail');
     setToken(null);
