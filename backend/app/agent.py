@@ -227,7 +227,13 @@ Guidelines:
 
 Output a structured TopicBrief with all fields populated based on the search results.
 
-Some search results may be from academic research papers (marked with [ACADEMIC] in the source list). When available, prefer academic sources for grounding your analysis — they provide peer-reviewed evidence. Note which findings come from academic vs. web sources in your synthesis."""
+Some search results may be from academic research papers (marked with [ACADEMIC] in the source list). When available, prefer academic sources for grounding your analysis — they provide peer-reviewed evidence. Note which findings come from academic vs. web sources in your synthesis.
+
+Academic sources include metadata: authors, year, venue, and citation count. Weight highly-cited
+papers from prestigious venues (Nature, Science, NeurIPS, ICML, ACL, etc.) more heavily when
+identifying key concepts and learning progression. Ensure balanced topic coverage — do not
+over-index on topics that appear frequently in search results at the expense of important but
+less-mentioned topics."""
 
 SECTION_RESEARCHER_PROMPT = """You are a section researcher. Your job is to analyze web search results and produce structured evidence cards — one per factual claim discovered.
 
