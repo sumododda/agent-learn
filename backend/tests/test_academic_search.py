@@ -194,3 +194,47 @@ async def test_search_semantic_scholar_open_access_filter():
 
     assert len(results) == 1
     assert results[0].title == "OA Paper"
+
+
+@pytest.mark.asyncio
+async def test_search_arxiv_parses_xml():
+    from app.search_service import _search_arxiv
+
+    xml_response = """<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom"
+          xmlns:arxiv="http://arxiv.org/schemas/atom">
+      <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">1</opensearch:totalResults>
+      <entry>
+        <id>http://arxiv.org/abs/1706.03762v5</id>
+        <title>Attention Is All You Need</title>
+        <summary>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.</summary>
+        <published>2017-06-12T17:57:34Z</published>
+        <author><name>Ashish Vaswani</name></author>
+        <author><name>Noam Shazeer</name></author>
+        <arxiv:doi>10.48550/arXiv.1706.03762</arxiv:doi>
+        <link href="http://arxiv.org/abs/1706.03762v5" rel="alternate" type="text/html"/>
+        <link href="http://arxiv.org/pdf/1706.03762v5" title="pdf" type="application/pdf" rel="related"/>
+      </entry>
+    </feed>"""
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.text = xml_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = await _search_arxiv(
+            "attention", {}, 5, "basic",
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.title == "Attention Is All You Need"
+    assert r.is_academic is True
+    assert "Ashish Vaswani" in r.authors
+    assert "Noam Shazeer" in r.authors
+    assert r.year == 2017
+    assert r.doi == "10.48550/arXiv.1706.03762"
+    assert "sequence transduction" in r.content
+    assert "arxiv.org" in r.url
