@@ -177,7 +177,9 @@ async def create_course(
 
     async def emit(event_type: str, data: dict) -> None:
         payload = {"event": event_type, "data": data}
-        _feed_events[course_id_str].append(payload)
+        buf = _feed_events.get(course_id_str)
+        if buf is not None:
+            buf.append(payload)
         await queue.put(payload)
 
     async def run_discovery() -> None:
@@ -207,7 +209,10 @@ async def create_course(
                 result = await sess.execute(
                     select(Course).where(Course.id == course_id)
                 )
-                db_course = result.scalar_one()
+                db_course = result.scalar_one_or_none()
+                if db_course is None:
+                    logger.info("Course %s deleted during generation, aborting", course_id)
+                    return
                 db_course.ungrounded = ungrounded
 
                 for section_data in outline_with_briefs.sections:
@@ -258,9 +263,12 @@ async def create_course(
                     result = await sess.execute(
                         select(Course).where(Course.id == course_id)
                     )
-                    db_course = result.scalar_one()
-                    db_course.status = "failed"
-                    await sess.commit()
+                    db_course = result.scalar_one_or_none()
+                    if db_course is not None:
+                        db_course.status = "failed"
+                        await sess.commit()
+                    else:
+                        logger.info("Course %s already deleted, skipping status update", course_id)
             except Exception:
                 logger.exception("Failed to mark course %s as failed", course_id)
             await emit("error", {"message": "Course creation failed. Please try again."})
