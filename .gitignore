@@ -18,3 +18,4 @@ frontend/.env.local
 frontend/.env.production.local
 deploy/*.log
 .next/
+.worktrees/
