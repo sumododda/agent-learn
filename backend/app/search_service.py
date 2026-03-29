@@ -4,6 +4,8 @@ Mirrors provider_service.py pattern but for web search providers.
 Each adapter normalizes results into SearchResult dataclass.
 """
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass
 
 import httpx
@@ -67,6 +69,58 @@ def reconstruct_abstract(inverted_index: dict | None) -> str:
             words.append((pos, word))
     words.sort(key=lambda x: x[0])
     return " ".join(w for _, w in words)
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize a paper title for comparison."""
+    title = unicodedata.normalize("NFKD", title).lower()
+    title = re.sub(r"[^\w\s]", "", title)
+    return " ".join(title.split())
+
+
+def _metadata_richness(r: SearchResult) -> int:
+    """Score how many metadata fields are populated (higher = richer)."""
+    score = 0
+    if r.authors:
+        score += 1
+    if r.year:
+        score += 1
+    if r.venue:
+        score += 1
+    if r.citation_count is not None:
+        score += 1
+    if r.doi:
+        score += 1
+    return score
+
+
+def deduplicate_academic_results(results: list[SearchResult]) -> list[SearchResult]:
+    """Remove duplicate papers, keeping the result with richest metadata."""
+    seen_dois: dict[str, int] = {}
+    seen_titles: dict[str, int] = {}
+    output: list[SearchResult] = []
+
+    for r in results:
+        if r.doi:
+            doi_key = r.doi.lower().strip()
+            if doi_key in seen_dois:
+                idx = seen_dois[doi_key]
+                if _metadata_richness(r) > _metadata_richness(output[idx]):
+                    output[idx] = r
+                continue
+            seen_dois[doi_key] = len(output)
+
+        norm_title = _normalize_title(r.title)
+        if norm_title in seen_titles:
+            idx = seen_titles[norm_title]
+            if _metadata_richness(r) > _metadata_richness(output[idx]):
+                output[idx] = r
+            continue
+        seen_titles[norm_title] = len(output)
+
+        output.append(r)
+
+    return output
 
 
 def get_search_provider_registry() -> dict:

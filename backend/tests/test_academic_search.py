@@ -1,4 +1,4 @@
-from app.search_service import SearchResult, reconstruct_abstract
+from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results
 
 
 def test_search_result_academic_fields_default():
@@ -43,3 +43,38 @@ def test_reconstruct_abstract_repeated_words():
 def test_reconstruct_abstract_empty():
     assert reconstruct_abstract({}) == ""
     assert reconstruct_abstract(None) == ""
+
+
+def test_dedup_by_doi():
+    results = [
+        SearchResult(title="Paper A", url="https://s2.com/1", content="Abstract A",
+                     doi="10.1234/a", is_academic=True, authors=["Smith"], year=2023,
+                     venue="NeurIPS", citation_count=100),
+        SearchResult(title="Paper A", url="https://openalex.org/1", content="Abstract A",
+                     doi="10.1234/a", is_academic=True, authors=["Smith"], year=2023),
+    ]
+    deduped = deduplicate_academic_results(results)
+    assert len(deduped) == 1
+    assert deduped[0].citation_count == 100
+
+
+def test_dedup_by_title_similarity():
+    results = [
+        SearchResult(title="Attention Is All You Need", url="https://s2.com/1",
+                     content="Abstract", doi="10.1234/a", is_academic=True,
+                     authors=["Vaswani"], citation_count=90000),
+        SearchResult(title="Attention is All You Need.", url="https://arxiv.org/1",
+                     content="Abstract", doi=None, is_academic=True),
+    ]
+    deduped = deduplicate_academic_results(results)
+    assert len(deduped) == 1
+    assert deduped[0].citation_count == 90000
+
+
+def test_dedup_different_papers():
+    results = [
+        SearchResult(title="Paper A", url="u1", content="c1", doi="10.1/a", is_academic=True),
+        SearchResult(title="Paper B", url="u2", content="c2", doi="10.1/b", is_academic=True),
+    ]
+    deduped = deduplicate_academic_results(results)
+    assert len(deduped) == 2
