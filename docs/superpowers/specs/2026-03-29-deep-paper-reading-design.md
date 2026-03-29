@@ -10,7 +10,12 @@ Also includes Layer 1 quick fixes to discovery phase: pass academic metadata (au
 
 After abstract-level academic search per section, select top 2-3 papers for deep reading.
 
-**Filter:** Must have an open-access PDF URL (from S2 `openAccessPdf.url`, OpenAlex `primary_location.pdf_url` / `open_access.oa_url`, or arXiv PDF link). No PDF = skip.
+**Prerequisite:** Add `pdf_url: str | None = None` field to `SearchResult` dataclass. Each adapter populates it:
+- Semantic Scholar: from `openAccessPdf.url` in API response
+- OpenAlex: from `primary_location.pdf_url` or `open_access.oa_url`
+- arXiv: construct `https://arxiv.org/pdf/{arxiv_id}` from the entry URL (all arXiv papers have PDFs)
+
+**Filter:** Must have `pdf_url` set. No PDF URL = skip.
 
 **Rank by composite score:**
 
@@ -51,10 +56,27 @@ Take top 2-3 by score. If `influentialCitationCount` is available from Semantic 
 - Parse PDF into structured document with labeled sections
 - Each section: `{heading: str, text: str}`
 
+**Section Name Normalization:**
+
+Docling returns headings as written in the paper ("3. Experimental Setup", "IV. RESULTS AND DISCUSSION", etc.). A heuristic mapper normalizes these to canonical names:
+
+```python
+SECTION_KEYWORDS = {
+    "methods": ["method", "approach", "experimental setup", "experiment", "implementation", "design"],
+    "results": ["result", "finding", "evaluation", "performance", "experiment"],
+    "discussion": ["discussion", "analysis", "interpretation"],
+    "conclusion": ["conclusion", "summary", "concluding", "future work"],
+    "introduction": ["introduction", "background", "overview", "motivation"],
+    "related_work": ["related work", "literature review", "prior work", "state of the art"],
+}
+```
+
+Strip numbering ("3.", "IV."), lowercase, match against keywords. Unrecognized sections labeled as `"other"`.
+
 **Section Selection:**
-- Default include: Results, Discussion, Conclusion (highest value for course content)
-- Include Methods if a research question asks *how* something works
-- Skip: Abstract (already have it), References, Acknowledgements
+- Default include: `results`, `discussion`, `conclusion` (highest value for course content)
+- Include `methods` if a research question asks *how* something works
+- Skip: `introduction` (mostly background we have from abstracts), References, Acknowledgements
 - Cap at ~4,000 words per paper to manage LLM token cost
 - If paper is shorter than 4,000 words total, feed the whole thing
 - If Docling can't identify sections, feed raw text to reader agent
@@ -203,8 +225,8 @@ for r in academic_results:
 
 | File | Change |
 |------|--------|
-| `backend/app/search_service.py` | `rank_for_deep_reading()`, `has_open_access_pdf()` helper |
-| `backend/app/paper_reader.py` | **New.** PDF download, Docling parsing, section selection, reader orchestration |
+| `backend/app/search_service.py` | `pdf_url` field on `SearchResult`, `rank_for_deep_reading()`, populate `pdf_url` in S2/arXiv/OpenAlex adapters |
+| `backend/app/paper_reader.py` | **New.** PDF download, Docling parsing, section name normalization, section selection, reader orchestration |
 | `backend/app/agent.py` | `create_paper_reader()` agent, `PaperReading` + `DeepFinding` schemas, `PAPER_READER_PROMPT` |
 | `backend/app/agent_service.py` | Deep reading in `research_section()`, discovery metadata fixes |
 | `backend/requirements.txt` or `pyproject.toml` | Add `docling` dependency |
