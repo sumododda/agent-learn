@@ -297,7 +297,7 @@ async def discover_topic(
                             "query_index": index,
                             "title": r.title,
                             "url": r.url,
-                            "snippet": r.content[:200] if r.content else "",
+                            "snippet": r.abstract[:200] if r.abstract else "",
                             "authors": r.authors or [],
                             "year": r.year,
                             "venue": r.venue,
@@ -310,14 +310,14 @@ async def discover_topic(
             await on_event("academic_query_done", {"index": index, "result_count": len(result)})
 
     if academic_results:
-        from app.search_service import (
-            deduplicate_academic_results,
-            score_academic_result,
-            select_academic_results_for_discovery,
+        from app.academic_search import (
+            deduplicate_results,
+            score_result,
+            select_for_discovery,
         )
 
-        academic_results = deduplicate_academic_results(academic_results)
-        selected_academic_results = select_academic_results_for_discovery(
+        academic_results = deduplicate_results(academic_results)
+        selected_academic_results = select_for_discovery(
             academic_results,
             query=topic,
             topic=instructions,
@@ -327,8 +327,8 @@ async def discover_topic(
             all_search_results.append({
                 "title": f"[ACADEMIC] {r.title}",
                 "url": r.url,
-                "content": r.content,
-                "score": score_academic_result(r, query=topic, topic=instructions),
+                "content": r.abstract,
+                "score": score_result(r, query=topic, topic=instructions),
                 "authors": ", ".join(r.authors) if r.authors else None,
                 "year": r.year,
                 "venue": r.venue,
