@@ -130,17 +130,6 @@ async def _get_user_search_provider(user_id: str, session) -> tuple[str, dict]:
     return result
 
 
-async def _get_user_academic_credentials(user_id: str, session) -> dict[str, dict]:
-    """Get academic provider credentials, including built-in free providers."""
-    await _ensure_cache(user_id, session)
-    academic_credentials: dict[str, dict] = {
-        "semantic_scholar": {},
-        "arxiv": {},
-    }
-    academic_credentials.update(key_cache.get_all_academic_providers(user_id))
-    return academic_credentials
-
-
 # ---------------------------------------------------------------------------
 # Course CRUD endpoints
 # ---------------------------------------------------------------------------
@@ -196,17 +185,11 @@ async def create_course(
                 # Fetch provider credentials using a fresh session
                 provider, model, creds, extra_fields = await _get_user_provider(user_id, sess)
                 search_provider, search_creds = await _get_user_search_provider(user_id, sess)
-                academic_creds = (
-                    await _get_user_academic_credentials(user_id, sess)
-                    if academic_search_dict
-                    else {}
-                )
 
                 outline_with_briefs, ungrounded = await generate_outline(
                     body.topic, body.instructions, provider, model, creds, extra_fields,
                     search_provider, search_creds,
                     on_event=emit, user_id=user_id,
-                    academic_credentials=academic_creds,
                     academic_options=academic_search_dict,
                 )
 
