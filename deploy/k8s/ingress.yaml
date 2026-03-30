@@ -12,15 +12,8 @@ spec:
     - host: learn.blekcipher.com
       http:
         paths:
-          - path: /api/courses/*/discover/stream
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: backend-api
-                port:
-                  number: 8000
-          - path: /api/courses/*/pipeline/stream
-            pathType: ImplementationSpecific
+          - path: /api
+            pathType: Prefix
             backend:
               service:
                 name: backend-api
