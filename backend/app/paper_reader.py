@@ -40,10 +40,16 @@ def normalize_section_name(heading: str) -> str:
 # PDF Download
 # ---------------------------------------------------------------------------
 
+_PDF_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/pdf,*/*",
+}
+
+
 async def download_pdf(url: str) -> str | None:
     """Download a PDF from a URL to a temp file. Returns path or None on failure."""
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
+        async with httpx.AsyncClient(follow_redirects=True, headers=_PDF_HEADERS) as client:
             resp = await client.get(url, timeout=30.0)
             resp.raise_for_status()
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")

@@ -277,8 +277,13 @@ async def _enrich_with_unpaywall(results: list[AcademicResult]) -> list[Academic
         if r.doi and not r.pdf_url
     ]
 
+    already_have_pdf = sum(1 for r in results if r.pdf_url)
     if not needs_enrichment:
+        logger.info("[unpaywall] %d/%d results already have pdf_url, none need enrichment", already_have_pdf, len(results))
         return results
+
+    logger.info("[unpaywall] Checking %d DOIs via Unpaywall (%d/%d already have pdf_url)",
+                len(needs_enrichment), already_have_pdf, len(results))
 
     async def _fetch_pdf_url(doi: str) -> str | None:
         try:
@@ -294,7 +299,8 @@ async def _enrich_with_unpaywall(results: list[AcademicResult]) -> list[Academic
                 if not oa_loc:
                     return None
                 return oa_loc.get("url_for_pdf") or oa_loc.get("url")
-        except Exception:
+        except Exception as e:
+            logger.debug("[unpaywall] Failed to fetch PDF URL for DOI %s: %s", doi, e)
             return None
 
     import asyncio
@@ -303,10 +309,13 @@ async def _enrich_with_unpaywall(results: list[AcademicResult]) -> list[Academic
         return_exceptions=True,
     )
 
+    enriched_count = 0
     for (idx, _), pdf_url in zip(needs_enrichment, pdf_urls):
         if isinstance(pdf_url, str):
             results[idx].pdf_url = pdf_url
+            enriched_count += 1
 
+    logger.info("[unpaywall] Enriched %d/%d DOIs with pdf_url", enriched_count, len(needs_enrichment))
     return results
 
 
