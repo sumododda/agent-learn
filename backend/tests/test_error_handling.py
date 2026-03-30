@@ -94,8 +94,8 @@ async def test_tavily_failure_creates_ungrounded_course(setup_db, client):
         ],
     )
 
-    # generate_outline returns (outline, ungrounded=True)
-    mock_return = (outline, True)
+    # generate_outline returns (outline, ungrounded=True, topic_brief=None)
+    mock_return = (outline, True, None)
     with (
         patch(
             "app.routers.courses._get_user_provider",
@@ -500,13 +500,14 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
     ):
         from app.agent_service import generate_outline
 
-        result, ungrounded = await generate_outline(
+        result, ungrounded, topic_brief = await generate_outline(
             "Test Topic",
             search_provider="tavily", search_credentials={"api_key": "fake"},
         )
 
     assert ungrounded is True
     assert isinstance(result, CourseOutlineWithBriefs)
+    assert topic_brief is None
 
 
 # ---------------------------------------------------------------------------

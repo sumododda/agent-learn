@@ -406,11 +406,12 @@ async def generate_outline(
     user_id: str = "",
     current_outline: Sequence | None = None,
     academic_options: dict | None = None,
-) -> tuple[CourseOutlineWithBriefs, bool]:
+) -> tuple[CourseOutlineWithBriefs, bool, "TopicBrief | None"]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
-    Returns (CourseOutlineWithBriefs, ungrounded_flag).
-    If discovery fails, falls back to ungrounded planning (ungrounded=True).
+    Returns (CourseOutlineWithBriefs, ungrounded_flag, topic_brief).
+    If discovery fails, falls back to ungrounded planning (ungrounded=True)
+    and topic_brief will be None.
     """
     from app import search_service
 
@@ -485,7 +486,7 @@ async def generate_outline(
                 source_policy={"preferred_tiers": [1, 2], "scope": section.summary, "out_of_scope": ""},
             ))
 
-    return outline, ungrounded
+    return outline, ungrounded, topic_brief
 
 
 async def generate_lessons(
@@ -1438,7 +1439,7 @@ async def run_discover_and_plan(
         raise ValueError(f"Course {course_id} not found")
 
     # Run discovery research + planner
-    outline_with_briefs, ungrounded = await generate_outline(
+    outline_with_briefs, ungrounded, topic_brief = await generate_outline(
         course.topic, course.instructions, provider, model, credentials, extra_fields,
         search_provider, search_credentials, user_id=user_id,
         academic_options=academic_options,
@@ -1479,7 +1480,7 @@ async def run_discover_and_plan(
             section_position=None,
             questions=[],
             source_policy={},
-            findings="Discovery research completed successfully",
+            findings=topic_brief.model_dump_json() if topic_brief else "{}",
         )
         session.add(discovery_brief)
 

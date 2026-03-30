@@ -186,7 +186,7 @@ async def create_course(
                 provider, model, creds, extra_fields = await _get_user_provider(user_id, sess)
                 search_provider, search_creds = await _get_user_search_provider(user_id, sess)
 
-                outline_with_briefs, ungrounded = await generate_outline(
+                outline_with_briefs, ungrounded, _ = await generate_outline(
                     body.topic, body.instructions, provider, model, creds, extra_fields,
                     search_provider, search_creds,
                     on_event=emit, user_id=user_id,
@@ -491,7 +491,7 @@ async def regenerate_course(
         provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
         search_provider, search_creds = await _get_user_search_provider(user_id, session)
 
-        outline_with_briefs, ungrounded = await generate_outline(
+        outline_with_briefs, ungrounded, _ = await generate_outline(
             course.topic, enhanced_instructions, provider, model, creds, extra_fields,
             search_provider, search_creds, user_id=user_id, current_outline=current_sections,
         )
