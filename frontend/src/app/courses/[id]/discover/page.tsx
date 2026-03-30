@@ -25,6 +25,12 @@ interface SourceItem {
   citations?: number | null;
 }
 
+interface AcademicPresentation {
+  badge: string;
+  badgeClassName: string;
+  reason: string;
+}
+
 interface QueryGroup {
   index: number;
   query: string;
@@ -86,6 +92,45 @@ function markQueryDone(prev: QueryGroup[], index: number): QueryGroup[] {
       ? { ...item, done: true }
       : item
   ));
+}
+
+function classifyAcademicSource(source: SourceItem): AcademicPresentation {
+  const currentYear = new Date().getFullYear();
+  const year = source.year ?? null;
+  const citations = source.citations ?? 0;
+  const venue = (source.venue || '').toLowerCase();
+  const isRecent = year !== null && year >= currentYear - 1;
+  const isSecurityVenue = ['security', 'usenix', 'ndss', 'ccs', 'privacy', 'sp'].some((term) => venue.includes(term));
+
+  if (isRecent) {
+    return {
+      badge: 'Recent',
+      badgeClassName: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+      reason: citations >= 25 ? 'Newer paper with early traction' : 'Fresh paper from the last 2 years',
+    };
+  }
+
+  if (citations >= 100) {
+    return {
+      badge: 'Foundational',
+      badgeClassName: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
+      reason: 'Older, higher-citation paper kept for background context',
+    };
+  }
+
+  if (isSecurityVenue) {
+    return {
+      badge: 'Security Venue',
+      badgeClassName: 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
+      reason: 'Included because it lands in a security-focused venue',
+    };
+  }
+
+  return {
+    badge: 'Relevant',
+    badgeClassName: 'bg-muted text-muted-foreground',
+    reason: 'Included for topical relevance to this query',
+  };
 }
 
 export default function DiscoverPage() {
@@ -494,19 +539,40 @@ export default function DiscoverPage() {
                           <div className="ml-4 mt-1.5 space-y-2">
                             {q.sources.map((s, j) => (
                               <div key={j} className="text-sm">
-                                <a
-                                  href={safeHref(s.url)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-primary hover:underline"
-                                >
-                                  {s.title || s.url}
-                                </a>
+                                {(() => {
+                                  const presentation = classifyAcademicSource(s);
+                                  return (
+                                    <>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <a
+                                          href={safeHref(s.url)}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-primary hover:underline"
+                                        >
+                                          {s.title || s.url}
+                                        </a>
+                                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${presentation.badgeClassName}`}>
+                                          {presentation.badge}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-muted-foreground mt-1">
+                                        {presentation.reason}
+                                      </p>
+                                    </>
+                                  );
+                                })()}
                                 {(s.year || s.venue || s.citations != null) && (
                                   <p className="text-xs text-muted-foreground mt-0.5">
                                     {[s.year, s.venue, s.citations != null ? `${s.citations} citations` : null]
                                       .filter(Boolean)
                                       .join(' • ')}
+                                  </p>
+                                )}
+                                {s.authors && s.authors.length > 0 && (
+                                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                                    {s.authors.slice(0, 3).join(', ')}
+                                    {s.authors.length > 3 ? ` +${s.authors.length - 3} more` : ''}
                                   </p>
                                 )}
                                 {s.snippet && (
