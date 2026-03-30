@@ -22,7 +22,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import settings, validate_settings
 from app.limiter import limiter
-from app.routers import academic_provider_routes, chat, courses, provider_routes, search_provider_routes
+from app.routers import chat, courses, provider_routes, search_provider_routes
 from app.routers.auth_routes import router as auth_router
 
 
@@ -56,7 +56,6 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(provider_routes.router, prefix="/api")
 app.include_router(search_provider_routes.router, prefix="/api")
-app.include_router(academic_provider_routes.router, prefix="/api")
 
 
 @app.get("/api/health")

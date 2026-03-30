@@ -1,651 +1,495 @@
-import asyncio
 from datetime import date
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.search_service import (
-    SearchResult,
-    deduplicate_academic_results,
-    rank_for_deep_reading,
+from app.academic_search import (
+    AcademicResult,
+    deduplicate_results,
     reconstruct_abstract,
-    rerank_academic_results,
-    score_academic_result,
-    select_academic_results_for_discovery,
+    rerank_results,
+    score_result,
+    select_for_discovery,
+    rank_for_deep_reading,
 )
 
 
-def test_search_result_academic_fields_default():
-    r = SearchResult(title="Test", url="https://example.com", content="Abstract")
-    assert r.is_academic is False
-    assert r.authors is None
+def test_academic_result_defaults():
+    r = AcademicResult(title="Test", url="http://ex.com", abstract="Abstract text", authors=["A"])
     assert r.year is None
-    assert r.venue is None
     assert r.citation_count is None
     assert r.doi is None
+    assert r.pdf_url is None
+    assert r.score == 0.0
 
 
-def test_search_result_academic_fields_populated():
-    r = SearchResult(
-        title="Attention Is All You Need",
-        url="https://arxiv.org/abs/1706.03762",
-        content="The dominant sequence transduction models...",
-        score=0.95,
-        authors=["Vaswani, A.", "Shazeer, N."],
-        year=2017,
-        venue="NeurIPS",
-        citation_count=90000,
-        doi="10.48550/arXiv.1706.03762",
-        is_academic=True,
-    )
-    assert r.is_academic is True
-    assert r.authors == ["Vaswani, A.", "Shazeer, N."]
-    assert r.year == 2017
-    assert r.citation_count == 90000
-
-
-def test_reconstruct_abstract_basic():
+def test_reconstruct_abstract():
     inverted = {"Machine": [0], "learning": [1], "is": [2], "great": [3]}
     assert reconstruct_abstract(inverted) == "Machine learning is great"
 
 
-def test_reconstruct_abstract_repeated_words():
-    inverted = {"the": [0, 4], "cat": [1], "sat": [2], "on": [3], "mat": [5]}
-    assert reconstruct_abstract(inverted) == "the cat sat on the mat"
-
-
 def test_reconstruct_abstract_empty():
-    assert reconstruct_abstract({}) == ""
     assert reconstruct_abstract(None) == ""
+    assert reconstruct_abstract({}) == ""
 
 
-def test_dedup_by_doi():
+def test_deduplicate_by_doi():
+    r1 = AcademicResult(title="Paper A", url="http://a", abstract="...", authors=["X"], doi="10.1/a", year=2024, citation_count=10)
+    r2 = AcademicResult(title="Paper A (copy)", url="http://b", abstract="...", authors=["X"], doi="10.1/a", year=2024, venue="NeurIPS", citation_count=10)
+    results = deduplicate_results([r1, r2])
+    assert len(results) == 1
+    assert results[0].venue == "NeurIPS"  # richer metadata wins
+
+
+def test_deduplicate_by_title():
+    r1 = AcademicResult(title="Attention Is All You Need", url="http://a", abstract="...", authors=["V"])
+    r2 = AcademicResult(title="attention is all you need", url="http://b", abstract="...", authors=["V"], citation_count=100)
+    results = deduplicate_results([r1, r2])
+    assert len(results) == 1
+    assert results[0].citation_count == 100
+
+
+def test_rank_for_deep_reading_no_pdf():
+    r = AcademicResult(title="T", url="u", abstract="a", authors=["A"], pdf_url=None)
+    assert rank_for_deep_reading(r) == -1
+
+
+def test_rank_for_deep_reading_with_pdf():
+    r = AcademicResult(title="T", url="u", abstract="a", authors=["A"], pdf_url="http://pdf", citation_count=100, year=date.today().year)
+    score = rank_for_deep_reading(r)
+    assert score > 0
+
+
+def test_score_result_penalizes_missing_signal_terms():
+    r = AcademicResult(title="Cooking recipes", url="u", abstract="How to bake a cake", authors=["Chef"], year=2024)
+    score = score_result(r, query="agent security vulnerabilities")
+    assert score < 5.0
+
+
+def test_rerank_orders_by_score():
+    r1 = AcademicResult(title="agent security framework", url="u", abstract="security agents vulnerabilities", authors=["A"], year=2024, citation_count=50)
+    r2 = AcademicResult(title="cooking tips", url="u2", abstract="how to cook", authors=["B"], year=2020, citation_count=5)
+    ranked = rerank_results([r2, r1], query="agent security")
+    assert ranked[0].title == "agent security framework"
+
+
+def test_select_for_discovery_limits():
     results = [
-        SearchResult(title="Paper A", url="https://s2.com/1", content="Abstract A",
-                     doi="10.1234/a", is_academic=True, authors=["Smith"], year=2023,
-                     venue="NeurIPS", citation_count=100),
-        SearchResult(title="Paper A", url="https://openalex.org/1", content="Abstract A",
-                     doi="10.1234/a", is_academic=True, authors=["Smith"], year=2023),
+        AcademicResult(title=f"Paper {i}", url=f"u{i}", abstract="abs", authors=["A"], year=2024 - i, citation_count=i * 10)
+        for i in range(20)
     ]
-    deduped = deduplicate_academic_results(results)
-    assert len(deduped) == 1
-    assert deduped[0].citation_count == 100
+    selected = select_for_discovery(results, query="test", limit=5)
+    assert len(selected) == 5
 
 
-def test_dedup_by_title_similarity():
-    results = [
-        SearchResult(title="Attention Is All You Need", url="https://s2.com/1",
-                     content="Abstract", doi="10.1234/a", is_academic=True,
-                     authors=["Vaswani"], citation_count=90000),
-        SearchResult(title="Attention is All You Need.", url="https://arxiv.org/1",
-                     content="Abstract", doi=None, is_academic=True),
-    ]
-    deduped = deduplicate_academic_results(results)
-    assert len(deduped) == 1
-    assert deduped[0].citation_count == 90000
-
-
-def test_dedup_different_papers():
-    results = [
-        SearchResult(title="Paper A", url="u1", content="c1", doi="10.1/a", is_academic=True),
-        SearchResult(title="Paper B", url="u2", content="c2", doi="10.1/b", is_academic=True),
-    ]
-    deduped = deduplicate_academic_results(results)
-    assert len(deduped) == 2
+import httpx
+from unittest.mock import AsyncMock, patch, MagicMock
 
 
 @pytest.mark.asyncio
-async def test_search_semantic_scholar_parses_response():
-    from app.search_service import _search_semantic_scholar
+async def test_openalex_adapter_maps_fields():
+    from app.academic_search import _search_openalex
 
-    mock_response = {
-        "total": 1,
-        "offset": 0,
-        "data": [
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "meta": {"count": 1},
+        "results": [
             {
-                "paperId": "abc123",
                 "title": "Test Paper",
-                "url": "https://www.semanticscholar.org/paper/abc123",
-                "abstract": "This is a test abstract about machine learning.",
-                "year": 2023,
-                "authors": [{"authorId": "1", "name": "Smith, J."}, {"authorId": "2", "name": "Lee, K."}],
-                "venue": "NeurIPS",
-                "citationCount": 42,
-                "externalIds": {"DOI": "10.1234/test"},
-                "openAccessPdf": {"url": "https://example.com/paper.pdf", "status": "GREEN"},
-                "publicationTypes": ["JournalArticle"],
+                "display_name": "Test Paper",
+                "id": "https://openalex.org/W123",
+                "doi": "https://doi.org/10.1234/test",
+                "relevance_score": 15.5,
+                "publication_year": 2024,
+                "cited_by_count": 42,
+                "authorships": [
+                    {"author": {"display_name": "Alice Smith"}},
+                    {"author": {"display_name": "Bob Jones"}},
+                ],
+                "abstract_inverted_index": {"Test": [0], "abstract": [1], "here": [2]},
+                "primary_location": {
+                    "landing_page_url": "https://example.com/paper",
+                    "pdf_url": "https://example.com/paper.pdf",
+                    "source": {"display_name": "Nature"},
+                },
+                "open_access": {"oa_url": None},
             }
         ],
     }
 
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = mock_response
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
 
-        results = await _search_semantic_scholar(
-            query="machine learning",
-            credentials={},
-            max_results=5,
-            search_depth="basic",
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.OPENALEX_API_KEY = "test-key"
+            results = await _search_openalex("machine learning", max_results=5)
 
     assert len(results) == 1
     r = results[0]
     assert r.title == "Test Paper"
-    assert r.is_academic is True
-    assert r.authors == ["Smith, J.", "Lee, K."]
-    assert r.year == 2023
-    assert r.venue == "NeurIPS"
+    assert r.authors == ["Alice Smith", "Bob Jones"]
+    assert r.year == 2024
     assert r.citation_count == 42
     assert r.doi == "10.1234/test"
+    assert r.venue == "Nature"
     assert r.pdf_url == "https://example.com/paper.pdf"
-    assert "test abstract" in r.content
+    assert r.abstract == "Test abstract here"
+    assert r.score == 15.5
+
+    # Verify API key passed as query param
+    call_kwargs = mock_client.get.call_args
+    assert call_kwargs.kwargs["params"]["api_key"] == "test-key"
 
 
 @pytest.mark.asyncio
-async def test_search_semantic_scholar_skips_null_abstract():
-    from app.search_service import _search_semantic_scholar
+async def test_openalex_adapter_skips_no_abstract():
+    from app.academic_search import _search_openalex
 
-    mock_response = {
-        "total": 2, "offset": 0,
-        "data": [
-            {"paperId": "1", "title": "No Abstract", "url": "u1", "abstract": None,
-             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
-             "externalIds": {}, "openAccessPdf": None, "publicationTypes": []},
-            {"paperId": "2", "title": "Has Abstract", "url": "u2", "abstract": "Real content",
-             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
-             "externalIds": {}, "openAccessPdf": None, "publicationTypes": []},
-        ],
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "meta": {"count": 1},
+        "results": [{"title": "No Abstract", "abstract_inverted_index": None, "authorships": [], "primary_location": None, "open_access": {}}],
     }
 
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = mock_response
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
 
-        results = await _search_semantic_scholar(
-            "test", {}, 5, "basic",
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.OPENALEX_API_KEY = "test-key"
+            results = await _search_openalex("test", max_results=5)
 
-    assert len(results) == 1
-    assert results[0].title == "Has Abstract"
+    assert len(results) == 0
 
 
 @pytest.mark.asyncio
-async def test_search_semantic_scholar_open_access_filter():
-    from app.search_service import _search_semantic_scholar
+async def test_openalex_adapter_returns_empty_when_no_key():
+    from app.academic_search import _search_openalex
 
-    mock_response = {
-        "total": 2, "offset": 0,
-        "data": [
-            {"paperId": "1", "title": "OA Paper", "url": "u1", "abstract": "Abstract 1",
-             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
-             "externalIds": {}, "openAccessPdf": {"url": "https://pdf.com", "status": "GREEN"},
-             "publicationTypes": []},
-            {"paperId": "2", "title": "Closed Paper", "url": "u2", "abstract": "Abstract 2",
-             "year": 2023, "authors": [], "venue": "", "citationCount": 0,
-             "externalIds": {}, "openAccessPdf": None, "publicationTypes": []},
-        ],
-    }
+    with patch("app.academic_search.settings") as mock_settings:
+        mock_settings.OPENALEX_API_KEY = ""
+        results = await _search_openalex("test", max_results=5)
 
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = mock_response
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        results = await _search_semantic_scholar(
-            "test", {}, 5, "basic",
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": True},
-        )
-
-    assert len(results) == 1
-    assert results[0].title == "OA Paper"
+    assert results == []
 
 
 @pytest.mark.asyncio
-async def test_search_arxiv_parses_xml():
-    from app.search_service import _search_arxiv
+async def test_serper_scholar_adapter_maps_fields():
+    from app.academic_search import _search_serper_scholar
 
-    xml_response = """<?xml version="1.0" encoding="UTF-8"?>
-    <feed xmlns="http://www.w3.org/2005/Atom"
-          xmlns:arxiv="http://arxiv.org/schemas/atom">
-      <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">1</opensearch:totalResults>
-      <entry>
-        <id>http://arxiv.org/abs/1706.03762v5</id>
-        <title>Attention Is All You Need</title>
-        <summary>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.</summary>
-        <published>2017-06-12T17:57:34Z</published>
-        <author><name>Ashish Vaswani</name></author>
-        <author><name>Noam Shazeer</name></author>
-        <arxiv:doi>10.48550/arXiv.1706.03762</arxiv:doi>
-        <link href="http://arxiv.org/abs/1706.03762v5" rel="alternate" type="text/html"/>
-        <link href="http://arxiv.org/pdf/1706.03762v5" title="pdf" type="application/pdf" rel="related"/>
-      </entry>
-    </feed>"""
-
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.text = xml_response
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        results = await _search_arxiv(
-            "attention", {}, 5, "basic",
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
-
-    assert len(results) == 1
-    r = results[0]
-    assert r.title == "Attention Is All You Need"
-    assert r.is_academic is True
-    assert "Ashish Vaswani" in r.authors
-    assert "Noam Shazeer" in r.authors
-    assert r.year == 2017
-    assert r.doi == "10.48550/arXiv.1706.03762"
-    assert "sequence transduction" in r.content
-    assert "arxiv.org" in r.url
-    assert r.pdf_url == "https://arxiv.org/pdf/1706.03762v5"
-
-
-@pytest.mark.asyncio
-async def test_search_arxiv_prefers_submitted_date_when_year_range_filtered():
-    from app.search_service import _search_arxiv
-
-    xml_response = """<?xml version="1.0" encoding="UTF-8"?>
-    <feed xmlns="http://www.w3.org/2005/Atom"></feed>"""
-
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.text = xml_response
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        await _search_arxiv(
-            "ai agents security", {}, 5, "basic",
-            academic_options={"year_range": "5y", "min_citations": 0, "open_access_only": False},
-        )
-
-    params = mock_get.await_args.kwargs["params"]
-    assert params["sortBy"] == "submittedDate"
-
-
-@pytest.mark.asyncio
-async def test_search_openalex_parses_response():
-    from app.search_service import _search_openalex
-
-    mock_response = {
-        "meta": {"count": 1, "page": 1, "per_page": 25},
-        "results": [
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "searchParameters": {"q": "test", "type": "scholar"},
+        "organic": [
             {
-                "id": "https://openalex.org/W12345",
-                "doi": "https://doi.org/10.1234/test",
-                "title": "Test Paper on Deep Learning",
-                "display_name": "Test Paper on Deep Learning",
-                "relevance_score": 42.5,
-                "publication_year": 2023,
-                "publication_date": "2023-06-15",
-                "cited_by_count": 150,
-                "authorships": [
-                    {"author": {"display_name": "Chen, W."}, "author_position": "first"},
-                    {"author": {"display_name": "Davis, M."}, "author_position": "last"},
-                ],
-                "abstract_inverted_index": {
-                    "Deep": [0], "learning": [1], "has": [2],
-                    "transformed": [3], "AI": [4], "research": [5],
-                },
-                "primary_location": {
-                    "source": {"display_name": "Nature Machine Intelligence"},
-                    "landing_page_url": "https://nature.com/articles/test",
-                    "pdf_url": "https://nature.com/articles/test.pdf",
-                },
-                "open_access": {"is_oa": True, "oa_url": "https://nature.com/articles/test.pdf"},
+                "title": "Attention Is All You Need",
+                "link": "https://proceedings.neurips.cc/paper/2017/123",
+                "snippet": "The dominant sequence transduction models...",
+                "publicationInfo": "A Vaswani, N Shazeer, N Parmar - Advances in neural information processing systems, 2017 - proceedings.neurips.cc",
+                "citedBy": 119097,
+                "year": 2017,
+                "pdfLink": "https://example.com/paper.pdf",
             }
         ],
     }
 
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = mock_response
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_response)
 
-        results = await _search_openalex(
-            "deep learning", {"api_key": "test_key"}, 5, "basic",
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.SERPER_API_KEY = "test-key"
+            results = await _search_serper_scholar("attention mechanisms", max_results=10)
 
     assert len(results) == 1
     r = results[0]
-    assert r.title == "Test Paper on Deep Learning"
-    assert r.is_academic is True
-    assert r.authors == ["Chen, W.", "Davis, M."]
-    assert r.year == 2023
-    assert r.venue == "Nature Machine Intelligence"
-    assert r.citation_count == 150
-    assert r.doi == "10.1234/test"
-    assert r.pdf_url == "https://nature.com/articles/test.pdf"
-    assert r.content == "Deep learning has transformed AI research"
+    assert r.title == "Attention Is All You Need"
+    assert r.url == "https://proceedings.neurips.cc/paper/2017/123"
+    assert r.abstract == "The dominant sequence transduction models..."
+    assert r.citation_count == 119097
+    assert r.year == 2017
+    assert r.pdf_url == "https://example.com/paper.pdf"
+    assert r.doi is None  # Serper Scholar does not return DOIs
+    assert "Vaswani" in r.authors[0]
+    assert r.venue is not None
+
+    # Verify correct endpoint and headers
+    call_kwargs = mock_client.post.call_args
+    assert "scholar" in str(call_kwargs.args[0])
+    assert call_kwargs.kwargs["headers"]["X-API-KEY"] == "test-key"
 
 
 @pytest.mark.asyncio
-async def test_search_openalex_sorts_newest_first_when_year_range_filtered():
-    from app.search_service import _search_openalex
+async def test_serper_scholar_parses_publication_info():
+    from app.academic_search import _parse_publication_info
 
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"results": []}
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        await _search_openalex(
-            "ai agents security", {"api_key": "test_key"}, 5, "basic",
-            academic_options={"year_range": "5y", "min_citations": 0, "open_access_only": False},
-        )
-
-    params = mock_get.await_args.kwargs["params"]
-    assert params["sort"] == "publication_date:desc"
-    assert "publication_year:>" in params["filter"]
+    authors, venue = _parse_publication_info(
+        "A Vaswani, N Shazeer, N Parmar - Advances in neural information processing systems, 2017 - proceedings.neurips.cc"
+    )
+    assert len(authors) >= 3
+    assert "A Vaswani" in authors
+    assert venue is not None
+    assert "neural" in venue.lower()
 
 
 @pytest.mark.asyncio
-async def test_academic_search_all_providers():
-    from app.search_service import academic_search
+async def test_serper_scholar_handles_missing_fields():
+    from app.academic_search import _search_serper_scholar
 
-    s2_result = SearchResult(
-        title="S2 Paper", url="s2.com", content="S2 abstract",
-        doi="10.1/s2", is_academic=True, authors=["A"], year=2023,
-        venue="NeurIPS", citation_count=50,
-    )
-    arxiv_result = SearchResult(
-        title="arXiv Paper", url="arxiv.org", content="arXiv abstract",
-        doi=None, is_academic=True, authors=["B"], year=2023,
-    )
-    openalex_result = SearchResult(
-        title="OA Paper", url="openalex.org", content="OA abstract",
-        doi="10.1/oa", is_academic=True, authors=["C"], year=2023,
-        citation_count=30,
-    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "organic": [
+            {
+                "title": "Minimal Paper",
+                "link": "https://example.com",
+                "snippet": "Some text",
+                "publicationInfo": "Author Name - 2023",
+            }
+        ],
+    }
 
-    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[s2_result]) as mock_s2, \
-         patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[arxiv_result]) as mock_arxiv, \
-         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[openalex_result]) as mock_oa:
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_response)
 
-        results = await academic_search(
-            query="test",
-            academic_credentials={"semantic_scholar": {"api_key": "k"}, "arxiv": {}, "openalex": {"api_key": "k"}},
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-            max_results=5,
-        )
-
-    assert len(results) == 3
-    assert all(r.is_academic for r in results)
-
-
-@pytest.mark.asyncio
-async def test_academic_search_deduplicates():
-    from app.search_service import academic_search
-
-    paper = SearchResult(
-        title="Same Paper", url="s2.com", content="Abstract",
-        doi="10.1/same", is_academic=True, authors=["A"], year=2023,
-        citation_count=50,
-    )
-    paper_dup = SearchResult(
-        title="Same Paper", url="oa.org", content="Abstract",
-        doi="10.1/same", is_academic=True, authors=["A"], year=2023,
-    )
-
-    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[paper]), \
-         patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[]), \
-         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[paper_dup]):
-
-        results = await academic_search(
-            query="test",
-            academic_credentials={"semantic_scholar": {"api_key": "k"}, "openalex": {"api_key": "k"}},
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.SERPER_API_KEY = "test-key"
+            results = await _search_serper_scholar("test", max_results=5)
 
     assert len(results) == 1
-    assert results[0].citation_count == 50
+    r = results[0]
+    assert r.citation_count is None  # citedBy missing
+    assert r.pdf_url is None  # pdfLink missing
 
 
 @pytest.mark.asyncio
-async def test_academic_search_skips_missing_providers():
-    from app.search_service import academic_search
+async def test_serper_scholar_returns_empty_when_no_key():
+    from app.academic_search import _search_serper_scholar
 
-    paper = SearchResult(title="P", url="u", content="c", is_academic=True)
+    with patch("app.academic_search.settings") as mock_settings:
+        mock_settings.SERPER_API_KEY = ""
+        results = await _search_serper_scholar("test", max_results=5)
 
-    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[paper]) as mock_s2, \
-         patch("app.search_service._search_arxiv", new_callable=AsyncMock) as mock_arxiv, \
-         patch("app.search_service._search_openalex", new_callable=AsyncMock) as mock_oa:
-
-        results = await academic_search(
-            query="test",
-            academic_credentials={"semantic_scholar": {"api_key": "k"}},
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
-
-    assert len(results) == 1
-    mock_s2.assert_awaited_once()
-    mock_arxiv.assert_not_called()
-    mock_oa.assert_not_called()
+    assert results == []
 
 
 @pytest.mark.asyncio
-async def test_academic_search_skips_anonymous_semantic_scholar():
-    from app.search_service import academic_search
+async def test_unpaywall_enriches_missing_pdf_urls():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
 
-    paper = SearchResult(title="P", url="u", content="c", is_academic=True)
+    mock_response_with_pdf = MagicMock()
+    mock_response_with_pdf.status_code = 200
+    mock_response_with_pdf.json.return_value = {
+        "is_oa": True,
+        "best_oa_location": {
+            "url_for_pdf": "https://example.com/paper.pdf",
+            "url": "https://example.com/paper",
+            "url_for_landing_page": "https://example.com/landing",
+        },
+    }
 
-    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock) as mock_s2, \
-         patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[paper]) as mock_arxiv:
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response_with_pdf)
 
-        results = await academic_search(
-            query="test",
-            academic_credentials={"semantic_scholar": {}, "arxiv": {}},
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-        )
+    results = [
+        AcademicResult(title="Paper A", url="u", abstract="a", authors=["X"], doi="10.1/a", pdf_url=None),
+        AcademicResult(title="Paper B", url="u", abstract="a", authors=["X"], doi="10.1/b", pdf_url="http://existing.pdf"),
+        AcademicResult(title="Paper C", url="u", abstract="a", authors=["X"], doi=None, pdf_url=None),
+    ]
 
-    assert len(results) == 1
-    mock_s2.assert_not_called()
-    mock_arxiv.assert_awaited_once()
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
 
-
-@pytest.mark.asyncio
-async def test_academic_search_timeout_returns_partial_results():
-    from app.search_service import academic_search
-
-    fast_paper = SearchResult(title="Fast", url="oa.org", content="Abstract", is_academic=True)
-
-    async def _slow_provider(*args, **kwargs):
-        await asyncio.sleep(0.1)
-        return [SearchResult(title="Slow", url="arxiv.org", content="Abstract", is_academic=True)]
-
-    with patch("app.search_service._search_arxiv", new_callable=AsyncMock, side_effect=_slow_provider) as mock_arxiv, \
-         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[fast_paper]) as mock_oa:
-
-        results = await academic_search(
-            query="test",
-            academic_credentials={"arxiv": {}, "openalex": {"api_key": "k"}},
-            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
-            timeout_seconds=0.01,
-        )
-
-    assert len(results) == 1
-    assert results[0].title == "Fast"
-    mock_arxiv.assert_awaited_once()
-    mock_oa.assert_awaited_once()
+    assert enriched[0].pdf_url == "https://example.com/paper.pdf"
+    assert enriched[1].pdf_url == "http://existing.pdf"
+    assert enriched[2].pdf_url is None
+    assert mock_client.get.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_academic_search_reranks_recent_relevant_results_ahead_of_generic_cited_results():
-    from app.search_service import academic_search
+async def test_unpaywall_falls_back_to_url_when_pdf_null():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
 
-    current_year = date.today().year
-    relevant_recent = SearchResult(
-        title="Prompt Injection Attacks on LLM Agents",
-        url="https://arxiv.org/abs/1",
-        content="We study prompt injection, tool abuse, and memory poisoning in autonomous agents.",
-        is_academic=True,
-        year=current_year,
-        venue="USENIX Security",
-        citation_count=18,
-        score=2.0,
-    )
-    generic_old = SearchResult(
-        title="A Comprehensive Overview of Large Language Models",
-        url="https://openalex.org/W1",
-        content="This survey reviews general progress in language models and AI systems.",
-        is_academic=True,
-        year=current_year - 3,
-        venue="Artificial Intelligence Review",
-        citation_count=700,
-        score=8.0,
-    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "is_oa": True,
+        "best_oa_location": {
+            "url_for_pdf": None,
+            "url": "https://example.com/oa-version",
+            "url_for_landing_page": "https://example.com/landing",
+        },
+    }
 
-    with patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[relevant_recent]), \
-         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[generic_old]):
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
 
-        results = await academic_search(
-            query="AI agents security prompt injection tool abuse",
-            academic_credentials={"arxiv": {}, "openalex": {"api_key": "k"}},
-            academic_options={"year_range": "5y", "min_citations": 0, "open_access_only": False},
-            max_results=1,
-        )
+    results = [AcademicResult(title="Paper", url="u", abstract="a", authors=["X"], doi="10.1/x")]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url == "https://example.com/oa-version"
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_handles_closed_access():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "is_oa": False,
+        "best_oa_location": None,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    results = [AcademicResult(title="Closed", url="u", abstract="a", authors=["X"], doi="10.1/closed")]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url is None
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_handles_404_gracefully():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+    import httpx as _httpx
+
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status = MagicMock(side_effect=_httpx.HTTPStatusError("Not Found", request=MagicMock(), response=mock_response))
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    results = [AcademicResult(title="Missing", url="u", abstract="a", authors=["X"], doi="10.1/missing")]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url is None
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_skips_when_no_email():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+
+    results = [AcademicResult(title="Paper", url="u", abstract="a", authors=["X"], doi="10.1/x")]
+
+    with patch("app.academic_search.settings") as mock_settings:
+        mock_settings.UNPAYWALL_EMAIL = ""
+        enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url is None
+
+
+@pytest.mark.asyncio
+async def test_academic_search_parallel_both_providers():
+    from app.academic_search import academic_search, AcademicResult
+
+    openalex_results = [
+        AcademicResult(title="OA Paper", url="http://oa", abstract="OA abstract", authors=["A"], doi="10.1/oa", year=2024, citation_count=50)
+    ]
+    serper_results = [
+        AcademicResult(title="Serper Paper", url="http://serper", abstract="Serper abstract", authors=["B"], year=2023, citation_count=30)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, return_value=openalex_results):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=serper_results):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test query", max_results=10)
+
+    assert len(results) == 2
+    titles = {r.title for r in results}
+    assert "OA Paper" in titles
+    assert "Serper Paper" in titles
+
+
+@pytest.mark.asyncio
+async def test_academic_search_deduplicates_cross_provider():
+    from app.academic_search import academic_search, AcademicResult
+
+    openalex_results = [
+        AcademicResult(title="Same Paper", url="http://oa", abstract="abstract", authors=["A"], doi="10.1/same", year=2024, citation_count=50, venue="NeurIPS")
+    ]
+    serper_results = [
+        AcademicResult(title="Same Paper", url="http://serper", abstract="abstract", authors=["A"], year=2024, citation_count=50)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, return_value=openalex_results):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=serper_results):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test", max_results=10)
 
     assert len(results) == 1
-    assert results[0].title == relevant_recent.title
+    assert results[0].venue == "NeurIPS"
 
 
-# ---------------------------------------------------------------------------
-# Task 1: pdf_url field tests
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_academic_search_one_provider_fails():
+    from app.academic_search import academic_search, AcademicResult
+
+    good_results = [
+        AcademicResult(title="Good Paper", url="u", abstract="a", authors=["A"], year=2024)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, side_effect=Exception("API down")):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=good_results):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test", max_results=10)
+
+    assert len(results) == 1
+    assert results[0].title == "Good Paper"
 
 
-def test_search_result_pdf_url_default():
-    r = SearchResult(title="T", url="u", content="c")
-    assert r.pdf_url is None
+@pytest.mark.asyncio
+async def test_academic_search_respects_max_results():
+    from app.academic_search import academic_search, AcademicResult
 
+    many_results = [
+        AcademicResult(title=f"Paper {i}", url=f"u{i}", abstract="a", authors=["A"], year=2024)
+        for i in range(20)
+    ]
 
-def test_search_result_pdf_url_populated():
-    r = SearchResult(title="T", url="u", content="c", pdf_url="https://arxiv.org/pdf/1234.pdf")
-    assert r.pdf_url == "https://arxiv.org/pdf/1234.pdf"
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, return_value=many_results):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=[]):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test", max_results=5)
 
-
-# ---------------------------------------------------------------------------
-# Task 2: rank_for_deep_reading tests
-# ---------------------------------------------------------------------------
-
-
-def test_rank_excludes_no_pdf():
-    r = SearchResult(title="T", url="u", content="c", is_academic=True,
-                     citation_count=1000, year=2023, pdf_url=None)
-    assert rank_for_deep_reading(r) == -1
-
-
-def test_rank_higher_for_more_citations():
-    r1 = SearchResult(title="T", url="u", content="c", is_academic=True,
-                      citation_count=100, year=2023, pdf_url="https://pdf.com/1")
-    r2 = SearchResult(title="T", url="u", content="c", is_academic=True,
-                      citation_count=1000, year=2023, pdf_url="https://pdf.com/2")
-    assert rank_for_deep_reading(r2) > rank_for_deep_reading(r1)
-
-
-def test_rank_recency_boost():
-    old = SearchResult(title="T", url="u", content="c", is_academic=True,
-                       citation_count=200, year=2018, pdf_url="https://pdf.com/1")
-    new = SearchResult(title="T", url="u", content="c", is_academic=True,
-                       citation_count=80, year=2025, pdf_url="https://pdf.com/2")
-    assert rank_for_deep_reading(new) > rank_for_deep_reading(old)
-
-
-def test_rank_log_scale_diminishing_returns():
-    r1 = SearchResult(title="T", url="u", content="c", is_academic=True,
-                      citation_count=1000, year=2023, pdf_url="https://pdf.com/1")
-    r2 = SearchResult(title="T", url="u", content="c", is_academic=True,
-                      citation_count=10000, year=2023, pdf_url="https://pdf.com/2")
-    ratio = rank_for_deep_reading(r2) / rank_for_deep_reading(r1)
-    assert ratio < 2.0
-
-
-def test_rerank_academic_results_penalizes_off_topic_biomedical_papers():
-    current_year = date.today().year
-    relevant = SearchResult(
-        title="Memory Poisoning in LLM Agents",
-        url="https://arxiv.org/abs/1",
-        content="This paper studies memory poisoning, prompt injection, and tool misuse in AI agents.",
-        is_academic=True,
-        year=current_year,
-        venue="USENIX Security",
-        citation_count=25,
-        score=1.5,
-    )
-    biomedical = SearchResult(
-        title="Targeting p53 pathways: mechanisms, structures and advances in therapy",
-        url="https://openalex.org/W2",
-        content="The TP53 tumor suppressor is altered in human cancers and is a major focus of oncology research.",
-        is_academic=True,
-        year=current_year - 1,
-        venue="Signal Transduction and Targeted Therapy",
-        citation_count=800,
-        score=12.0,
-    )
-
-    ranked = rerank_academic_results(
-        [biomedical, relevant],
-        query="AI agents security memory poisoning prompt injection",
-    )
-
-    assert ranked[0] == relevant
-    assert score_academic_result(relevant, query="AI agents security memory poisoning") > score_academic_result(
-        biomedical,
-        query="AI agents security memory poisoning",
-    )
-
-
-def test_select_academic_results_for_discovery_preserves_recent_mix():
-    current_year = date.today().year
-    recent_one = SearchResult(
-        title="Prompt Injection Defenses for Agentic Systems",
-        url="u1",
-        content="Prompt injection attacks against LLM agents and layered mitigations.",
-        is_academic=True,
-        year=current_year,
-        citation_count=12,
-        venue="arXiv",
-    )
-    recent_two = SearchResult(
-        title="Tool Abuse in Autonomous Agents",
-        url="u2",
-        content="Autonomous agent tool abuse, action guards, and sandboxing.",
-        is_academic=True,
-        year=current_year - 1,
-        citation_count=18,
-        venue="IEEE S&P",
-    )
-    foundational = SearchResult(
-        title="A Survey of Security Risks in Large Language Models",
-        url="u3",
-        content="A broad survey of prompt injection, jailbreaks, and model misuse.",
-        is_academic=True,
-        year=current_year - 3,
-        citation_count=450,
-        venue="ACM CCS",
-    )
-
-    selected = select_academic_results_for_discovery(
-        [foundational, recent_two, recent_one],
-        query="AI agents security prompt injection tool abuse",
-        limit=3,
-        recent_target=2,
-    )
-
-    assert recent_one in selected
-    assert recent_two in selected
-    assert len(selected) == 3
+    assert len(results) == 5
