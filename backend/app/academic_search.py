@@ -471,3 +471,45 @@ async def _search_serper_scholar(
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Main academic search function
+# ---------------------------------------------------------------------------
+
+async def academic_search(
+    query: str,
+    max_results: int = 10,
+    options: dict | None = None,
+) -> list[AcademicResult]:
+    """Search OpenAlex + Serper Scholar in parallel, deduplicate, enrich, rank."""
+    import asyncio
+
+    fetch_limit = min(max(max_results * 2, max_results), 12)
+
+    async def _safe_openalex() -> list[AcademicResult]:
+        try:
+            return await _search_openalex(query, fetch_limit, options)
+        except Exception as e:
+            logger.warning("[academic_search] OpenAlex failed for '%s': %s", query[:60], e)
+            return []
+
+    async def _safe_serper() -> list[AcademicResult]:
+        try:
+            return await _search_serper_scholar(query, fetch_limit, options)
+        except Exception as e:
+            logger.warning("[academic_search] Serper Scholar failed for '%s': %s", query[:60], e)
+            return []
+
+    oa_results, serper_results = await asyncio.gather(_safe_openalex(), _safe_serper())
+
+    all_results = oa_results + serper_results
+    if not all_results:
+        return []
+
+    deduplicated = deduplicate_results(all_results)
+    ranked = rerank_results(deduplicated, query=query)
+    top = ranked[:max_results]
+
+    enriched = await _enrich_with_unpaywall(top)
+    return enriched
