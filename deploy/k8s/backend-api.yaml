@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: backend-api
-          image: ghcr.io/sumododda/agent-learn/backend:b3bdf76
+          image: ghcr.io/sumododda/agent-learn/backend:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
