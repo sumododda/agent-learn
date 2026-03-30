@@ -29,7 +29,6 @@ from app.agent import (
 from app import provider_service
 from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
-# json still used by generate_outlineee
 
 logger = logging.getLogger(__name__)
 
@@ -406,7 +405,7 @@ async def generate_outline(
     user_id: str = "",
     current_outline: Sequence | None = None,
     academic_options: dict | None = None,
-) -> tuple[CourseOutlineWithBriefs, bool, "TopicBrief | None"]:
+) -> tuple[CourseOutlineWithBriefs, bool, TopicBrief | None]:
     """Invoke discovery research + planner to generate a grounded course outline.
 
     Returns (CourseOutlineWithBriefs, ungrounded_flag, topic_brief).
