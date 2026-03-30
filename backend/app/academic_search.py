@@ -263,6 +263,54 @@ def select_for_discovery(
 
 
 # ---------------------------------------------------------------------------
+# Unpaywall PDF enrichment
+# ---------------------------------------------------------------------------
+
+async def _enrich_with_unpaywall(results: list[AcademicResult]) -> list[AcademicResult]:
+    """Enrich results that have DOIs but no pdf_url via Unpaywall."""
+    if not settings.UNPAYWALL_EMAIL:
+        logger.warning("[unpaywall] No email configured, skipping enrichment")
+        return results
+
+    needs_enrichment = [
+        (i, r) for i, r in enumerate(results)
+        if r.doi and not r.pdf_url
+    ]
+
+    if not needs_enrichment:
+        return results
+
+    async def _fetch_pdf_url(doi: str) -> str | None:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://api.unpaywall.org/v2/{doi}",
+                    params={"email": settings.UNPAYWALL_EMAIL},
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                oa_loc = data.get("best_oa_location")
+                if not oa_loc:
+                    return None
+                return oa_loc.get("url_for_pdf") or oa_loc.get("url")
+        except Exception:
+            return None
+
+    import asyncio
+    pdf_urls = await asyncio.gather(
+        *[_fetch_pdf_url(r.doi) for _, r in needs_enrichment],
+        return_exceptions=True,
+    )
+
+    for (idx, _), pdf_url in zip(needs_enrichment, pdf_urls):
+        if isinstance(pdf_url, str):
+            results[idx].pdf_url = pdf_url
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # OpenAlex adapter
 # ---------------------------------------------------------------------------
 
