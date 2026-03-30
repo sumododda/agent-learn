@@ -1271,6 +1271,7 @@ async def write_section(
     credentials: dict | None = None,
     extra_fields: dict | None = None,
     discovery_context: str = "",
+    user_instructions: str = "",
 ) -> str:
     """Invoke the writer agent to generate a single section with evidence.
 
@@ -1310,6 +1311,8 @@ async def write_section(
     )
     if discovery_context:
         message += f"--- DISCOVERY CONTEXT (topic-level intelligence from research) ---\n{discovery_context}\n\n"
+    if user_instructions:
+        message += f"--- USER INSTRUCTIONS (style preferences) ---\n{user_instructions}\n\n"
     message += f"Write the section now. Start with ## {sec_title}"
 
     # Invoke LLM directly — the writer needs plain markdown, not structured
@@ -1347,6 +1350,7 @@ async def edit_section(
     credentials: dict | None = None,
     extra_fields: dict | None = None,
     discovery_context: str = "",
+    user_instructions: str = "",
 ) -> EditorResult:
     """Invoke the editor agent to polish a draft and generate blackboard updates.
 
@@ -1370,6 +1374,8 @@ async def edit_section(
     )
     if discovery_context:
         message += f"--- DISCOVERY CONTEXT (topic-level intelligence from research) ---\n{discovery_context}\n\n"
+    if user_instructions:
+        message += f"--- USER INSTRUCTIONS (style preferences) ---\n{user_instructions}\n\n"
     message += (
         f"Section position: {section_position}\n\n"
         f"Polish the draft, check citations, and generate blackboard updates."
@@ -1784,6 +1790,7 @@ async def run_write_section(
         draft = await write_section(
             cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields,
             discovery_context=discovery_context,
+            user_instructions=course.instructions or "",
         )
         if draft and draft.strip():
             break
@@ -1886,6 +1893,7 @@ async def run_edit_section(
         editor_result = await edit_section(
             draft, blackboard, cards, section_position, session, provider, model, credentials, extra_fields,
             discovery_context=discovery_context,
+            user_instructions=course.instructions or "",
         )
         if editor_result.edited_content and editor_result.edited_content.strip():
             edited_content = editor_result.edited_content
