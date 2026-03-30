@@ -1346,6 +1346,7 @@ async def edit_section(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    discovery_context: str = "",
 ) -> EditorResult:
     """Invoke the editor agent to polish a draft and generate blackboard updates.
 
@@ -1366,6 +1367,10 @@ async def edit_section(
         f"--- DRAFT ---\n{draft}\n\n"
         f"--- BLACKBOARD (shared course knowledge) ---\n{blackboard_text}\n\n"
         f"--- EVIDENCE CARDS ---\n{cards_text}\n\n"
+    )
+    if discovery_context:
+        message += f"--- DISCOVERY CONTEXT (topic-level intelligence from research) ---\n{discovery_context}\n\n"
+    message += (
         f"Section position: {section_position}\n\n"
         f"Polish the draft, check citations, and generate blackboard updates."
     )
@@ -1869,6 +1874,9 @@ async def run_edit_section(
     # Fetch blackboard
     blackboard = await get_blackboard(course_id, session)
 
+    # Load discovery context (topic-level intelligence from research)
+    discovery_context = await _load_discovery_context(course_id, session)
+
     # Run editor with retry on empty output, fall back to draft
     draft = section.content
     max_edit_attempts = 3
@@ -1876,7 +1884,8 @@ async def run_edit_section(
     editor_result = None
     for attempt in range(1, max_edit_attempts + 1):
         editor_result = await edit_section(
-            draft, blackboard, cards, section_position, session, provider, model, credentials, extra_fields
+            draft, blackboard, cards, section_position, session, provider, model, credentials, extra_fields,
+            discovery_context=discovery_context,
         )
         if editor_result.edited_content and editor_result.edited_content.strip():
             edited_content = editor_result.edited_content

@@ -1096,3 +1096,96 @@ async def test_write_section_omits_discovery_context_when_empty(setup_db, db_ses
     messages = call_args[0][0]
     user_message = messages[1].content
     assert "DISCOVERY CONTEXT" not in user_message
+
+
+# ---------------------------------------------------------------------------
+# Tests: Editor pipeline includes discovery context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_edit_section_includes_discovery_context(setup_db, db_session, course_with_discovery_brief):
+    """edit_section message contains DISCOVERY CONTEXT when discovery_context is provided."""
+    course, topic_brief_data = course_with_discovery_brief
+
+    card = EvidenceCard(
+        course_id=course.id,
+        section_position=1,
+        claim="ML uses statistical models",
+        source_url="https://example.com",
+        source_title="ML Guide",
+        source_tier=1,
+        passage="Machine learning uses statistical models...",
+        retrieved_date=date.today(),
+        confidence=0.9,
+        explanation="Core ML concept",
+        verified=True,
+        verification_note="Good source",
+    )
+    db_session.add(card)
+    await db_session.commit()
+
+    draft = "## Intro to ML\n\nDraft content about machine learning."
+
+    mock_result = EditorResult(
+        edited_content="## Intro to ML\n\nEdited content about ML.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=["ML basics"],
+            key_points_summary="ML uses statistical models.",
+            new_sources=[],
+        ),
+    )
+
+    mock_agent = _mock_editor_agent(mock_result)
+
+    from app.agent_service import _load_discovery_context
+    discovery_ctx = await _load_discovery_context(course.id, db_session)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
+        from app.agent_service import edit_section
+
+        result = await edit_section(
+            draft, None, [card], 1, db_session,
+            discovery_context=discovery_ctx,
+        )
+
+    assert isinstance(result, EditorResult)
+
+    # Verify the message sent to editor includes discovery context
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
+    assert "DISCOVERY CONTEXT" in message
+    assert "supervised learning" in message
+    assert "neural networks" in message
+    assert "LEARNING PROGRESSION" in message
+
+
+@pytest.mark.anyio
+async def test_edit_section_omits_discovery_context_when_empty(setup_db, db_session, course_with_cards):
+    """edit_section message does NOT contain DISCOVERY CONTEXT when discovery_context is empty."""
+    course, cards = course_with_cards
+    draft = "## Introduction\n\nDraft content."
+
+    mock_result = EditorResult(
+        edited_content="## Introduction\n\nEdited content.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=[],
+            key_points_summary="",
+            new_sources=[],
+        ),
+    )
+
+    mock_agent = _mock_editor_agent(mock_result)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
+        from app.agent_service import edit_section
+
+        result = await edit_section(draft, None, cards, 1, db_session)
+
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
+    assert "DISCOVERY CONTEXT" not in message
