@@ -186,7 +186,7 @@ async def create_course(
                 provider, model, creds, extra_fields = await _get_user_provider(user_id, sess)
                 search_provider, search_creds = await _get_user_search_provider(user_id, sess)
 
-                outline_with_briefs, ungrounded, _ = await generate_outline(
+                outline_with_briefs, ungrounded, topic_brief = await generate_outline(
                     body.topic, body.instructions, provider, model, creds, extra_fields,
                     search_provider, search_creds,
                     on_event=emit, user_id=user_id,
@@ -218,7 +218,7 @@ async def create_course(
                         section_position=None,
                         questions=[],
                         source_policy={},
-                        findings="Discovery research completed successfully",
+                        findings=topic_brief.model_dump_json() if topic_brief else "{}",
                     )
                     sess.add(discovery_brief)
 
@@ -491,7 +491,7 @@ async def regenerate_course(
         provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
         search_provider, search_creds = await _get_user_search_provider(user_id, session)
 
-        outline_with_briefs, ungrounded, _ = await generate_outline(
+        outline_with_briefs, ungrounded, topic_brief = await generate_outline(
             course.topic, enhanced_instructions, provider, model, creds, extra_fields,
             search_provider, search_creds, user_id=user_id, current_outline=current_sections,
         )
@@ -514,7 +514,7 @@ async def regenerate_course(
                 section_position=None,
                 questions=[],
                 source_policy={},
-                findings="Discovery research completed successfully (regenerate)",
+                findings=topic_brief.model_dump_json() if topic_brief else "{}",
             )
             session.add(discovery_brief)
 
