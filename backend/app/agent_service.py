@@ -524,6 +524,8 @@ async def generate_lessons(
 
         # 2. Sequential per section: verify -> write -> edit
         blackboard = await create_blackboard(course_id, session)
+        discovery_context = await _load_discovery_context(course_id, session)
+        user_instructions = course.instructions or ""
 
         for section in sorted(course.sections, key=lambda s: s.position):
             cards = await get_evidence_cards(
@@ -569,7 +571,8 @@ async def generate_lessons(
                 )
                 await update_course_status(course_id, "writing", session)
                 draft = await write_section(
-                    cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields
+                    cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields,
+                    discovery_context=discovery_context, user_instructions=user_instructions,
                 )
 
                 if not draft or not draft.strip():
@@ -588,7 +591,8 @@ async def generate_lessons(
                 )
                 await update_course_status(course_id, "editing", session)
                 editor_result = await edit_section(
-                    draft, blackboard, cards, section.position, session, provider, model, credentials, extra_fields
+                    draft, blackboard, cards, section.position, session, provider, model, credentials, extra_fields,
+                    discovery_context=discovery_context, user_instructions=user_instructions,
                 )
 
                 # Persist
@@ -1221,7 +1225,7 @@ async def _load_discovery_context(course_id, session: AsyncSession) -> str:
     result = await session.execute(
         select(ResearchBrief).where(
             ResearchBrief.course_id == course_id,
-            ResearchBrief.section_position == None,
+            ResearchBrief.section_position.is_(None),
         )
     )
     brief = result.scalar_one_or_none()
