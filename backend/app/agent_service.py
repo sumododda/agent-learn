@@ -114,6 +114,7 @@ async def update_course_status(
 
 
 _MAX_QUERY_LENGTH = 300
+_ACADEMIC_SEARCH_TIMEOUT_SECONDS = 6.0
 
 
 async def _generate_discovery_queries(
@@ -189,45 +190,121 @@ async def discover_topic(
         for i, query in enumerate(queries):
             await on_event("query", {"index": i, "total": len(queries), "query": query})
 
-    # Run searches via configured provider with fallback (in parallel)
-    all_search_results = []
-    search_tasks = [
-        search_service.search_with_fallback(
-            search_provider, query, search_credentials or {},
-            user_id=user_id, max_results=5, search_depth="basic",
-        )
-        for query in queries
-    ]
-    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-
-    for i, (query, result) in enumerate(zip(queries, search_results)):
-        if isinstance(result, BaseException):
-            logger.warning("[discover] Search failed for query '%s': %s", query, result)
-            continue
-        logger.debug("[discover] Query %d/%d returned %d results", i + 1, len(queries), len(result))
-        for r in result:
-            all_search_results.append({
-                "title": r.title,
-                "url": r.url,
-                "content": r.content,
-                "score": r.score,
-            })
-        # Emit per-result source events and query_done
-        if on_event:
-            for r in result:
-                await on_event("source", {"query_index": i, "title": r.title, "url": r.url, "snippet": r.content[:200] if r.content else ""})
-            await on_event("query_done", {"index": i, "result_count": len(result)})
-
-    # Academic search (if enabled)
+    academic_provider_names: list[str] = []
     if academic_credentials and academic_options and academic_options.get("enabled"):
-        from app.search_service import academic_search as run_academic_search, deduplicate_academic_results
-        academic_results: list = []
-        for q in queries:
-            try:
-                batch = await run_academic_search(q, academic_credentials, academic_options, max_results=5)
-                academic_results.extend(batch)
-            except Exception as e:
-                logger.warning("[discover] Academic search failed for query '%s': %s", q[:60], e)
+        from app.search_service import get_active_academic_provider_names
+
+        academic_provider_names = get_active_academic_provider_names(academic_credentials)
+        if on_event and academic_provider_names:
+            for i, query in enumerate(queries):
+                await on_event(
+                    "academic_query",
+                    {
+                        "index": i,
+                        "total": len(queries),
+                        "query": query,
+                        "providers": academic_provider_names,
+                    },
+                )
+
+    all_search_results = []
+    academic_results: list = []
+    web_source_count = 0
+    academic_source_count = 0
+
+    async def _run_web_query(index: int, query: str):
+        try:
+            results = await search_service.search_with_fallback(
+                search_provider, query, search_credentials or {},
+                user_id=user_id, max_results=5, search_depth="basic",
+            )
+            return ("web", index, query, results, None)
+        except Exception as e:
+            return ("web", index, query, [], e)
+
+    async def _run_academic_query(index: int, query: str):
+        from app.search_service import academic_search as run_academic_search
+
+        try:
+            results = await run_academic_search(
+                query,
+                academic_credentials or {},
+                academic_options or {},
+                max_results=5,
+                timeout_seconds=_ACADEMIC_SEARCH_TIMEOUT_SECONDS,
+            )
+            return ("academic", index, query, results, None)
+        except Exception as e:
+            return ("academic", index, query, [], e)
+
+    pending_tasks = [
+        asyncio.create_task(_run_web_query(i, query))
+        for i, query in enumerate(queries)
+    ]
+    if academic_provider_names:
+        pending_tasks.extend(
+            asyncio.create_task(_run_academic_query(i, query))
+            for i, query in enumerate(queries)
+        )
+
+    for task in asyncio.as_completed(pending_tasks):
+        lane, index, query, result, error = await task
+        if lane == "web":
+            if error is not None:
+                logger.warning("[discover] Search failed for query '%s': %s", query, error)
+            else:
+                logger.debug("[discover] Query %d/%d returned %d results", index + 1, len(queries), len(result))
+                web_source_count += len(result)
+                for r in result:
+                    all_search_results.append({
+                        "title": r.title,
+                        "url": r.url,
+                        "content": r.content,
+                        "score": r.score,
+                    })
+                if on_event:
+                    for r in result:
+                        await on_event(
+                            "source",
+                            {
+                                "query_index": index,
+                                "title": r.title,
+                                "url": r.url,
+                                "snippet": r.content[:200] if r.content else "",
+                            },
+                        )
+            if on_event:
+                await on_event("query_done", {"index": index, "result_count": len(result)})
+            continue
+
+        if error is not None:
+            logger.warning("[discover] Academic search failed for query '%s': %s", query[:60], error)
+        else:
+            academic_source_count += len(result)
+            academic_results.extend(result)
+            if on_event:
+                for r in result:
+                    await on_event(
+                        "academic_source",
+                        {
+                            "query_index": index,
+                            "title": r.title,
+                            "url": r.url,
+                            "snippet": r.content[:200] if r.content else "",
+                            "authors": r.authors or [],
+                            "year": r.year,
+                            "venue": r.venue,
+                            "citations": r.citation_count,
+                            "doi": r.doi,
+                            "pdf_url": r.pdf_url,
+                        },
+                    )
+        if on_event:
+            await on_event("academic_query_done", {"index": index, "result_count": len(result)})
+
+    if academic_results:
+        from app.search_service import deduplicate_academic_results
+
         academic_results = deduplicate_academic_results(academic_results)
         # Sort academic results by citation count (highest first)
         academic_results.sort(key=lambda r: r.citation_count or 0, reverse=True)
@@ -259,7 +336,14 @@ async def discover_topic(
 
     # Emit discovery_done with total count
     if on_event:
-        await on_event("discovery_done", {"total_sources": len(all_search_results)})
+        await on_event(
+            "discovery_done",
+            {
+                "total_sources": web_source_count + academic_source_count,
+                "web_sources": web_source_count,
+                "academic_sources": academic_source_count,
+            },
+        )
 
     logger.info("[discover] Collected %d search results from %d queries", len(all_search_results), len(queries))
 
@@ -587,6 +671,24 @@ async def research_section(
     all_results: list[dict] = []
     academic_raw_results: list = []  # Keep raw SearchResults for deep reading
 
+    academic_future = None
+    if academic_credentials and academic_options and academic_options.get("enabled"):
+        from app.search_service import academic_search as run_academic_search
+
+        academic_future = asyncio.gather(
+            *[
+                run_academic_search(
+                    question,
+                    academic_credentials,
+                    academic_options,
+                    max_results=5,
+                    timeout_seconds=_ACADEMIC_SEARCH_TIMEOUT_SECONDS,
+                )
+                for question in brief.questions
+            ],
+            return_exceptions=True,
+        )
+
     search_tasks = [
         search_service.search_with_fallback(
             search_provider, question, search_credentials or {},
@@ -610,28 +712,25 @@ async def research_section(
             })
 
     # Academic search (if enabled)
-    if academic_credentials and academic_options and academic_options.get("enabled"):
-        from app.search_service import academic_search as run_academic_search
-        for question in brief.questions:
-            try:
-                acad_results = await run_academic_search(
-                    question, academic_credentials, academic_options, max_results=5,
-                )
-                academic_raw_results.extend(acad_results)
-                for r in acad_results:
-                    all_results.append({
-                        "title": f"[ACADEMIC] {r.title}",
-                        "url": r.url,
-                        "content": r.content,
-                        "score": r.score,
-                        "authors": ", ".join(r.authors) if r.authors else None,
-                        "year": r.year,
-                        "venue": r.venue,
-                        "citations": r.citation_count,
-                        "doi": r.doi,
-                    })
-            except Exception as e:
-                logger.warning("[research] Academic search failed for '%s': %s", question[:60], e)
+    if academic_future is not None:
+        academic_batches = await academic_future
+        for question, acad_results in zip(brief.questions, academic_batches):
+            if isinstance(acad_results, BaseException):
+                logger.warning("[research] Academic search failed for '%s': %s", question[:60], acad_results)
+                continue
+            academic_raw_results.extend(acad_results)
+            for r in acad_results:
+                all_results.append({
+                    "title": f"[ACADEMIC] {r.title}",
+                    "url": r.url,
+                    "content": r.content,
+                    "score": r.score,
+                    "authors": ", ".join(r.authors) if r.authors else None,
+                    "year": r.year,
+                    "venue": r.venue,
+                    "citations": r.citation_count,
+                    "doi": r.doi,
+                })
 
     # Deep-read top papers (if academic search is enabled and returned results)
     deep_readings: list[dict] = []

@@ -467,7 +467,13 @@ async def _search_semantic_scholar(
                     timeout=30.0,
                 )
                 if resp.status_code == 429:
-                    delay = 2 ** attempt * (1.0 if api_key else 3.0)
+                    if not api_key:
+                        logger.info(
+                            "[semantic_scholar] 429 rate limited for anonymous traffic; skipping retries for '%s'",
+                            query[:60],
+                        )
+                        return []
+                    delay = 2 ** attempt * 1.0
                     logger.info("[semantic_scholar] 429 rate limited, retrying in %.0fs (attempt %d/3)...", delay, attempt + 1)
                     await _asyncio.sleep(delay)
                     continue
@@ -721,15 +727,34 @@ def _get_academic_adapter(name: str):
     return getattr(sys.modules[__name__], func_name, None)
 
 
+def _should_run_academic_provider(name: str, creds: dict) -> bool:
+    """Return whether a provider is safe and configured enough to query."""
+    if name not in _ACADEMIC_ADAPTERS:
+        return False
+    # Anonymous Semantic Scholar traffic is heavily rate-limited in production
+    # and can stall discovery for little value. Only use it with an API key.
+    if name == "semantic_scholar" and not (creds or {}).get("api_key"):
+        return False
+    return True
+
+
+def get_active_academic_provider_names(academic_credentials: dict[str, dict]) -> list[str]:
+    """Return academic providers that will actually be queried."""
+    return [
+        name
+        for name, creds in academic_credentials.items()
+        if _should_run_academic_provider(name, creds)
+    ]
+
+
 async def academic_search(
     query: str,
     academic_credentials: dict[str, dict],
     academic_options: dict,
     max_results: int = 5,
+    timeout_seconds: float | None = None,
 ) -> list[SearchResult]:
     """Search all configured academic providers, deduplicate, return merged results."""
-    import asyncio
-
     async def _run_provider(name: str, creds: dict) -> list[SearchResult]:
         adapter = _get_academic_adapter(name)
         if not adapter:
@@ -740,34 +765,38 @@ async def academic_search(
             logger.warning("[academic_search] %s failed for '%s': %s", name, query[:60], e)
             return []
 
-    # Rate-limited providers (S2, arXiv) run sequentially via their internal timers.
-    # OpenAlex has no strict per-request limit — runs in parallel with the rest.
-    # Strategy: kick off OpenAlex in background, run S2 + arXiv sequentially, merge.
-    rate_limited = {}  # sequential: semantic_scholar, arxiv
-    parallel = {}      # can run concurrently: openalex
+    tasks: dict[_asyncio.Task, str] = {}
     for name, creds in academic_credentials.items():
-        if name not in _ACADEMIC_ADAPTERS:
+        if not _should_run_academic_provider(name, creds):
             continue
-        if name == "openalex":
-            parallel[name] = creds
-        else:
-            rate_limited[name] = creds
+        tasks[_asyncio.create_task(_run_provider(name, creds))] = name
 
-    # Start OpenAlex in parallel (if configured)
-    parallel_tasks = [_run_provider(name, creds) for name, creds in parallel.items()]
-    openalex_future = asyncio.gather(*parallel_tasks) if parallel_tasks else None
+    if not tasks:
+        return []
 
-    # Run rate-limited providers sequentially (their adapters enforce timing)
+    if timeout_seconds is None:
+        done, pending = await _asyncio.wait(tasks.keys())
+    else:
+        done, pending = await _asyncio.wait(tasks.keys(), timeout=timeout_seconds)
+
+    for task in pending:
+        provider_name = tasks[task]
+        logger.warning(
+            "[academic_search] %s timed out for '%s' after %.1fs",
+            provider_name,
+            query[:60],
+            timeout_seconds,
+        )
+        task.cancel()
+    if pending:
+        await _asyncio.gather(*pending, return_exceptions=True)
+
     all_results: list[SearchResult] = []
-    for name, creds in rate_limited.items():
-        results = await _run_provider(name, creds)
-        all_results.extend(results)
-
-    # Collect OpenAlex results
-    if openalex_future is not None:
-        parallel_results = await openalex_future
-        for batch in parallel_results:
-            all_results.extend(batch)
+    for task in done:
+        try:
+            all_results.extend(task.result())
+        except Exception as e:
+            logger.warning("[academic_search] provider task failed for '%s': %s", query[:60], e)
 
     return deduplicate_academic_results(all_results)
 

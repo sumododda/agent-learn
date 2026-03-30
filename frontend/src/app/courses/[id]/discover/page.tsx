@@ -19,12 +19,18 @@ interface SourceItem {
   url: string;
   title: string;
   snippet?: string;
+  authors?: string[];
+  year?: number | null;
+  venue?: string | null;
+  citations?: number | null;
 }
 
 interface QueryGroup {
+  index: number;
   query: string;
   sources: SourceItem[];
   done: boolean;
+  providers?: string[];
 }
 
 interface PlannedSection {
@@ -35,6 +41,53 @@ interface PlannedSection {
 
 type ActiveStep = 'searching' | 'synthesizing' | 'planning' | 'complete' | 'error' | null;
 
+function upsertQueryGroup(
+  prev: QueryGroup[],
+  index: number,
+  query: string,
+  providers?: string[],
+): QueryGroup[] {
+  const existing = prev.find((item) => item.index === index);
+  if (existing) {
+    return prev
+      .map((item) => (
+        item.index === index
+          ? {
+              ...item,
+              query: query || item.query,
+              providers: providers ?? item.providers,
+            }
+          : item
+      ))
+      .sort((a, b) => a.index - b.index);
+  }
+  return [...prev, { index, query, providers, sources: [], done: false }].sort((a, b) => a.index - b.index);
+}
+
+function appendSourceToGroup(prev: QueryGroup[], index: number, source: SourceItem): QueryGroup[] {
+  const existing = prev.find((item) => item.index === index);
+  if (!existing) {
+    return [...prev, { index, query: '', sources: [source], done: false }].sort((a, b) => a.index - b.index);
+  }
+  return prev.map((item) => (
+    item.index === index
+      ? { ...item, sources: [...item.sources, source] }
+      : item
+  ));
+}
+
+function markQueryDone(prev: QueryGroup[], index: number): QueryGroup[] {
+  const existing = prev.find((item) => item.index === index);
+  if (!existing) {
+    return [...prev, { index, query: '', sources: [], done: true }].sort((a, b) => a.index - b.index);
+  }
+  return prev.map((item) => (
+    item.index === index
+      ? { ...item, done: true }
+      : item
+  ));
+}
+
 export default function DiscoverPage() {
   const params = useParams();
   const router = useRouter();
@@ -42,25 +95,29 @@ export default function DiscoverPage() {
   const courseId = params.id as string;
 
   const [topic, setTopic] = useState<string>('');
-  const [queries, setQueries] = useState<QueryGroup[]>([]);
-  const [totalSources, setTotalSources] = useState(0);
+  const [webQueries, setWebQueries] = useState<QueryGroup[]>([]);
+  const [academicQueries, setAcademicQueries] = useState<QueryGroup[]>([]);
+  const [webSourceCount, setWebSourceCount] = useState(0);
+  const [academicSourceCount, setAcademicSourceCount] = useState(0);
   const [keyConcepts, setKeyConcepts] = useState<string[]>([]);
   const [sections, setSections] = useState<PlannedSection[]>([]);
   const [activeStep, setActiveStep] = useState<ActiveStep>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ungrounded, setUngrounded] = useState(false);
+  const [hasAcademicResearch, setHasAcademicResearch] = useState(false);
 
   const feedRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const receivedEvents = useRef(false);
+  const totalSources = webSourceCount + academicSourceCount;
 
   // Auto-scroll to bottom
   useEffect(() => {
     if (feedRef.current) {
       feedRef.current.scrollTop = feedRef.current.scrollHeight;
     }
-  }, [queries, keyConcepts, sections, activeStep]);
+  }, [webQueries, academicQueries, keyConcepts, sections, activeStep]);
 
   // Static fallback: fetch course data if no SSE events within 5s
   const fallbackToStatic = useCallback(async () => {
@@ -69,6 +126,7 @@ export default function DiscoverPage() {
       const token = await getToken();
       const course = await getCourse(courseId, token);
       setTopic(course.topic);
+      setHasAcademicResearch(!!course.academic_search?.enabled);
       if (course.sections && course.sections.length > 0) {
         setSections(
           course.sections
@@ -89,6 +147,14 @@ export default function DiscoverPage() {
     async function connect() {
       const token = await getToken();
       if (!token || cancelled) return;
+
+      void getCourse(courseId, token)
+        .then((course) => {
+          if (cancelled) return;
+          setTopic((prev) => prev || course.topic);
+          setHasAcademicResearch(!!course.academic_search?.enabled);
+        })
+        .catch(() => {});
 
       let ticket: string;
       try {
@@ -114,7 +180,7 @@ export default function DiscoverPage() {
         try {
           const data = JSON.parse(e.data);
           setActiveStep('searching');
-          setQueries((prev) => [...prev, { query: data.query, sources: [], done: false }]);
+          setWebQueries((prev) => upsertQueryGroup(prev, data.index ?? prev.length, data.query));
         } catch {}
       });
 
@@ -122,39 +188,65 @@ export default function DiscoverPage() {
         receivedEvents.current = true;
         try {
           const data = JSON.parse(e.data);
-          setQueries((prev) => {
-            const updated = [...prev];
-            const idx = data.query_index;
-            if (idx !== undefined && idx < updated.length) {
-              const target = { ...updated[idx] };
-              target.sources = [...target.sources, { url: data.url, title: data.title, snippet: data.snippet }];
-              updated[idx] = target;
-            } else if (updated.length > 0) {
-              const last = { ...updated[updated.length - 1] };
-              last.sources = [...last.sources, { url: data.url, title: data.title, snippet: data.snippet }];
-              updated[updated.length - 1] = last;
-            }
-            return updated;
-          });
-          setTotalSources((prev) => prev + 1);
+          setWebQueries((prev) => appendSourceToGroup(prev, data.query_index ?? 0, {
+            url: data.url,
+            title: data.title,
+            snippet: data.snippet,
+          }));
+          setWebSourceCount((prev) => prev + 1);
         } catch {}
       });
 
-      es.addEventListener('query_done', () => {
+      es.addEventListener('query_done', (e: MessageEvent) => {
         receivedEvents.current = true;
-        setQueries((prev) => {
-          if (prev.length === 0) return prev;
-          const updated = [...prev];
-          updated[updated.length - 1] = { ...updated[updated.length - 1], done: true };
-          return updated;
-        });
+        try {
+          const data = JSON.parse(e.data);
+          setWebQueries((prev) => markQueryDone(prev, data.index ?? 0));
+        } catch {}
+      });
+
+      es.addEventListener('academic_query', (e: MessageEvent) => {
+        receivedEvents.current = true;
+        try {
+          const data = JSON.parse(e.data);
+          setHasAcademicResearch(true);
+          setActiveStep('searching');
+          setAcademicQueries((prev) => upsertQueryGroup(prev, data.index ?? prev.length, data.query, data.providers));
+        } catch {}
+      });
+
+      es.addEventListener('academic_source', (e: MessageEvent) => {
+        receivedEvents.current = true;
+        try {
+          const data = JSON.parse(e.data);
+          setHasAcademicResearch(true);
+          setAcademicQueries((prev) => appendSourceToGroup(prev, data.query_index ?? 0, {
+            url: data.url,
+            title: data.title,
+            snippet: data.snippet,
+            authors: data.authors,
+            year: data.year,
+            venue: data.venue,
+            citations: data.citations,
+          }));
+          setAcademicSourceCount((prev) => prev + 1);
+        } catch {}
+      });
+
+      es.addEventListener('academic_query_done', (e: MessageEvent) => {
+        receivedEvents.current = true;
+        try {
+          const data = JSON.parse(e.data);
+          setAcademicQueries((prev) => markQueryDone(prev, data.index ?? 0));
+        } catch {}
       });
 
       es.addEventListener('discovery_done', (e: MessageEvent) => {
         receivedEvents.current = true;
         try {
           const data = JSON.parse(e.data);
-          if (data.total_sources !== undefined) setTotalSources(data.total_sources);
+          if (data.web_sources !== undefined) setWebSourceCount(data.web_sources);
+          if (data.academic_sources !== undefined) setAcademicSourceCount(data.academic_sources);
           if (data.topic) setTopic(data.topic);
         } catch {}
       });
@@ -256,19 +348,19 @@ export default function DiscoverPage() {
 
         {/* Feed */}
         <div ref={feedRef} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-          {/* Search queries section */}
-          {queries.length > 0 && (
+          {/* Web search section */}
+          {webQueries.length > 0 && (
             <Card>
               <CardContent>
                 <div className="flex items-center gap-2 mb-3">
                   {activeStep === 'searching' && <PulsingDot />}
                   <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
-                    Search Queries
+                    Web Search
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {queries.map((q, i) => (
-                    <div key={i}>
+                  {webQueries.map((q) => (
+                    <div key={`web-${q.index}`}>
                       <div className="flex items-center gap-2">
                         <code className="text-sm font-mono text-foreground bg-muted px-2 py-0.5 rounded">
                           {q.query}
@@ -307,6 +399,73 @@ export default function DiscoverPage() {
             </Card>
           )}
 
+          {/* Academic research section */}
+          {hasAcademicResearch && (
+            <Card>
+              <CardContent>
+                <div className="flex items-center gap-2 mb-3">
+                  {activeStep === 'searching' && <PulsingDot />}
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+                    Academic Research
+                  </span>
+                </div>
+                {academicQueries.length > 0 ? (
+                  <div className="space-y-3">
+                    {academicQueries.map((q) => (
+                      <div key={`academic-${q.index}`}>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <code className="text-sm font-mono text-foreground bg-muted px-2 py-0.5 rounded">
+                            {q.query}
+                          </code>
+                          {q.done && (
+                            <span className="text-xs text-green-500">
+                              {q.sources.length} paper{q.sources.length !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </div>
+                        {q.providers && q.providers.length > 0 && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Providers: {q.providers.join(', ')}
+                          </p>
+                        )}
+                        {q.sources.length > 0 && (
+                          <div className="ml-4 mt-1.5 space-y-2">
+                            {q.sources.map((s, j) => (
+                              <div key={j} className="text-sm">
+                                <a
+                                  href={safeHref(s.url)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-primary hover:underline"
+                                >
+                                  {s.title || s.url}
+                                </a>
+                                {(s.year || s.venue || s.citations != null) && (
+                                  <p className="text-xs text-muted-foreground mt-0.5">
+                                    {[s.year, s.venue, s.citations != null ? `${s.citations} citations` : null]
+                                      .filter(Boolean)
+                                      .join(' • ')}
+                                  </p>
+                                )}
+                                {s.snippet && (
+                                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                                    {s.snippet}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Preparing academic research...</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Discovery summary */}
           {totalSources > 0 && activeStep !== 'searching' && (
             <Card>
@@ -315,8 +474,9 @@ export default function DiscoverPage() {
                   Discovery Summary
                 </span>
                 <p className="text-sm text-foreground mt-1">
-                  Found {totalSources} source{totalSources !== 1 ? 's' : ''} across{' '}
-                  {queries.length} quer{queries.length !== 1 ? 'ies' : 'y'}
+                  Found {webSourceCount} web source{webSourceCount !== 1 ? 's' : ''}
+                  {hasAcademicResearch && ` and ${academicSourceCount} academic paper${academicSourceCount !== 1 ? 's' : ''}`}
+                  {' '}across {(webQueries.length || academicQueries.length)} quer{(webQueries.length || academicQueries.length) !== 1 ? 'ies' : 'y'}
                 </p>
               </CardContent>
             </Card>

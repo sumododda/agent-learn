@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -325,7 +327,7 @@ async def test_academic_search_all_providers():
 
         results = await academic_search(
             query="test",
-            academic_credentials={"semantic_scholar": {}, "arxiv": {}, "openalex": {"api_key": "k"}},
+            academic_credentials={"semantic_scholar": {"api_key": "k"}, "arxiv": {}, "openalex": {"api_key": "k"}},
             academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
             max_results=5,
         )
@@ -354,7 +356,7 @@ async def test_academic_search_deduplicates():
 
         results = await academic_search(
             query="test",
-            academic_credentials={"semantic_scholar": {}, "openalex": {"api_key": "k"}},
+            academic_credentials={"semantic_scholar": {"api_key": "k"}, "openalex": {"api_key": "k"}},
             academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
         )
 
@@ -368,19 +370,66 @@ async def test_academic_search_skips_missing_providers():
 
     paper = SearchResult(title="P", url="u", content="c", is_academic=True)
 
-    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[paper]), \
+    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock, return_value=[paper]) as mock_s2, \
          patch("app.search_service._search_arxiv", new_callable=AsyncMock) as mock_arxiv, \
          patch("app.search_service._search_openalex", new_callable=AsyncMock) as mock_oa:
 
         results = await academic_search(
             query="test",
-            academic_credentials={"semantic_scholar": {}},
+            academic_credentials={"semantic_scholar": {"api_key": "k"}},
             academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
         )
 
     assert len(results) == 1
+    mock_s2.assert_awaited_once()
     mock_arxiv.assert_not_called()
     mock_oa.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_academic_search_skips_anonymous_semantic_scholar():
+    from app.search_service import academic_search
+
+    paper = SearchResult(title="P", url="u", content="c", is_academic=True)
+
+    with patch("app.search_service._search_semantic_scholar", new_callable=AsyncMock) as mock_s2, \
+         patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[paper]) as mock_arxiv:
+
+        results = await academic_search(
+            query="test",
+            academic_credentials={"semantic_scholar": {}, "arxiv": {}},
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+        )
+
+    assert len(results) == 1
+    mock_s2.assert_not_called()
+    mock_arxiv.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_academic_search_timeout_returns_partial_results():
+    from app.search_service import academic_search
+
+    fast_paper = SearchResult(title="Fast", url="oa.org", content="Abstract", is_academic=True)
+
+    async def _slow_provider(*args, **kwargs):
+        await asyncio.sleep(0.1)
+        return [SearchResult(title="Slow", url="arxiv.org", content="Abstract", is_academic=True)]
+
+    with patch("app.search_service._search_arxiv", new_callable=AsyncMock, side_effect=_slow_provider) as mock_arxiv, \
+         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[fast_paper]) as mock_oa:
+
+        results = await academic_search(
+            query="test",
+            academic_credentials={"arxiv": {}, "openalex": {"api_key": "k"}},
+            academic_options={"year_range": "all", "min_citations": 0, "open_access_only": False},
+            timeout_seconds=0.01,
+        )
+
+    assert len(results) == 1
+    assert results[0].title == "Fast"
+    mock_arxiv.assert_awaited_once()
+    mock_oa.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
