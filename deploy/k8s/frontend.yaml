@@ -53,6 +53,8 @@ metadata:
   namespace: agent-learn
   labels:
     app: frontend
+  annotations:
+    cloud.google.com/backend-config: '{"default": "frontend-config"}'
 spec:
   type: ClusterIP
   ports:
