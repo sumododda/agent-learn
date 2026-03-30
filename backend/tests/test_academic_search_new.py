@@ -417,3 +417,79 @@ async def test_unpaywall_skips_when_no_email():
         enriched = await _enrich_with_unpaywall(results)
 
     assert enriched[0].pdf_url is None
+
+
+@pytest.mark.asyncio
+async def test_academic_search_parallel_both_providers():
+    from app.academic_search import academic_search, AcademicResult
+
+    openalex_results = [
+        AcademicResult(title="OA Paper", url="http://oa", abstract="OA abstract", authors=["A"], doi="10.1/oa", year=2024, citation_count=50)
+    ]
+    serper_results = [
+        AcademicResult(title="Serper Paper", url="http://serper", abstract="Serper abstract", authors=["B"], year=2023, citation_count=30)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, return_value=openalex_results):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=serper_results):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test query", max_results=10)
+
+    assert len(results) == 2
+    titles = {r.title for r in results}
+    assert "OA Paper" in titles
+    assert "Serper Paper" in titles
+
+
+@pytest.mark.asyncio
+async def test_academic_search_deduplicates_cross_provider():
+    from app.academic_search import academic_search, AcademicResult
+
+    openalex_results = [
+        AcademicResult(title="Same Paper", url="http://oa", abstract="abstract", authors=["A"], doi="10.1/same", year=2024, citation_count=50, venue="NeurIPS")
+    ]
+    serper_results = [
+        AcademicResult(title="Same Paper", url="http://serper", abstract="abstract", authors=["A"], year=2024, citation_count=50)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, return_value=openalex_results):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=serper_results):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test", max_results=10)
+
+    assert len(results) == 1
+    assert results[0].venue == "NeurIPS"
+
+
+@pytest.mark.asyncio
+async def test_academic_search_one_provider_fails():
+    from app.academic_search import academic_search, AcademicResult
+
+    good_results = [
+        AcademicResult(title="Good Paper", url="u", abstract="a", authors=["A"], year=2024)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, side_effect=Exception("API down")):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=good_results):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test", max_results=10)
+
+    assert len(results) == 1
+    assert results[0].title == "Good Paper"
+
+
+@pytest.mark.asyncio
+async def test_academic_search_respects_max_results():
+    from app.academic_search import academic_search, AcademicResult
+
+    many_results = [
+        AcademicResult(title=f"Paper {i}", url=f"u{i}", abstract="a", authors=["A"], year=2024)
+        for i in range(20)
+    ]
+
+    with patch("app.academic_search._search_openalex", new_callable=AsyncMock, return_value=many_results):
+        with patch("app.academic_search._search_serper_scholar", new_callable=AsyncMock, return_value=[]):
+            with patch("app.academic_search._enrich_with_unpaywall", new_callable=AsyncMock, side_effect=lambda r: r):
+                results = await academic_search("test", max_results=5)
+
+    assert len(results) == 5
