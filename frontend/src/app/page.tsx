@@ -296,7 +296,7 @@ function HomePageInner() {
               <Textarea
                 value={extraInstructions}
                 onChange={(e) => setExtraInstructions(e.target.value)}
-                placeholder="Any other preferences? e.g. &quot;Assume I know Python&quot;, &quot;Include code examples&quot;..."
+                placeholder="e.g. &quot;Do a deep dive with lots of diagrams&quot;, &quot;Keep it short and practical&quot;, &quot;Assume I know Python&quot;, &quot;Focus on real-world examples&quot;..."
                 rows={2}
                 className="resize-none"
               />
