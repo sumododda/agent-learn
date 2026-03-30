@@ -21,6 +21,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      infra: ${{ steps.filter.outputs.infra }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -33,6 +34,12 @@ jobs:
             frontend:
               - 'frontend/**'
               - 'deploy/Dockerfile.frontend'
+            infra:
+              - 'deploy/k8s/ingress.yaml'
+              - 'deploy/k8s/backend-config.yaml'
+              - 'deploy/k8s/frontend-config.yaml'
+              - 'deploy/k8s/managed-cert.yaml'
+              - '.github/workflows/deploy.yml'
 
   # ── Build Backend ───────────────────────────────────────────────
   build-backend:
@@ -105,7 +112,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
-            INTERNAL_API_URL=${{ vars.INTERNAL_API_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -115,7 +121,7 @@ jobs:
     needs: [changes, build-backend, build-frontend]
     if: >-
       always() && !failure() && !cancelled() &&
-      (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true')
+      (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.infra == 'true')
     runs-on: ubuntu-latest
     environment: production
 
@@ -134,6 +140,14 @@ jobs:
           cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
           location: ${{ vars.GCP_REGION }}
           project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Apply ingress and LB config
+        if: needs.changes.outputs.infra == 'true'
+        run: |
+          kubectl apply -f deploy/k8s/backend-config.yaml
+          kubectl apply -f deploy/k8s/frontend-config.yaml
+          kubectl apply -f deploy/k8s/managed-cert.yaml
+          kubectl apply -f deploy/k8s/ingress.yaml
 
       # Update backend if changed
       - name: Deploy backend
