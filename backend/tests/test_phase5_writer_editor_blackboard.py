@@ -1189,3 +1189,124 @@ async def test_edit_section_omits_discovery_context_when_empty(setup_db, db_sess
     call_args = mock_agent.ainvoke.call_args
     message = call_args[0][0]["messages"][0]["content"]
     assert "DISCOVERY CONTEXT" not in message
+
+
+# ---------------------------------------------------------------------------
+# Tests: User instructions passed to writer and editor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_write_section_includes_user_instructions(setup_db, db_session, course_with_cards):
+    """write_section message includes USER INSTRUCTIONS when user_instructions is provided."""
+    course, cards = course_with_cards
+
+    section = SimpleNamespace(title="Introduction", summary="Getting started with Python")
+    outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
+
+    mock_llm = _mock_writer_llm("## Introduction\n\nContent here.")
+
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
+        from app.agent_service import write_section
+
+        result = await write_section(
+            cards, None, section, outline, db_session,
+            user_instructions="Focus on practical examples. Explain from the ground up.",
+        )
+
+    assert "## Introduction" in result
+
+    # Verify the message sent to the LLM contains user instructions
+    call_args = mock_llm.ainvoke.call_args
+    messages = call_args[0][0]
+    user_message = messages[1].content
+    assert "USER INSTRUCTIONS" in user_message
+    assert "Focus on practical examples" in user_message
+    assert "Explain from the ground up" in user_message
+
+
+@pytest.mark.anyio
+async def test_write_section_omits_user_instructions_when_empty(setup_db, db_session, course_with_cards):
+    """write_section message does NOT contain USER INSTRUCTIONS when user_instructions is empty."""
+    course, cards = course_with_cards
+
+    section = SimpleNamespace(title="Introduction", summary="Getting started")
+    outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
+
+    mock_llm = _mock_writer_llm("## Introduction\n\nContent here.")
+
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
+        from app.agent_service import write_section
+
+        result = await write_section(cards, None, section, outline, db_session)
+
+    call_args = mock_llm.ainvoke.call_args
+    messages = call_args[0][0]
+    user_message = messages[1].content
+    assert "USER INSTRUCTIONS" not in user_message
+
+
+@pytest.mark.anyio
+async def test_edit_section_includes_user_instructions(setup_db, db_session, course_with_cards):
+    """edit_section message includes USER INSTRUCTIONS when user_instructions is provided."""
+    course, cards = course_with_cards
+    draft = "## Introduction\n\nDraft content."
+
+    mock_result = EditorResult(
+        edited_content="## Introduction\n\nEdited content.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=[],
+            key_points_summary="",
+            new_sources=[],
+        ),
+    )
+
+    mock_agent = _mock_editor_agent(mock_result)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
+        from app.agent_service import edit_section
+
+        result = await edit_section(
+            draft, None, cards, 1, db_session,
+            user_instructions="Deep & Technical. Advanced English.",
+        )
+
+    assert isinstance(result, EditorResult)
+
+    # Verify the message sent to editor includes user instructions
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
+    assert "USER INSTRUCTIONS" in message
+    assert "Deep & Technical" in message
+    assert "Advanced English" in message
+
+
+@pytest.mark.anyio
+async def test_edit_section_omits_user_instructions_when_empty(setup_db, db_session, course_with_cards):
+    """edit_section message does NOT contain USER INSTRUCTIONS when user_instructions is empty."""
+    course, cards = course_with_cards
+    draft = "## Introduction\n\nDraft content."
+
+    mock_result = EditorResult(
+        edited_content="## Introduction\n\nEdited content.",
+        blackboard_updates=BlackboardUpdates(
+            new_glossary_terms={},
+            new_concept_ownership={},
+            topics_covered=[],
+            key_points_summary="",
+            new_sources=[],
+        ),
+    )
+
+    mock_agent = _mock_editor_agent(mock_result)
+
+    with patch("app.agent_service.create_editor", return_value=mock_agent):
+        from app.agent_service import edit_section
+
+        result = await edit_section(draft, None, cards, 1, db_session)
+
+    call_args = mock_agent.ainvoke.call_args
+    message = call_args[0][0]["messages"][0]["content"]
+    assert "USER INSTRUCTIONS" not in message
