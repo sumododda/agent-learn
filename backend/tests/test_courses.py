@@ -69,7 +69,7 @@ async def _create_course_with_sections(client, setup_db):
 @pytest.mark.anyio
 async def test_create_course(client, mock_outline_with_briefs):
     """POST /api/courses now returns status='researching' immediately."""
-    mock_return = (mock_outline_with_briefs, False)
+    mock_return = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -89,7 +89,7 @@ async def test_create_course(client, mock_outline_with_briefs):
 @pytest.mark.anyio
 async def test_create_course_ungrounded(client, mock_outline_with_briefs):
     """POST /api/courses always returns ungrounded=False in the immediate response."""
-    mock_return = (mock_outline_with_briefs, True)
+    mock_return = (mock_outline_with_briefs, True, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -107,7 +107,7 @@ async def test_create_course_ungrounded(client, mock_outline_with_briefs):
 
 @pytest.mark.anyio
 async def test_create_course_passes_academic_search_context(client, mock_outline_with_briefs):
-    mock_return = (mock_outline_with_briefs, False)
+    mock_return = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -144,7 +144,7 @@ async def test_get_course_not_found(client):
 
 @pytest.mark.anyio
 async def test_create_and_get_course(client, mock_outline_with_briefs):
-    mock_return = (mock_outline_with_briefs, False)
+    mock_return = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -251,7 +251,7 @@ async def test_generate_course_requires_outline_ready(setup_db, client, mock_out
 async def test_regenerate_course(setup_db, client, mock_outline_with_briefs):
     course_id = await _create_course_with_sections(client, setup_db)
 
-    mock_return_2 = (mock_outline_with_briefs, False)
+    mock_return_2 = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -289,7 +289,7 @@ async def test_regenerate_course_passes_current_outline_and_targeted_feedback(se
     except StopAsyncIteration:
         pass
 
-    mock_return = (mock_outline_with_briefs, False)
+    mock_return = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -319,7 +319,7 @@ async def test_regenerate_course_passes_current_outline_and_targeted_feedback(se
 @pytest.mark.anyio
 async def test_get_evidence_empty(client, mock_outline_with_briefs):
     """GET /evidence returns empty list when no evidence cards exist."""
-    mock_return = (mock_outline_with_briefs, False)
+    mock_return = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
@@ -345,7 +345,7 @@ async def test_get_evidence_not_found(client):
 @pytest.mark.anyio
 async def test_get_blackboard_none(client, mock_outline_with_briefs):
     """GET /blackboard returns null when no blackboard exists."""
-    mock_return = (mock_outline_with_briefs, False)
+    mock_return = (mock_outline_with_briefs, False, None)
     with (
         patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
         patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),

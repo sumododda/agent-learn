@@ -7,8 +7,10 @@ Tests cover:
 - edit_section: editor agent invocation, EditorResult handling
 - extract_citations: [N] marker extraction and card mapping
 - Editor/BlackboardUpdates schema validation
+- Discovery brief persists serialized TopicBrief JSON in findings field
 """
 
+import json
 import uuid
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -21,8 +23,12 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.agent import (
     BlackboardUpdates,
     EditorResult,
+    TopicBrief,
+    CourseOutlineWithBriefs,
+    OutlineSection,
+    ResearchBriefItem,
 )
-from app.models import Base, Blackboard, Course, EvidenceCard, Section, User
+from app.models import Base, Blackboard, Course, EvidenceCard, ResearchBrief, Section, User
 
 # Deterministic test user UUID for phase5 tests
 _TEST_USER_UUID = uuid.UUID("00000000-0000-0000-0000-cccccccccccc")
@@ -747,3 +753,135 @@ async def test_extract_citations_skips_zero(setup_db, course_with_cards):
     citations = extract_citations(content, cards)
     assert len(citations) == 1
     assert citations[0]["number"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Test: Discovery brief persists serialized TopicBrief in findings field
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def course_for_discovery(db_session):
+    """Create a minimal course for discovery brief tests."""
+    course = Course(topic="Machine Learning", status="researching", user_id=_TEST_USER_UUID)
+    db_session.add(course)
+    await db_session.commit()
+    return course
+
+
+@pytest.mark.anyio
+async def test_discovery_brief_contains_serialized_topic_brief(db_session, course_for_discovery):
+    """run_discover_and_plan persists the TopicBrief JSON in the discovery brief findings field."""
+    course = course_for_discovery
+
+    topic_brief = TopicBrief(
+        key_concepts=["supervised learning", "neural networks"],
+        subtopics=["classification", "regression", "deep learning"],
+        authoritative_sources=["https://arxiv.org/example"],
+        learning_progression="Start with basics, then move to neural networks",
+        open_debates=["interpretability vs accuracy"],
+        raw_search_results=[{"title": "ML intro", "url": "https://example.com"}],
+    )
+
+    mock_outline = CourseOutlineWithBriefs(
+        sections=[
+            OutlineSection(position=1, title="Intro to ML", summary="Basics of ML"),
+            OutlineSection(position=2, title="Neural Networks", summary="Deep learning fundamentals"),
+        ],
+        research_briefs=[
+            ResearchBriefItem(
+                section_position=1,
+                questions=["What is ML?"],
+                source_policy={"preferred_tiers": [1, 2], "scope": "intro"},
+            ),
+            ResearchBriefItem(
+                section_position=2,
+                questions=["What are neural networks?"],
+                source_policy={"preferred_tiers": [1, 2], "scope": "deep learning"},
+            ),
+        ],
+    )
+
+    with patch(
+        "app.agent_service.generate_outline",
+        new_callable=AsyncMock,
+        return_value=(mock_outline, False, topic_brief),
+    ):
+        from app.agent_service import run_discover_and_plan
+
+        result = await run_discover_and_plan(
+            course.id,
+            db_session,
+            provider="anthropic",
+            model="claude-sonnet-4-20250514",
+            credentials={"api_key": "sk-test"},
+        )
+
+    # Fetch the discovery brief (section_position=None)
+    briefs_result = await db_session.execute(
+        select(ResearchBrief).where(
+            ResearchBrief.course_id == course.id,
+            ResearchBrief.section_position.is_(None),
+        )
+    )
+    discovery_brief = briefs_result.scalar_one_or_none()
+
+    assert discovery_brief is not None, "Discovery brief should exist"
+    assert discovery_brief.findings != "Discovery research completed successfully", \
+        "findings should not contain the old placeholder string"
+
+    # Verify findings is valid JSON containing TopicBrief fields
+    findings_data = json.loads(discovery_brief.findings)
+    assert "key_concepts" in findings_data
+    assert "supervised learning" in findings_data["key_concepts"]
+    assert "neural networks" in findings_data["key_concepts"]
+    assert "subtopics" in findings_data
+    assert "classification" in findings_data["subtopics"]
+    assert "authoritative_sources" in findings_data
+    assert findings_data["learning_progression"] == "Start with basics, then move to neural networks"
+    assert "interpretability vs accuracy" in findings_data["open_debates"]
+    assert len(findings_data["raw_search_results"]) == 1
+
+
+@pytest.mark.anyio
+async def test_discovery_brief_empty_json_when_ungrounded(db_session, course_for_discovery):
+    """When ungrounded (no topic_brief), the discovery brief is not created."""
+    course = course_for_discovery
+
+    mock_outline = CourseOutlineWithBriefs(
+        sections=[
+            OutlineSection(position=1, title="Intro", summary="Basics"),
+        ],
+        research_briefs=[
+            ResearchBriefItem(
+                section_position=1,
+                questions=["What is it?"],
+                source_policy={},
+            ),
+        ],
+    )
+
+    with patch(
+        "app.agent_service.generate_outline",
+        new_callable=AsyncMock,
+        return_value=(mock_outline, True, None),
+    ):
+        from app.agent_service import run_discover_and_plan
+
+        await run_discover_and_plan(
+            course.id,
+            db_session,
+            provider="anthropic",
+            model="claude-sonnet-4-20250514",
+            credentials={"api_key": "sk-test"},
+        )
+
+    # When ungrounded, no discovery brief should be created
+    briefs_result = await db_session.execute(
+        select(ResearchBrief).where(
+            ResearchBrief.course_id == course.id,
+            ResearchBrief.section_position.is_(None),
+        )
+    )
+    discovery_brief = briefs_result.scalar_one_or_none()
+    assert discovery_brief is None, "Discovery brief should not be created when ungrounded"
