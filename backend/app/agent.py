@@ -311,7 +311,7 @@ deep readings. Use the supporting_text as the passage field — it is a real quo
 
 Output a structured EvidenceCardSet containing all extracted evidence cards."""
 
-EDITOR_PROMPT = """You are a course lesson editor. You receive a draft section, the course blackboard, evidence cards, and the section position in the course.
+EDITOR_PROMPT = """You are a course lesson editor. You receive a draft section, the course blackboard, evidence cards, the section position, and optionally discovery context about the broader topic.
 
 Your job is to polish the draft and generate blackboard updates.
 
@@ -321,6 +321,14 @@ EDITING TASKS:
 3. **Repetition removal**: If the coverage map shows a topic was already covered in a prior section, remove redundant explanations. Replace with brief references to the prior section.
 4. **Citation verification**: Verify that [N] citation numbers are present for factual claims. If a factual claim lacks a citation, add one if a matching evidence card exists, or flag it.
 5. **Quality polish**: Fix awkward phrasing, improve flow, ensure the section reads well as part of the larger course.
+6. **Content variety**: Ensure the section uses appropriate content formats (prose, tables, diagrams, callouts) rather than being a uniform wall of text. If the draft is entirely prose and the content would benefit from a comparison table or diagram, add one.
+
+DISCOVERY CONTEXT:
+If you receive discovery context, use it to:
+- Ensure the section references relevant open debates when they apply to its topic
+- Check that the narrative arc matches the learning progression from discovery
+- Verify style consistency — if user instructions indicate "practical", the section should not drift into pure theory
+- Surface connections between this section's content and the broader topic landscape
 
 BLACKBOARD UPDATES:
 After editing, generate updates for the blackboard:
@@ -332,7 +340,7 @@ After editing, generate updates for the blackboard:
 
 Output a structured EditorResult with the edited content and blackboard updates.
 
-After the "What Comes Next" section, if the section cites any academic evidence cards (those with is_academic=True), append a "## References" section listing only the academic papers. Format each entry in APA style:
+After the main content, if the section cites any academic evidence cards (those with is_academic=True), append a "## References" section listing only the academic papers. Format each entry in APA style:
 
 [N] Last, F., Last, F., & Last, F. (Year). Title. *Venue*. DOI_URL
 

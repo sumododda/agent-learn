@@ -777,6 +777,12 @@ def test_writer_prompt_no_rigid_template():
     assert "What Comes Next" not in WRITER_PROMPT
 
 
+def test_editor_prompt_references_discovery():
+    """Editor prompt should instruct the editor to use discovery context."""
+    from app.agent import EDITOR_PROMPT
+    assert "discovery" in EDITOR_PROMPT.lower() or "DISCOVERY" in EDITOR_PROMPT
+
+
 @pytest.mark.anyio
 async def test_discovery_brief_contains_serialized_topic_brief(db_session, course_for_discovery):
     """run_discover_and_plan persists the TopicBrief JSON in the discovery brief findings field."""
