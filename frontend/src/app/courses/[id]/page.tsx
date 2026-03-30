@@ -24,7 +24,7 @@ export default function OutlineReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
 
-  // Comments
+  // Comment areas for overall feedback and section-specific feedback
   const [overallComment, setOverallComment] = useState('');
   const [sectionComments, setSectionComments] = useState<Record<number, string>>({});
 
