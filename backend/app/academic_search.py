@@ -3,11 +3,18 @@
 Standalone module providing AcademicResult and associated scoring/dedup logic,
 ported from search_service.py but adapted to use `abstract` instead of `content`.
 """
+import logging
 import math
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
+
+import httpx
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _ACADEMIC_STOPWORDS = {
     "about", "across", "after", "also", "among", "analysis", "and", "are", "build", "building",
@@ -253,3 +260,93 @@ def select_for_discovery(
             selected.append(result)
 
     return selected[:limit]
+
+
+# ---------------------------------------------------------------------------
+# OpenAlex adapter
+# ---------------------------------------------------------------------------
+
+def _year_range_to_openalex_filter(year_range: str) -> str:
+    if year_range == "all":
+        return ""
+    current_year = date.today().year
+    years_back = {"5y": 5, "10y": 10, "20y": 20}
+    n = years_back.get(year_range, 5)
+    return f"publication_year:>{current_year - n}"
+
+
+async def _search_openalex(
+    query: str,
+    max_results: int = 10,
+    options: dict | None = None,
+) -> list[AcademicResult]:
+    if not settings.OPENALEX_API_KEY:
+        logger.warning("[openalex] No API key configured, skipping")
+        return []
+
+    opts = options or {}
+    params: dict = {
+        "search": query,
+        "per_page": min(max_results, 100),
+        "api_key": settings.OPENALEX_API_KEY,
+        "select": "id,doi,title,display_name,relevance_score,publication_year,cited_by_count,authorships,abstract_inverted_index,primary_location,open_access",
+    }
+
+    filters: list[str] = []
+    year_filter = _year_range_to_openalex_filter(opts.get("year_range", "all"))
+    if year_filter:
+        filters.append(year_filter)
+        params["sort"] = "publication_date:desc"
+    min_cit = opts.get("min_citations", 0)
+    if min_cit and min_cit > 0:
+        filters.append(f"cited_by_count:>{min_cit}")
+    if opts.get("open_access_only", False):
+        filters.append("is_oa:true")
+    if filters:
+        params["filter"] = ",".join(filters)
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = []
+    for work in data.get("results", []):
+        abstract = reconstruct_abstract(work.get("abstract_inverted_index"))
+        if not abstract:
+            continue
+
+        authors = [
+            a["author"]["display_name"]
+            for a in work.get("authorships", [])
+            if a.get("author", {}).get("display_name")
+        ]
+
+        doi_raw = work.get("doi") or ""
+        doi = doi_raw.replace("https://doi.org/", "") if doi_raw else None
+
+        loc = work.get("primary_location") or {}
+        source = loc.get("source") or {}
+        venue = source.get("display_name")
+
+        url = loc.get("landing_page_url") or work.get("id", "")
+        pdf_url = loc.get("pdf_url") or (work.get("open_access") or {}).get("oa_url")
+
+        results.append(AcademicResult(
+            title=work.get("title") or work.get("display_name", ""),
+            url=url,
+            abstract=abstract,
+            authors=authors,
+            year=work.get("publication_year"),
+            venue=venue,
+            citation_count=work.get("cited_by_count"),
+            doi=doi,
+            pdf_url=pdf_url,
+            score=work.get("relevance_score", 0.0),
+        ))
+
+    return results

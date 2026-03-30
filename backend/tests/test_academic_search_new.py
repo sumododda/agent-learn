@@ -79,3 +79,103 @@ def test_select_for_discovery_limits():
     ]
     selected = select_for_discovery(results, query="test", limit=5)
     assert len(selected) == 5
+
+
+import httpx
+from unittest.mock import AsyncMock, patch, MagicMock
+
+
+@pytest.mark.asyncio
+async def test_openalex_adapter_maps_fields():
+    from app.academic_search import _search_openalex
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "meta": {"count": 1},
+        "results": [
+            {
+                "title": "Test Paper",
+                "display_name": "Test Paper",
+                "id": "https://openalex.org/W123",
+                "doi": "https://doi.org/10.1234/test",
+                "relevance_score": 15.5,
+                "publication_year": 2024,
+                "cited_by_count": 42,
+                "authorships": [
+                    {"author": {"display_name": "Alice Smith"}},
+                    {"author": {"display_name": "Bob Jones"}},
+                ],
+                "abstract_inverted_index": {"Test": [0], "abstract": [1], "here": [2]},
+                "primary_location": {
+                    "landing_page_url": "https://example.com/paper",
+                    "pdf_url": "https://example.com/paper.pdf",
+                    "source": {"display_name": "Nature"},
+                },
+                "open_access": {"oa_url": None},
+            }
+        ],
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.OPENALEX_API_KEY = "test-key"
+            results = await _search_openalex("machine learning", max_results=5)
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.title == "Test Paper"
+    assert r.authors == ["Alice Smith", "Bob Jones"]
+    assert r.year == 2024
+    assert r.citation_count == 42
+    assert r.doi == "10.1234/test"
+    assert r.venue == "Nature"
+    assert r.pdf_url == "https://example.com/paper.pdf"
+    assert r.abstract == "Test abstract here"
+    assert r.score == 15.5
+
+    # Verify API key passed as query param
+    call_kwargs = mock_client.get.call_args
+    assert call_kwargs.kwargs["params"]["api_key"] == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_openalex_adapter_skips_no_abstract():
+    from app.academic_search import _search_openalex
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "meta": {"count": 1},
+        "results": [{"title": "No Abstract", "abstract_inverted_index": None, "authorships": [], "primary_location": None, "open_access": {}}],
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.OPENALEX_API_KEY = "test-key"
+            results = await _search_openalex("test", max_results=5)
+
+    assert len(results) == 0
+
+
+@pytest.mark.asyncio
+async def test_openalex_adapter_returns_empty_when_no_key():
+    from app.academic_search import _search_openalex
+
+    with patch("app.academic_search.settings") as mock_settings:
+        mock_settings.OPENALEX_API_KEY = ""
+        results = await _search_openalex("test", max_results=5)
+
+    assert results == []
