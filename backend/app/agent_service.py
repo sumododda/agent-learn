@@ -179,11 +179,33 @@ async def discover_topic(
 
     credentials = credentials or {}
 
+    if on_event:
+        await on_event(
+            "generating_queries",
+            {
+                "topic": topic,
+                "academic_enabled": bool(
+                    academic_credentials and academic_options and academic_options.get("enabled")
+                ),
+            },
+        )
+
     # Generate search queries using LLM
     queries = await _generate_discovery_queries(
         topic, instructions, provider, model, credentials, extra_fields
     )
     logger.info("Discovery research: %d queries for topic '%s'", len(queries), topic)
+
+    if on_event:
+        await on_event(
+            "search_started",
+            {
+                "total_queries": len(queries),
+                "academic_enabled": bool(
+                    academic_credentials and academic_options and academic_options.get("enabled")
+                ),
+            },
+        )
 
     # Emit query events before launching searches
     if on_event:

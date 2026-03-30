@@ -42,6 +42,8 @@ router = APIRouter()
 _feed_events: dict[str, list[dict]] = {}
 _feed_queues: dict[str, asyncio.Queue] = {}
 _MAX_FEED_ENTRIES = 200  # max concurrent course feeds
+_DISCOVER_REPLAY_POLL_SECONDS = 0.2
+_DISCOVER_REPLAY_TIMEOUT_SECONDS = 300
 
 
 def _format_outline_snapshot(sections: list[Section]) -> str:
@@ -810,7 +812,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
         # Case 1 & 2: Buffer exists (may still be in progress)
         if course_id_str in _feed_events:
             read_index = 0
-            max_polls = 300  # 5 minutes at 1-second intervals
+            max_polls = int(_DISCOVER_REPLAY_TIMEOUT_SECONDS / _DISCOVER_REPLAY_POLL_SECONDS)
 
             for _ in range(max_polls):
                 # Read any new events since last check
@@ -832,7 +834,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
                 if course_id_str not in _feed_queues:
                     return
 
-                await asyncio.sleep(1)
+                await asyncio.sleep(_DISCOVER_REPLAY_POLL_SECONDS)
 
             # Timeout
             yield f"event: error\ndata: {json_mod.dumps({'message': 'Stream timed out'})}\n\n"
