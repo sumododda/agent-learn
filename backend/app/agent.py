@@ -9,7 +9,7 @@ from app import provider_service
 logger = logging.getLogger(__name__)
 
 
-# --- Structured output schemas for planner ---
+# --- Structured output schemas for planner -
 
 
 class OutlineSection(BaseModel):
