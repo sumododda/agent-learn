@@ -1,9 +1,18 @@
 import asyncio
+from datetime import date
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.search_service import SearchResult, reconstruct_abstract, deduplicate_academic_results, rank_for_deep_reading
+from app.search_service import (
+    SearchResult,
+    deduplicate_academic_results,
+    rank_for_deep_reading,
+    reconstruct_abstract,
+    rerank_academic_results,
+    score_academic_result,
+    select_academic_results_for_discovery,
+)
 
 
 def test_search_result_academic_fields_default():
@@ -245,6 +254,28 @@ async def test_search_arxiv_parses_xml():
 
 
 @pytest.mark.asyncio
+async def test_search_arxiv_prefers_submitted_date_when_year_range_filtered():
+    from app.search_service import _search_arxiv
+
+    xml_response = """<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom"></feed>"""
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.text = xml_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        await _search_arxiv(
+            "ai agents security", {}, 5, "basic",
+            academic_options={"year_range": "5y", "min_citations": 0, "open_access_only": False},
+        )
+
+    params = mock_get.await_args.kwargs["params"]
+    assert params["sortBy"] == "submittedDate"
+
+
+@pytest.mark.asyncio
 async def test_search_openalex_parses_response():
     from app.search_service import _search_openalex
 
@@ -300,6 +331,26 @@ async def test_search_openalex_parses_response():
     assert r.doi == "10.1234/test"
     assert r.pdf_url == "https://nature.com/articles/test.pdf"
     assert r.content == "Deep learning has transformed AI research"
+
+
+@pytest.mark.asyncio
+async def test_search_openalex_sorts_newest_first_when_year_range_filtered():
+    from app.search_service import _search_openalex
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"results": []}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        await _search_openalex(
+            "ai agents security", {"api_key": "test_key"}, 5, "basic",
+            academic_options={"year_range": "5y", "min_citations": 0, "open_access_only": False},
+        )
+
+    params = mock_get.await_args.kwargs["params"]
+    assert params["sort"] == "publication_date:desc"
+    assert "publication_year:>" in params["filter"]
 
 
 @pytest.mark.asyncio
@@ -432,6 +483,46 @@ async def test_academic_search_timeout_returns_partial_results():
     mock_oa.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_academic_search_reranks_recent_relevant_results_ahead_of_generic_cited_results():
+    from app.search_service import academic_search
+
+    current_year = date.today().year
+    relevant_recent = SearchResult(
+        title="Prompt Injection Attacks on LLM Agents",
+        url="https://arxiv.org/abs/1",
+        content="We study prompt injection, tool abuse, and memory poisoning in autonomous agents.",
+        is_academic=True,
+        year=current_year,
+        venue="USENIX Security",
+        citation_count=18,
+        score=2.0,
+    )
+    generic_old = SearchResult(
+        title="A Comprehensive Overview of Large Language Models",
+        url="https://openalex.org/W1",
+        content="This survey reviews general progress in language models and AI systems.",
+        is_academic=True,
+        year=current_year - 3,
+        venue="Artificial Intelligence Review",
+        citation_count=700,
+        score=8.0,
+    )
+
+    with patch("app.search_service._search_arxiv", new_callable=AsyncMock, return_value=[relevant_recent]), \
+         patch("app.search_service._search_openalex", new_callable=AsyncMock, return_value=[generic_old]):
+
+        results = await academic_search(
+            query="AI agents security prompt injection tool abuse",
+            academic_credentials={"arxiv": {}, "openalex": {"api_key": "k"}},
+            academic_options={"year_range": "5y", "min_citations": 0, "open_access_only": False},
+            max_results=1,
+        )
+
+    assert len(results) == 1
+    assert results[0].title == relevant_recent.title
+
+
 # ---------------------------------------------------------------------------
 # Task 1: pdf_url field tests
 # ---------------------------------------------------------------------------
@@ -481,3 +572,80 @@ def test_rank_log_scale_diminishing_returns():
                       citation_count=10000, year=2023, pdf_url="https://pdf.com/2")
     ratio = rank_for_deep_reading(r2) / rank_for_deep_reading(r1)
     assert ratio < 2.0
+
+
+def test_rerank_academic_results_penalizes_off_topic_biomedical_papers():
+    current_year = date.today().year
+    relevant = SearchResult(
+        title="Memory Poisoning in LLM Agents",
+        url="https://arxiv.org/abs/1",
+        content="This paper studies memory poisoning, prompt injection, and tool misuse in AI agents.",
+        is_academic=True,
+        year=current_year,
+        venue="USENIX Security",
+        citation_count=25,
+        score=1.5,
+    )
+    biomedical = SearchResult(
+        title="Targeting p53 pathways: mechanisms, structures and advances in therapy",
+        url="https://openalex.org/W2",
+        content="The TP53 tumor suppressor is altered in human cancers and is a major focus of oncology research.",
+        is_academic=True,
+        year=current_year - 1,
+        venue="Signal Transduction and Targeted Therapy",
+        citation_count=800,
+        score=12.0,
+    )
+
+    ranked = rerank_academic_results(
+        [biomedical, relevant],
+        query="AI agents security memory poisoning prompt injection",
+    )
+
+    assert ranked[0] == relevant
+    assert score_academic_result(relevant, query="AI agents security memory poisoning") > score_academic_result(
+        biomedical,
+        query="AI agents security memory poisoning",
+    )
+
+
+def test_select_academic_results_for_discovery_preserves_recent_mix():
+    current_year = date.today().year
+    recent_one = SearchResult(
+        title="Prompt Injection Defenses for Agentic Systems",
+        url="u1",
+        content="Prompt injection attacks against LLM agents and layered mitigations.",
+        is_academic=True,
+        year=current_year,
+        citation_count=12,
+        venue="arXiv",
+    )
+    recent_two = SearchResult(
+        title="Tool Abuse in Autonomous Agents",
+        url="u2",
+        content="Autonomous agent tool abuse, action guards, and sandboxing.",
+        is_academic=True,
+        year=current_year - 1,
+        citation_count=18,
+        venue="IEEE S&P",
+    )
+    foundational = SearchResult(
+        title="A Survey of Security Risks in Large Language Models",
+        url="u3",
+        content="A broad survey of prompt injection, jailbreaks, and model misuse.",
+        is_academic=True,
+        year=current_year - 3,
+        citation_count=450,
+        venue="ACM CCS",
+    )
+
+    selected = select_academic_results_for_discovery(
+        [foundational, recent_two, recent_one],
+        query="AI agents security prompt injection tool abuse",
+        limit=3,
+        recent_target=2,
+    )
+
+    assert recent_one in selected
+    assert recent_two in selected
+    assert len(selected) == 3

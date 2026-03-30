@@ -132,6 +132,7 @@ async def _generate_discovery_queries(
         "Generate exactly 5 web search queries to research the following topic for building an educational course.\n"
         "The queries should cover different angles: fundamentals, key concepts, practical applications, "
         "common misconceptions, and authoritative resources.\n"
+        f"At least one query should explicitly target recent developments or research from {date.today().year - 1} or {date.today().year} when the topic is active.\n"
         "Each query must be under 200 characters and specific to the topic.\n\n"
         f"Topic: {topic}\n"
     )
@@ -325,26 +326,33 @@ async def discover_topic(
             await on_event("academic_query_done", {"index": index, "result_count": len(result)})
 
     if academic_results:
-        from app.search_service import deduplicate_academic_results
+        from app.search_service import (
+            deduplicate_academic_results,
+            score_academic_result,
+            select_academic_results_for_discovery,
+        )
 
         academic_results = deduplicate_academic_results(academic_results)
-        # Sort academic results by citation count (highest first)
-        academic_results.sort(key=lambda r: r.citation_count or 0, reverse=True)
-        # Take top 10 academic results with full metadata
-        for r in academic_results[:10]:
+        selected_academic_results = select_academic_results_for_discovery(
+            academic_results,
+            query=topic,
+            topic=instructions,
+            limit=10,
+        )
+        for r in selected_academic_results:
             all_search_results.append({
                 "title": f"[ACADEMIC] {r.title}",
                 "url": r.url,
                 "content": r.content,
-                "score": r.score,
+                "score": score_academic_result(r, query=topic, topic=instructions),
                 "authors": ", ".join(r.authors) if r.authors else None,
                 "year": r.year,
                 "venue": r.venue,
                 "citations": r.citation_count,
                 "doi": r.doi,
             })
-        if academic_results:
-            logger.info("[discover] Added %d academic results to discovery", len(academic_results))
+        if selected_academic_results:
+            logger.info("[discover] Added %d academic results to discovery", len(selected_academic_results))
 
     # Cap total results: academic (already limited to 10) + top 15 web by score
     web_results = [r for r in all_search_results if not str(r.get("title", "")).startswith("[ACADEMIC]")]

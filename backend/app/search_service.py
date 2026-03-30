@@ -9,6 +9,7 @@ import re
 import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import date
 
 import httpx
 
@@ -86,6 +87,33 @@ class SearchResult:
     pdf_url: str | None = None
 
 
+_ACADEMIC_STOPWORDS = {
+    "about", "across", "after", "also", "among", "analysis", "and", "are", "build", "building",
+    "common", "course", "design", "different", "exact", "for", "from", "guide", "how", "into",
+    "latest", "learn", "overview", "paper", "papers", "practical", "recent", "research", "resources",
+    "rules", "safe", "safely", "survey", "system", "systems", "that", "the", "their", "them", "these",
+    "this", "those", "through", "using", "what", "when", "where", "which", "with", "without", "your",
+}
+
+_ACADEMIC_SIGNAL_TERMS = {
+    "agent", "agents", "agentic", "alignment", "attack", "attacks", "audit", "autonomous", "defense",
+    "defenses", "exploit", "exploits", "function", "functions", "governance", "guardrail", "guardrails",
+    "injection", "jailbreak", "jailbreaks", "llm", "llms", "memory", "poison", "poisoning", "policy",
+    "policies", "privacy", "prompt", "prompts", "risk", "risks", "safe", "safety", "sandbox",
+    "sandboxing", "secure", "security", "tool", "tools", "vulnerability", "vulnerabilities",
+}
+
+_BIOMEDICAL_TERMS = {
+    "alzheimer", "biomedical", "cancer", "clinical", "drug", "drugs", "gene", "genes", "health",
+    "healthcare", "human", "humans", "medicine", "medical", "nanoparticles", "oncology", "patient",
+    "patients", "prostate", "protein", "proteins", "therapy", "therapies", "tumor", "tumors",
+}
+
+_SECURITY_VENUE_TERMS = {
+    "ccs", "crypto", "ndss", "privacy", "sec", "security", "sp", "usenix",
+}
+
+
 def reconstruct_abstract(inverted_index: dict | None) -> str:
     """Reconstruct plain text from OpenAlex abstract_inverted_index format."""
     if not inverted_index:
@@ -156,7 +184,6 @@ def rank_for_deep_reading(result: SearchResult) -> float:
         return -1
     citations = result.citation_count or 0
     year = result.year or 2020
-    from datetime import date
     age = date.today().year - year
     if age <= 2:
         recency = 3.0
@@ -165,6 +192,131 @@ def rank_for_deep_reading(result: SearchResult) -> float:
     else:
         recency = 1.0
     return math.log1p(citations) * recency
+
+
+def _tokenize_academic_text(text: str | None) -> set[str]:
+    """Tokenize text into a small, lowercase keyword set for heuristic ranking."""
+    if not text:
+        return set()
+    normalized = unicodedata.normalize("NFKD", text).lower()
+    tokens = re.findall(r"[a-z0-9]+", normalized)
+    return {
+        token
+        for token in tokens
+        if len(token) >= 3 and token not in _ACADEMIC_STOPWORDS
+    }
+
+
+def _academic_recency_score(year: int | None) -> float:
+    """Return a freshness boost that strongly prefers the last 1-2 years."""
+    if not year:
+        return 0.8
+    age = max(0, date.today().year - year)
+    if age == 0:
+        return 3.2
+    if age == 1:
+        return 2.8
+    if age == 2:
+        return 2.2
+    if age <= 4:
+        return 1.5
+    if age <= 6:
+        return 1.0
+    return 0.6
+
+
+def score_academic_result(
+    result: SearchResult,
+    query: str,
+    topic: str | None = None,
+) -> float:
+    """Heuristically score an academic result for discovery relevance."""
+    context_tokens = _tokenize_academic_text(f"{query} {topic or ''}")
+    result_tokens = _tokenize_academic_text(
+        " ".join(
+            [
+                result.title,
+                result.content,
+                result.venue or "",
+                " ".join(result.authors or []),
+            ]
+        )
+    )
+
+    lexical_overlap = len(context_tokens & result_tokens) / max(len(context_tokens), 1)
+
+    signal_query_terms = context_tokens & _ACADEMIC_SIGNAL_TERMS
+    signal_matches = signal_query_terms & result_tokens
+    signal_overlap = len(signal_matches) / max(len(signal_query_terms), 1) if signal_query_terms else 0.0
+
+    citation_score = math.log1p(result.citation_count or 0) * 0.35
+    provider_score = math.log1p(max(result.score or 0.0, 0.0)) * 0.4
+    recency_score = _academic_recency_score(result.year)
+
+    venue_tokens = _tokenize_academic_text(result.venue or "")
+    venue_boost = 0.6 if (signal_query_terms and venue_tokens & _SECURITY_VENUE_TERMS) else 0.0
+
+    penalty = 0.0
+    if signal_query_terms and not signal_matches:
+        penalty -= 3.5
+
+    biomedical_terms = result_tokens & _BIOMEDICAL_TERMS
+    if biomedical_terms and not (context_tokens & _BIOMEDICAL_TERMS):
+        penalty -= min(2.5, 0.9 * len(biomedical_terms))
+
+    return (
+        lexical_overlap * 4.0
+        + signal_overlap * 2.5
+        + citation_score
+        + provider_score
+        + recency_score
+        + venue_boost
+        + penalty
+    )
+
+
+def rerank_academic_results(
+    results: list[SearchResult],
+    query: str,
+    topic: str | None = None,
+) -> list[SearchResult]:
+    """Sort academic results by a hybrid topicality/freshness/authority score."""
+    return sorted(
+        results,
+        key=lambda r: (
+            score_academic_result(r, query=query, topic=topic),
+            r.citation_count or 0,
+            r.year or 0,
+        ),
+        reverse=True,
+    )
+
+
+def select_academic_results_for_discovery(
+    results: list[SearchResult],
+    query: str,
+    topic: str | None = None,
+    limit: int = 10,
+    recent_target: int = 3,
+) -> list[SearchResult]:
+    """Keep a mix of fresh and foundational academic papers for discovery."""
+    ranked = rerank_academic_results(results, query=query, topic=topic)
+    recent_cutoff = date.today().year - 1
+
+    selected: list[SearchResult] = []
+    for result in ranked:
+        if len(selected) >= recent_target:
+            break
+        if result.year and result.year >= recent_cutoff:
+            selected.append(result)
+
+    for result in ranked:
+        if len(selected) >= limit:
+            break
+        if result not in selected:
+            selected.append(result)
+
+    return selected[:limit]
 
 
 def get_search_provider_registry() -> dict:
@@ -536,6 +688,7 @@ async def _search_arxiv(
     date_filter = _year_range_to_arxiv_date_filter(opts.get("year_range", "all"))
     if date_filter:
         search_query += date_filter
+    sort_by = "submittedDate" if opts.get("year_range") not in (None, "all") else "relevance"
 
     # Enforce 3-second delay between arXiv requests. Lock serialises concurrent callers.
     async with _arxiv_lock:
@@ -552,7 +705,7 @@ async def _search_arxiv(
                     "search_query": search_query,
                     "start": 0,
                     "max_results": min(max_results, 100),
-                    "sortBy": "relevance",
+                    "sortBy": sort_by,
                     "sortOrder": "descending",
                 },
                 timeout=30.0,
@@ -651,6 +804,7 @@ async def _search_openalex(
     year_filter = _year_range_to_openalex_filter(opts.get("year_range", "all"))
     if year_filter:
         filters.append(year_filter)
+        params["sort"] = "publication_date:desc"
     min_cit = opts.get("min_citations", 0)
     if min_cit and min_cit > 0:
         filters.append(f"cited_by_count:>{min_cit}")
@@ -755,12 +909,14 @@ async def academic_search(
     timeout_seconds: float | None = None,
 ) -> list[SearchResult]:
     """Search all configured academic providers, deduplicate, return merged results."""
+    fetch_limit = min(max(max_results * 2, max_results), 12)
+
     async def _run_provider(name: str, creds: dict) -> list[SearchResult]:
         adapter = _get_academic_adapter(name)
         if not adapter:
             return []
         try:
-            return await adapter(query, creds, max_results, "basic", academic_options)
+            return await adapter(query, creds, fetch_limit, "basic", academic_options)
         except Exception as e:
             logger.warning("[academic_search] %s failed for '%s': %s", name, query[:60], e)
             return []
@@ -798,7 +954,9 @@ async def academic_search(
         except Exception as e:
             logger.warning("[academic_search] provider task failed for '%s': %s", query[:60], e)
 
-    return deduplicate_academic_results(all_results)
+    deduplicated = deduplicate_academic_results(all_results)
+    ranked = rerank_academic_results(deduplicated, query=query)
+    return ranked[:max_results]
 
 
 _ADAPTERS = {
