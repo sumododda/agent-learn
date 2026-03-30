@@ -1216,6 +1216,38 @@ def _format_blackboard_for_agent(blackboard: Blackboard | None) -> str:
     return "\n\n".join(parts)
 
 
+async def _load_discovery_context(course_id, session: AsyncSession) -> str:
+    """Load discovery brief findings and format for writer/editor prompts."""
+    result = await session.execute(
+        select(ResearchBrief).where(
+            ResearchBrief.course_id == course_id,
+            ResearchBrief.section_position == None,
+        )
+    )
+    brief = result.scalar_one_or_none()
+    if not brief or not brief.findings:
+        return ""
+
+    try:
+        data = json.loads(brief.findings)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+
+    parts = []
+    if data.get("key_concepts"):
+        parts.append("KEY CONCEPTS: " + ", ".join(data["key_concepts"]))
+    if data.get("learning_progression"):
+        parts.append("LEARNING PROGRESSION: " + data["learning_progression"])
+    if data.get("open_debates"):
+        parts.append("OPEN DEBATES:\n  - " + "\n  - ".join(data["open_debates"]))
+    if data.get("authoritative_sources"):
+        parts.append("AUTHORITATIVE SOURCES:\n  - " + "\n  - ".join(data["authoritative_sources"][:5]))
+    if data.get("subtopics"):
+        parts.append("SUBTOPICS: " + ", ".join(data["subtopics"]))
+
+    return "\n\n".join(parts) if parts else ""
+
+
 def _format_outline_context(outline: Sequence) -> str:
     """Format the full outline as a numbered list for context."""
     lines = []
@@ -1238,6 +1270,7 @@ async def write_section(
     model: str = "",
     credentials: dict | None = None,
     extra_fields: dict | None = None,
+    discovery_context: str = "",
 ) -> str:
     """Invoke the writer agent to generate a single section with evidence.
 
@@ -1274,8 +1307,10 @@ async def write_section(
         f"--- FULL COURSE OUTLINE (for context) ---\n{outline_text}\n\n"
         f"--- VERIFIED EVIDENCE CARDS ---\n{cards_text}\n\n"
         f"--- BLACKBOARD (shared course knowledge) ---\n{blackboard_text}\n\n"
-        f"Write the section now. Start with ## {sec_title}"
     )
+    if discovery_context:
+        message += f"--- DISCOVERY CONTEXT (topic-level intelligence from research) ---\n{discovery_context}\n\n"
+    message += f"Write the section now. Start with ## {sec_title}"
 
     # Invoke LLM directly — the writer needs plain markdown, not structured
     # output via an agent framework. Direct call avoids tool distractions.
@@ -1734,12 +1769,16 @@ async def run_write_section(
     if blackboard is None:
         blackboard = await create_blackboard(course_id, session)
 
+    # Load discovery context (topic-level intelligence from research)
+    discovery_context = await _load_discovery_context(course_id, session)
+
     # Run writer with retry on empty output
     max_write_attempts = 3
     draft = ""
     for attempt in range(1, max_write_attempts + 1):
         draft = await write_section(
-            cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields
+            cards, blackboard, section, list(course.sections), session, provider, model, credentials, extra_fields,
+            discovery_context=discovery_context,
         )
         if draft and draft.strip():
             break

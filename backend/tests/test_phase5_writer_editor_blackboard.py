@@ -899,3 +899,200 @@ async def test_discovery_brief_empty_json_when_ungrounded(db_session, course_for
     )
     discovery_brief = briefs_result.scalar_one_or_none()
     assert discovery_brief is None, "Discovery brief should not be created when ungrounded"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _load_discovery_context helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def course_with_discovery_brief(db_session):
+    """Create a course with a discovery brief (section_position=None) containing TopicBrief JSON."""
+    course = Course(topic="Machine Learning", status="writing", user_id=_TEST_USER_UUID)
+    db_session.add(course)
+    await db_session.commit()
+
+    topic_brief_data = {
+        "key_concepts": ["supervised learning", "neural networks", "gradient descent"],
+        "subtopics": ["classification", "regression", "deep learning"],
+        "authoritative_sources": ["https://arxiv.org/example", "https://dl.acm.org/example"],
+        "learning_progression": "Start with basics, then move to neural networks",
+        "open_debates": ["interpretability vs accuracy", "bias in training data"],
+        "raw_search_results": [{"title": "ML intro", "url": "https://example.com"}],
+    }
+
+    discovery_brief = ResearchBrief(
+        course_id=course.id,
+        section_position=None,
+        questions=[],
+        source_policy={},
+        findings=json.dumps(topic_brief_data),
+    )
+    db_session.add(discovery_brief)
+
+    # Also add a section for write/edit tests
+    section = Section(
+        course_id=course.id,
+        position=1,
+        title="Intro to ML",
+        summary="Basics of machine learning",
+    )
+    db_session.add(section)
+    await db_session.commit()
+
+    return course, topic_brief_data
+
+
+@pytest.mark.anyio
+async def test_load_discovery_context_returns_formatted_string(setup_db, db_session, course_with_discovery_brief):
+    """_load_discovery_context returns formatted discovery data when a discovery brief exists."""
+    from app.agent_service import _load_discovery_context
+
+    course, topic_brief_data = course_with_discovery_brief
+    result = await _load_discovery_context(course.id, db_session)
+
+    assert "KEY CONCEPTS: supervised learning" in result
+    assert "neural networks" in result
+    assert "LEARNING PROGRESSION: Start with basics" in result
+    assert "OPEN DEBATES:" in result
+    assert "interpretability vs accuracy" in result
+    assert "AUTHORITATIVE SOURCES:" in result
+    assert "https://arxiv.org/example" in result
+    assert "SUBTOPICS: classification" in result
+
+
+@pytest.mark.anyio
+async def test_load_discovery_context_returns_empty_when_no_brief(setup_db, db_session):
+    """_load_discovery_context returns empty string when no discovery brief exists."""
+    from app.agent_service import _load_discovery_context
+
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
+    db_session.add(course)
+    await db_session.commit()
+
+    result = await _load_discovery_context(course.id, db_session)
+    assert result == ""
+
+
+@pytest.mark.anyio
+async def test_load_discovery_context_returns_empty_on_invalid_json(setup_db, db_session):
+    """_load_discovery_context returns empty string when findings is not valid JSON."""
+    from app.agent_service import _load_discovery_context
+
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
+    db_session.add(course)
+    await db_session.commit()
+
+    brief = ResearchBrief(
+        course_id=course.id,
+        section_position=None,
+        questions=[],
+        source_policy={},
+        findings="not valid json",
+    )
+    db_session.add(brief)
+    await db_session.commit()
+
+    result = await _load_discovery_context(course.id, db_session)
+    assert result == ""
+
+
+@pytest.mark.anyio
+async def test_load_discovery_context_returns_empty_when_findings_empty(setup_db, db_session):
+    """_load_discovery_context returns empty string when findings is empty/None."""
+    from app.agent_service import _load_discovery_context
+
+    course = Course(topic="Test", status="writing", user_id=_TEST_USER_UUID)
+    db_session.add(course)
+    await db_session.commit()
+
+    brief = ResearchBrief(
+        course_id=course.id,
+        section_position=None,
+        questions=[],
+        source_policy={},
+        findings=None,
+    )
+    db_session.add(brief)
+    await db_session.commit()
+
+    result = await _load_discovery_context(course.id, db_session)
+    assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Tests: Writer pipeline includes discovery context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_write_section_includes_discovery_context(setup_db, db_session, course_with_discovery_brief):
+    """write_section message contains DISCOVERY CONTEXT when discovery_context is provided."""
+    course, topic_brief_data = course_with_discovery_brief
+
+    # Create some evidence cards for the section
+    card = EvidenceCard(
+        course_id=course.id,
+        section_position=1,
+        claim="ML uses statistical models",
+        source_url="https://example.com",
+        source_title="ML Guide",
+        source_tier=1,
+        passage="Machine learning uses statistical models...",
+        retrieved_date=date.today(),
+        confidence=0.9,
+        explanation="Core ML concept",
+        verified=True,
+        verification_note="Good source",
+    )
+    db_session.add(card)
+    await db_session.commit()
+
+    section = SimpleNamespace(title="Intro to ML", summary="Basics of machine learning")
+    outline = [SimpleNamespace(position=1, title="Intro to ML", summary="Basics of machine learning")]
+
+    mock_llm = _mock_writer_llm("## Intro to ML\n\nMachine learning content.")
+
+    from app.agent_service import _load_discovery_context
+    discovery_ctx = await _load_discovery_context(course.id, db_session)
+
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
+        from app.agent_service import write_section
+
+        result = await write_section(
+            [card], None, section, outline, db_session,
+            discovery_context=discovery_ctx,
+        )
+
+    assert "## Intro to ML" in result
+
+    # Verify the message sent to the LLM contains discovery context
+    call_args = mock_llm.ainvoke.call_args
+    messages = call_args[0][0]
+    user_message = messages[1].content
+    assert "DISCOVERY CONTEXT" in user_message
+    assert "supervised learning" in user_message
+    assert "neural networks" in user_message
+    assert "LEARNING PROGRESSION" in user_message
+
+
+@pytest.mark.anyio
+async def test_write_section_omits_discovery_context_when_empty(setup_db, db_session, course_with_cards):
+    """write_section message does NOT contain DISCOVERY CONTEXT when discovery_context is empty."""
+    course, cards = course_with_cards
+
+    section = SimpleNamespace(title="Introduction", summary="Getting started")
+    outline = [SimpleNamespace(position=1, title="Introduction", summary="Getting started")]
+
+    mock_llm = _mock_writer_llm("## Introduction\n\nContent here.")
+
+    with patch("app.agent_service.provider_service.build_chat_model", return_value=mock_llm):
+        from app.agent_service import write_section
+
+        result = await write_section(cards, None, section, outline, db_session)
+
+    call_args = mock_llm.ainvoke.call_args
+    messages = call_args[0][0]
+    user_message = messages[1].content
+    assert "DISCOVERY CONTEXT" not in user_message
