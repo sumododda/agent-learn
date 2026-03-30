@@ -287,3 +287,133 @@ async def test_serper_scholar_returns_empty_when_no_key():
         results = await _search_serper_scholar("test", max_results=5)
 
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_enriches_missing_pdf_urls():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+
+    mock_response_with_pdf = MagicMock()
+    mock_response_with_pdf.status_code = 200
+    mock_response_with_pdf.json.return_value = {
+        "is_oa": True,
+        "best_oa_location": {
+            "url_for_pdf": "https://example.com/paper.pdf",
+            "url": "https://example.com/paper",
+            "url_for_landing_page": "https://example.com/landing",
+        },
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response_with_pdf)
+
+    results = [
+        AcademicResult(title="Paper A", url="u", abstract="a", authors=["X"], doi="10.1/a", pdf_url=None),
+        AcademicResult(title="Paper B", url="u", abstract="a", authors=["X"], doi="10.1/b", pdf_url="http://existing.pdf"),
+        AcademicResult(title="Paper C", url="u", abstract="a", authors=["X"], doi=None, pdf_url=None),
+    ]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url == "https://example.com/paper.pdf"
+    assert enriched[1].pdf_url == "http://existing.pdf"
+    assert enriched[2].pdf_url is None
+    assert mock_client.get.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_falls_back_to_url_when_pdf_null():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "is_oa": True,
+        "best_oa_location": {
+            "url_for_pdf": None,
+            "url": "https://example.com/oa-version",
+            "url_for_landing_page": "https://example.com/landing",
+        },
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    results = [AcademicResult(title="Paper", url="u", abstract="a", authors=["X"], doi="10.1/x")]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url == "https://example.com/oa-version"
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_handles_closed_access():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "is_oa": False,
+        "best_oa_location": None,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    results = [AcademicResult(title="Closed", url="u", abstract="a", authors=["X"], doi="10.1/closed")]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url is None
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_handles_404_gracefully():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+    import httpx as _httpx
+
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status = MagicMock(side_effect=_httpx.HTTPStatusError("Not Found", request=MagicMock(), response=mock_response))
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    results = [AcademicResult(title="Missing", url="u", abstract="a", authors=["X"], doi="10.1/missing")]
+
+    with patch("app.academic_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.academic_search.settings") as mock_settings:
+            mock_settings.UNPAYWALL_EMAIL = "test@real.com"
+            enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url is None
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_skips_when_no_email():
+    from app.academic_search import _enrich_with_unpaywall, AcademicResult
+
+    results = [AcademicResult(title="Paper", url="u", abstract="a", authors=["X"], doi="10.1/x")]
+
+    with patch("app.academic_search.settings") as mock_settings:
+        mock_settings.UNPAYWALL_EMAIL = ""
+        enriched = await _enrich_with_unpaywall(results)
+
+    assert enriched[0].pdf_url is None
