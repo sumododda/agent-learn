@@ -110,7 +110,6 @@ build_and_push() {
 
   info "Building frontend image..."
   docker build -f "$SCRIPT_DIR/Dockerfile.frontend" \
-    --build-arg NEXT_PUBLIC_API_URL="https://learn.blekcipher.com" \
     --build-arg NEXT_PUBLIC_TURNSTILE_SITE_KEY="${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}" \
     -t "${REGISTRY}/frontend:latest" \
     "$ROOT_DIR/frontend"
