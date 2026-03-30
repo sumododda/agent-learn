@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-from app.search_service import SearchResult, rank_for_deep_reading
+from app.academic_search import AcademicResult, rank_for_deep_reading
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ def select_sections(
 
 
 async def read_paper(
-    result: SearchResult,
+    result: AcademicResult,
     questions: list[str],
     provider: str,
     model: str,
@@ -213,7 +213,7 @@ async def read_paper(
 
 
 async def deep_read_top_papers(
-    academic_results: list[SearchResult],
+    academic_results: list[AcademicResult],
     questions: list[str],
     provider: str,
     model: str,
@@ -222,7 +222,7 @@ async def deep_read_top_papers(
     max_papers: int = 3,
 ) -> list[dict]:
     """Select top papers by ranking, download, parse, and deep-read them.
-    Returns list of {search_result: SearchResult, reading: dict}.
+    Returns list of {search_result: AcademicResult, reading: dict}.
     """
     ranked = sorted(
         [r for r in academic_results if rank_for_deep_reading(r) > 0],
