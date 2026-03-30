@@ -17,15 +17,15 @@ spec:
     spec:
       containers:
         - name: backend-worker
-          image: us-central1-docker.pkg.dev/agent-learn-491717/agent-learn/backend:v2
+          image: ghcr.io/sumododda/agent-learn/backend:7a8c7fd
           imagePullPolicy: Always
           args: ["python", "-m", "app.worker"]
           resources:
             requests:
-              memory: "256Mi"
+              memory: "512Mi"
               cpu: "250m"
             limits:
-              memory: "512Mi"
+              memory: "1Gi"
               cpu: "500m"
           env:
             - name: POSTGRES_PASSWORD
@@ -62,3 +62,18 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: resend-from-email
+            - name: OPENALEX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: openalex-api-key
+            - name: SERPER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: serper-api-key
+            - name: UNPAYWALL_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: unpaywall-email
