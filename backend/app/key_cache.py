@@ -120,24 +120,6 @@ def get_all_search_providers(user_id: str) -> list[tuple[str, dict]]:
     return result
 
 
-def get_all_academic_providers(user_id: str) -> dict[str, dict]:
-    """Return all configured academic provider credentials for a user.
-
-    Returns: {provider_name (without prefix): credentials_dict}
-    """
-    entry = _cache.get(user_id)
-    if entry is None:
-        return {}
-    if datetime.now(timezone.utc) > entry.expires_at:
-        del _cache[user_id]
-        return {}
-    return {
-        k.removeprefix("academic:"): v
-        for k, v in entry.credentials.items()
-        if k.startswith("academic:")
-    }
-
-
 def set_credentials(user_id: str, provider: str, creds: dict) -> None:
     """Add or update decrypted credentials for a single provider in the cache."""
     entry = _cache.get(user_id)
