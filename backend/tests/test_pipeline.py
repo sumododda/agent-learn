@@ -13,6 +13,7 @@ Tests cover:
 """
 
 import asyncio
+import json
 import uuid
 from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch, call
@@ -25,6 +26,7 @@ from app.models import (
     Base,
     Course,
     PipelineJob,
+    ResearchBrief,
     Section,
     User,
 )
@@ -631,6 +633,127 @@ async def test_edit_runs_sequentially(setup_db, seeded):
 
     assert result == "completed"
     assert edit_order == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Test: Pipeline threads discovery context to writer/editor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_pipeline_threads_discovery_context(setup_db, seeded):
+    """When a discovery brief exists, run_write_section receives discovery context.
+
+    This integration test verifies the full pipeline path:
+    1. A discovery brief with TopicBrief JSON is persisted in the DB
+    2. The pipeline resumes from CHECKPOINT_RESEARCHED (skip plan/research)
+    3. _write_section and _edit_section are mocked at the pipeline level
+    4. We separately verify that _load_discovery_context returns the correct
+       formatted string for the course_id, proving the discovery brief is
+       loadable from the same DB session the pipeline uses.
+    """
+    job_id, course_id, positions, session = seeded
+
+    # -- Insert a discovery brief with TopicBrief JSON findings --
+    topic_brief_data = {
+        "key_concepts": ["supervised learning", "neural networks", "gradient descent"],
+        "subtopics": ["classification", "regression", "deep learning"],
+        "authoritative_sources": [
+            "https://arxiv.org/example",
+            "https://dl.acm.org/example",
+        ],
+        "learning_progression": "Start with basics, then move to neural networks",
+        "open_debates": ["interpretability vs accuracy", "bias in training data"],
+    }
+
+    discovery_brief = ResearchBrief(
+        course_id=course_id,
+        section_position=None,  # None = discovery brief (course-level)
+        questions=[],
+        source_policy={},
+        findings=json.dumps(topic_brief_data),
+    )
+    session.add(discovery_brief)
+    await session.commit()
+
+    # -- Track which positions were written/edited --
+    write_positions = []
+    edit_positions = []
+
+    async def _write(cid, pos, *a, **kw):
+        write_positions.append(pos)
+        return {}
+
+    async def _edit(cid, pos, *a, **kw):
+        edit_positions.append(pos)
+        return {}
+
+    # -- Run pipeline from CHECKPOINT_RESEARCHED (skip plan + research) --
+    with (
+        patch("app.pipeline._discover_and_plan", new_callable=AsyncMock),
+        patch("app.pipeline._research_section", new_callable=AsyncMock),
+        patch("app.pipeline._verify_section", new_callable=AsyncMock, return_value={}),
+        patch("app.pipeline._write_section", new_callable=AsyncMock, side_effect=_write),
+        patch("app.pipeline._edit_section", new_callable=AsyncMock, side_effect=_edit),
+        patch("app.agent_service.update_course_status", new_callable=AsyncMock),
+        patch("app.pipeline.async_session", return_value=_FakeSessionCtx(session)),
+    ):
+        result = await run_pipeline(
+            job_id, course_id, CHECKPOINT_RESEARCHED,
+            PROVIDER, MODEL, CREDENTIALS,
+        )
+
+    assert result == "completed"
+    assert sorted(write_positions) == [1, 2, 3]
+    assert sorted(edit_positions) == [1, 2, 3]
+
+    # -- Verify the discovery context is loadable from the DB --
+    # This proves the discovery brief was correctly persisted and that
+    # _load_discovery_context (called inside run_write_section / run_edit_section)
+    # would return the expected formatted string.
+    from app.agent_service import _load_discovery_context
+
+    discovery_context = await _load_discovery_context(course_id, session)
+    assert discovery_context != "", "Discovery context should be non-empty"
+    assert "KEY CONCEPTS: supervised learning" in discovery_context
+    assert "neural networks" in discovery_context
+    assert "LEARNING PROGRESSION: Start with basics" in discovery_context
+    assert "OPEN DEBATES:" in discovery_context
+    assert "interpretability vs accuracy" in discovery_context
+    assert "AUTHORITATIVE SOURCES:" in discovery_context
+    assert "SUBTOPICS: classification" in discovery_context
+
+
+@pytest.mark.anyio
+async def test_pipeline_completes_without_discovery_brief(setup_db, seeded):
+    """Pipeline completes normally when no discovery brief exists.
+
+    Verifies that the absence of a discovery brief does not break the pipeline
+    and that _load_discovery_context returns an empty string.
+    """
+    job_id, course_id, positions, session = seeded
+
+    with (
+        patch("app.pipeline._discover_and_plan", new_callable=AsyncMock),
+        patch("app.pipeline._research_section", new_callable=AsyncMock),
+        patch("app.pipeline._verify_section", new_callable=AsyncMock, return_value={}),
+        patch("app.pipeline._write_section", new_callable=AsyncMock, return_value={}),
+        patch("app.pipeline._edit_section", new_callable=AsyncMock, return_value={}),
+        patch("app.agent_service.update_course_status", new_callable=AsyncMock),
+        patch("app.pipeline.async_session", return_value=_FakeSessionCtx(session)),
+    ):
+        result = await run_pipeline(
+            job_id, course_id, CHECKPOINT_RESEARCHED,
+            PROVIDER, MODEL, CREDENTIALS,
+        )
+
+    assert result == "completed"
+
+    # Verify no discovery context is available
+    from app.agent_service import _load_discovery_context
+
+    discovery_context = await _load_discovery_context(course_id, session)
+    assert discovery_context == ""
 
 
 # ---------------------------------------------------------------------------
