@@ -350,3 +350,76 @@ async def _search_openalex(
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Serper Scholar adapter
+# ---------------------------------------------------------------------------
+
+def _parse_publication_info(pub_info: str) -> tuple[list[str], str | None]:
+    """Parse Serper Scholar publicationInfo string into (authors, venue).
+
+    Format: "A Author, B Author... - Venue Name, Year - domain.com"
+    """
+    if not pub_info:
+        return [], None
+    parts = pub_info.split(" - ")
+    authors = []
+    venue = None
+    if len(parts) >= 1:
+        authors = [a.strip() for a in parts[0].split(", ") if a.strip() and not a.strip().startswith("…")]
+    if len(parts) >= 2:
+        venue_raw = parts[1].strip()
+        venue_cleaned = re.sub(r",?\s*\d{4}\s*$", "", venue_raw).strip()
+        venue = venue_cleaned or None
+    return authors, venue
+
+
+async def _search_serper_scholar(
+    query: str,
+    max_results: int = 10,
+    options: dict | None = None,
+) -> list[AcademicResult]:
+    if not settings.SERPER_API_KEY:
+        logger.warning("[serper_scholar] No API key configured, skipping")
+        return []
+
+    opts = options or {}
+    body: dict = {"q": query, "num": min(max_results, 100)}
+
+    year_range = opts.get("year_range", "all")
+    if year_range != "all":
+        years_back = {"5y": 5, "10y": 10, "20y": 20}
+        n = years_back.get(year_range, 5)
+        body["as_ylo"] = date.today().year - n
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://google.serper.dev/scholar",
+            json=body,
+            headers={
+                "X-API-KEY": settings.SERPER_API_KEY,
+                "Content-Type": "application/json",
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = []
+    for item in data.get("organic", []):
+        authors, venue = _parse_publication_info(item.get("publicationInfo", ""))
+        results.append(AcademicResult(
+            title=item.get("title", ""),
+            url=item.get("link", ""),
+            abstract=item.get("snippet", ""),
+            authors=authors,
+            year=item.get("year"),
+            venue=venue,
+            citation_count=item.get("citedBy"),
+            doi=None,  # Serper Scholar does not return DOIs
+            pdf_url=item.get("pdfLink"),
+            score=0.0,
+        ))
+
+    return results
