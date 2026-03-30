@@ -114,7 +114,6 @@ async def update_course_status(
 
 
 _MAX_QUERY_LENGTH = 300
-_ACADEMIC_SEARCH_TIMEOUT_SECONDS = 6.0
 
 
 async def _generate_discovery_queries(
@@ -166,7 +165,6 @@ async def discover_topic(
     search_credentials: dict | None = None,
     on_event: EventCallback | None = None,
     user_id: str = "",
-    academic_credentials: dict[str, dict] | None = None,
     academic_options: dict | None = None,
 ) -> TopicBrief:
     """Run discovery research on a topic using web search + synthesis agent.
@@ -180,14 +178,14 @@ async def discover_topic(
 
     credentials = credentials or {}
 
+    academic_enabled = bool(academic_options and academic_options.get("enabled"))
+
     if on_event:
         await on_event(
             "generating_queries",
             {
                 "topic": topic,
-                "academic_enabled": bool(
-                    academic_credentials and academic_options and academic_options.get("enabled")
-                ),
+                "academic_enabled": academic_enabled,
             },
         )
 
@@ -202,9 +200,7 @@ async def discover_topic(
             "search_started",
             {
                 "total_queries": len(queries),
-                "academic_enabled": bool(
-                    academic_credentials and academic_options and academic_options.get("enabled")
-                ),
+                "academic_enabled": academic_enabled,
             },
         )
 
@@ -213,22 +209,12 @@ async def discover_topic(
         for i, query in enumerate(queries):
             await on_event("query", {"index": i, "total": len(queries), "query": query})
 
-    academic_provider_names: list[str] = []
-    if academic_credentials and academic_options and academic_options.get("enabled"):
-        from app.search_service import get_active_academic_provider_names
-
-        academic_provider_names = get_active_academic_provider_names(academic_credentials)
-        if on_event and academic_provider_names:
-            for i, query in enumerate(queries):
-                await on_event(
-                    "academic_query",
-                    {
-                        "index": i,
-                        "total": len(queries),
-                        "query": query,
-                        "providers": academic_provider_names,
-                    },
-                )
+    if academic_enabled and on_event:
+        for i, query in enumerate(queries):
+            await on_event(
+                "academic_query",
+                {"index": i, "total": len(queries), "query": query, "providers": ["openalex", "serper_scholar"]},
+            )
 
     all_search_results = []
     academic_results: list = []
@@ -246,15 +232,13 @@ async def discover_topic(
             return ("web", index, query, [], e)
 
     async def _run_academic_query(index: int, query: str):
-        from app.search_service import academic_search as run_academic_search
+        from app.academic_search import academic_search as run_academic_search
 
         try:
             results = await run_academic_search(
                 query,
-                academic_credentials or {},
-                academic_options or {},
                 max_results=5,
-                timeout_seconds=_ACADEMIC_SEARCH_TIMEOUT_SECONDS,
+                options=academic_options,
             )
             return ("academic", index, query, results, None)
         except Exception as e:
@@ -264,7 +248,7 @@ async def discover_topic(
         asyncio.create_task(_run_web_query(i, query))
         for i, query in enumerate(queries)
     ]
-    if academic_provider_names:
+    if academic_enabled:
         pending_tasks.extend(
             asyncio.create_task(_run_academic_query(i, query))
             for i, query in enumerate(queries)
@@ -421,7 +405,6 @@ async def generate_outline(
     on_event: EventCallback | None = None,
     user_id: str = "",
     current_outline: Sequence | None = None,
-    academic_credentials: dict[str, dict] | None = None,
     academic_options: dict | None = None,
 ) -> tuple[CourseOutlineWithBriefs, bool]:
     """Invoke discovery research + planner to generate a grounded course outline.
@@ -443,7 +426,6 @@ async def generate_outline(
                 topic, instructions, provider, model, credentials, extra_fields,
                 search_provider, search_credentials,
                 on_event=on_event, user_id=user_id,
-                academic_credentials=academic_credentials,
                 academic_options=academic_options,
             )
             logger.info("[outline] Discovery research completed successfully")
@@ -683,7 +665,6 @@ async def research_section(
     search_provider: str = "",
     search_credentials: dict | None = None,
     user_id: str = "",
-    academic_credentials: dict[str, dict] | None = None,
     academic_options: dict | None = None,
 ) -> list[EvidenceCardItem]:
     """Research a single section by searching each must-answer question.
@@ -702,17 +683,16 @@ async def research_section(
     academic_raw_results: list = []  # Keep raw SearchResults for deep reading
 
     academic_future = None
-    if academic_credentials and academic_options and academic_options.get("enabled"):
-        from app.search_service import academic_search as run_academic_search
+    academic_enabled = bool(academic_options and academic_options.get("enabled"))
+    if academic_enabled:
+        from app.academic_search import academic_search as run_academic_search
 
         academic_future = asyncio.gather(
             *[
                 run_academic_search(
                     question,
-                    academic_credentials,
-                    academic_options,
                     max_results=5,
-                    timeout_seconds=_ACADEMIC_SEARCH_TIMEOUT_SECONDS,
+                    options=academic_options,
                 )
                 for question in brief.questions
             ],
@@ -753,7 +733,7 @@ async def research_section(
                 all_results.append({
                     "title": f"[ACADEMIC] {r.title}",
                     "url": r.url,
-                    "content": r.content,
+                    "content": r.abstract,
                     "score": r.score,
                     "authors": ", ".join(r.authors) if r.authors else None,
                     "year": r.year,
@@ -764,7 +744,7 @@ async def research_section(
 
     # Deep-read top papers (if academic search is enabled and returned results)
     deep_readings: list[dict] = []
-    if academic_raw_results and academic_credentials and academic_options and academic_options.get("enabled"):
+    if academic_raw_results and academic_enabled:
         from app.paper_reader import deep_read_top_papers
         try:
             deep_readings = await deep_read_top_papers(
@@ -1428,7 +1408,6 @@ async def run_discover_and_plan(
     *,
     skip_status_update: bool = False,
     user_id: str = "",
-    academic_credentials: dict[str, dict] | None = None,
     academic_options: dict | None = None,
 ) -> dict:
     """Run discovery research + planning for a course.
@@ -1462,7 +1441,6 @@ async def run_discover_and_plan(
     outline_with_briefs, ungrounded = await generate_outline(
         course.topic, course.instructions, provider, model, credentials, extra_fields,
         search_provider, search_credentials, user_id=user_id,
-        academic_credentials=academic_credentials,
         academic_options=academic_options,
     )
 
@@ -1561,7 +1539,6 @@ async def run_research_section(
     search_provider: str = "",
     search_credentials: dict | None = None,
     user_id: str = "",
-    academic_credentials: dict[str, dict] | None = None,
     academic_options: dict | None = None,
 ) -> dict:
     """Run section researcher for one section.
@@ -1592,7 +1569,7 @@ async def run_research_section(
         )
 
     # Run section researcher (search + agent)
-    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id, academic_credentials=academic_credentials, academic_options=academic_options)
+    card_items = await research_section(brief, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id, academic_options=academic_options)
 
     # Save evidence cards to DB
     await save_evidence_cards(course_id, section_position, card_items, session)
