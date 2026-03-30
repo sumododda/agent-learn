@@ -29,7 +29,7 @@ from app.agent import (
 from app import provider_service
 from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
-# json still used by generate_outline fallback
+# json still used by generate_outlineee
 
 logger = logging.getLogger(__name__)
 
