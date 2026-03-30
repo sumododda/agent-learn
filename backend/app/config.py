@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
     CORS_ORIGINS: str = "http://localhost:3000"
     DOCS_ENABLED: bool = False
+    OPENALEX_API_KEY: str = ""
+    SERPER_API_KEY: str = ""
+    UNPAYWALL_EMAIL: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
