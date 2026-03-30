@@ -16,7 +16,7 @@ migrate:
 	cd backend && uv run alembic upgrade head
 
 install:
-	cd backend && uv pip install -r requirements.txt
+	cd backend && uv pip install -r requirements-dev.txt
 	cd frontend && npm install
 
 dev:

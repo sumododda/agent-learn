@@ -5,6 +5,10 @@ const isDev = process.env.NODE_ENV === 'development';
 const nextConfig: NextConfig = {
   output: 'standalone',
   async rewrites() {
+    if (!isDev) {
+      return [];
+    }
+
     return [
       {
         source: '/api/:path*',
