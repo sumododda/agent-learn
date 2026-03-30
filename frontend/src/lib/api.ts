@@ -181,6 +181,37 @@ export async function getCourse(id: string, token?: string | null): Promise<Cour
   return res.json();
 }
 
+export async function exportCoursePdf(
+  id: string,
+  token?: string | null,
+): Promise<{ blob: Blob; filename: string }> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE}/api/courses/${id}/export/pdf`, {
+    headers,
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(async () => {
+      const detail = await res.text().catch(() => 'Export failed');
+      return { detail };
+    });
+    throw new Error(error.detail || 'Export failed');
+  }
+
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const filenameMatch = disposition.match(/filename="([^"]+)"/i);
+  const blob = await res.blob();
+
+  return {
+    blob,
+    filename: filenameMatch?.[1] || `${id}.pdf`,
+  };
+}
+
 export async function getProgress(courseId: string, token?: string | null): Promise<ProgressData | null> {
   const headers: Record<string, string> = {};
   if (token) {

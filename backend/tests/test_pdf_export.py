@@ -1,0 +1,219 @@
+import uuid
+
+import pytest
+
+from app.pdf_export import build_reference_index, convert_markdown_to_typst, generate_course_pdf
+from app.schemas import Citation, CourseResponse, SectionFull
+from tests.conftest import TEST_USER_UUID
+
+
+def _sample_course_response() -> CourseResponse:
+    section_one_id = uuid.uuid4()
+    section_two_id = uuid.uuid4()
+
+    return CourseResponse(
+        id=uuid.uuid4(),
+        topic="Testing Export",
+        instructions=None,
+        status="completed",
+        ungrounded=False,
+        academic_search=None,
+        pipeline_status=None,
+        sections=[
+            SectionFull(
+                id=section_one_id,
+                position=1,
+                title="Introduction",
+                summary="Overview",
+                content=(
+                    "## Introduction\n\n"
+                    "Python was created in 1991 [1].\n\n"
+                    "### Key Takeaways\n"
+                    "- Batteries included\n"
+                    "- Dynamic typing\n"
+                ),
+                citations=[
+                    Citation(
+                        number=1,
+                        claim="Python origin",
+                        source_url="https://docs.python.org/3/faq/general.html",
+                        source_title="Python FAQ",
+                    ),
+                    Citation(
+                        number=2,
+                        claim="Typing",
+                        source_url="https://docs.python.org/3/reference/datamodel.html",
+                        source_title="Python Data Model",
+                    ),
+                ],
+            ),
+            SectionFull(
+                id=section_two_id,
+                position=2,
+                title="Practice",
+                summary="Exercises",
+                content=(
+                    "## Practice\n\n"
+                    "Try `print(\"hello\")` and read the docs [1].\n\n"
+                    "1. Open a REPL\n"
+                    "2. Run the code\n"
+                ),
+                citations=[
+                    Citation(
+                        number=1,
+                        claim="Docs reuse",
+                        source_url="https://docs.python.org/3/faq/general.html",
+                        source_title="Python FAQ",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+async def _create_exportable_course():
+    from app.database import get_session
+    from app.main import app
+    from app.models import Course, Section
+
+    session_gen = app.dependency_overrides[get_session]()
+    session = await session_gen.__anext__()
+
+    course = Course(
+        topic="Testing Export",
+        status="completed",
+        user_id=TEST_USER_UUID,
+    )
+    session.add(course)
+    await session.flush()
+
+    session.add_all([
+        Section(
+            course_id=course.id,
+            position=1,
+            title="Introduction",
+            summary="Overview",
+            content="## Introduction\n\nPython was created in 1991 [1].",
+            citations=[
+                {
+                    "number": 1,
+                    "claim": "Python origin",
+                    "source_url": "https://docs.python.org/3/faq/general.html",
+                    "source_title": "Python FAQ",
+                }
+            ],
+        ),
+        Section(
+            course_id=course.id,
+            position=2,
+            title="Practice",
+            summary="Exercises",
+            content="## Practice\n\nTry print(\"hello\").",
+            citations=[],
+        ),
+    ])
+    await session.commit()
+
+    try:
+        await session_gen.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    return str(course.id)
+
+
+async def _create_incomplete_course():
+    from app.database import get_session
+    from app.main import app
+    from app.models import Course, Section
+
+    session_gen = app.dependency_overrides[get_session]()
+    session = await session_gen.__anext__()
+
+    course = Course(
+        topic="Draft Export",
+        status="outline_ready",
+        user_id=TEST_USER_UUID,
+    )
+    session.add(course)
+    await session.flush()
+    session.add(
+        Section(
+            course_id=course.id,
+            position=1,
+            title="Introduction",
+            summary="Overview",
+            content="## Introduction\n\nDraft content.",
+            citations=[],
+        )
+    )
+    await session.commit()
+
+    try:
+        await session_gen.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    return str(course.id)
+
+
+def test_build_reference_index_deduplicates_by_source_url():
+    course = _sample_course_response()
+
+    section_maps, references = build_reference_index(course.sections)
+
+    assert len(references) == 2
+    assert section_maps[str(course.sections[0].id)][1] == 1
+    assert section_maps[str(course.sections[0].id)][2] == 2
+    assert section_maps[str(course.sections[1].id)][1] == 1
+
+
+def test_convert_markdown_to_typst_renders_supported_elements():
+    markdown = (
+        "## Intro\n\n"
+        "Paragraph with **bold** and *italic* and [link](https://example.com) [1].\n\n"
+        "- bullet\n\n"
+        "1. ordered\n\n"
+        "> quoted\n\n"
+        "```python\nprint(1)\n```\n"
+    )
+
+    rendered = convert_markdown_to_typst(markdown, {1: 3})
+
+    assert '== #("Intro")' in rendered
+    assert '#strong[#("bold")]' in rendered
+    assert '#emph[#("italic")]' in rendered
+    assert '#link("https://example.com")[#("link")]' in rendered
+    assert '#super[#("3")]' in rendered
+    assert '- #("bullet")' in rendered
+    assert '+ #("ordered")' in rendered
+    assert '#quote(block: true)' in rendered
+    assert '#raw("print(1)\\n", lang: "python", block: true)' in rendered
+
+
+def test_generate_course_pdf_returns_pdf_bytes():
+    pdf = generate_course_pdf(_sample_course_response())
+
+    assert pdf.startswith(b"%PDF-")
+
+
+@pytest.mark.anyio
+async def test_export_course_pdf_endpoint_returns_attachment(setup_db, client):
+    course_id = await _create_exportable_course()
+
+    response = await client.get(f"/api/courses/{course_id}/export/pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"] == 'attachment; filename="testing-export.pdf"'
+    assert response.content.startswith(b"%PDF-")
+
+
+@pytest.mark.anyio
+async def test_export_course_pdf_requires_completed_course(setup_db, client):
+    course_id = await _create_incomplete_course()
+
+    response = await client.get(f"/api/courses/{course_id}/export/pdf")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Course must be completed before export"}

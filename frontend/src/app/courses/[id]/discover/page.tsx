@@ -366,8 +366,9 @@ export default function DiscoverPage() {
       });
 
       es.onerror = () => {
-        es.close();
-        fallbackToStatic();
+        if (!receivedEvents.current) {
+          fallbackToStatic();
+        }
       };
     }
 

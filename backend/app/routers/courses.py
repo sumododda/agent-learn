@@ -1,12 +1,13 @@
 import asyncio
 import json as json_mod
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +20,7 @@ from app.auth import get_current_user, get_user_from_query_token
 from app.database import SessionDep, async_session
 from app.limiter import limiter
 from app.models import Course, EvidenceCard, LearnerProgress, PipelineJob, ProviderConfig, Section, ResearchBrief
+from app.pdf_export import generate_course_pdf, sanitize_pdf_filename
 from app.schemas import (
     BlackboardResponse,
     CourseCreate,
@@ -44,6 +46,7 @@ _feed_queues: dict[str, asyncio.Queue] = {}
 _MAX_FEED_ENTRIES = 200  # max concurrent course feeds
 _DISCOVER_REPLAY_POLL_SECONDS = 0.2
 _DISCOVER_REPLAY_TIMEOUT_SECONDS = 300
+_DISCOVER_HEARTBEAT_SECONDS = 10.0
 
 
 def _format_outline_snapshot(sections: list[Section]) -> str:
@@ -624,6 +627,41 @@ async def get_course(
     return resp
 
 
+@router.get("/courses/{course_id}/export/pdf")
+async def export_course_pdf(
+    course_id: uuid.UUID,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user),
+):
+    result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.id == course_id)
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if str(course.user_id) != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this course")
+    if course.status != "completed":
+        raise HTTPException(status_code=400, detail="Course must be completed before export")
+
+    try:
+        pdf_bytes = generate_course_pdf(CourseResponse.model_validate(course))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("PDF export failed for course %s", course_id)
+        raise HTTPException(status_code=500, detail="Export failed")
+
+    filename = f"{sanitize_pdf_filename(course.topic)}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.delete("/courses/{course_id}", status_code=204)
 async def delete_course(
     course_id: uuid.UUID,
@@ -789,7 +827,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
 
     1. If a buffer exists, replay all buffered events.
     2. If discovery is still in progress, poll for new events until terminal.
-    3. If neither buffer nor queue, build synthetic response from DB sections.
+    3. If neither buffer nor queue, fall back to DB state without faking completion.
     """
     user_id = await get_user_from_query_token(token)
 
@@ -813,6 +851,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
         if course_id_str in _feed_events:
             read_index = 0
             max_polls = int(_DISCOVER_REPLAY_TIMEOUT_SECONDS / _DISCOVER_REPLAY_POLL_SECONDS)
+            last_heartbeat = time.monotonic()
 
             for _ in range(max_polls):
                 # Read any new events since last check
@@ -825,6 +864,7 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
                     payload = events[read_index]
                     read_index += 1
                     yield f"event: {payload['event']}\ndata: {json_mod.dumps(payload['data'])}\n\n"
+                    last_heartbeat = time.monotonic()
 
                     # Stop on terminal events
                     if payload["event"] in ("complete", "error"):
@@ -834,34 +874,61 @@ async def discover_stream(course_id: uuid.UUID, token: str = Query(...)):
                 if course_id_str not in _feed_queues:
                     return
 
+                if time.monotonic() - last_heartbeat >= _DISCOVER_HEARTBEAT_SECONDS:
+                    yield ": keep-alive\n\n"
+                    last_heartbeat = time.monotonic()
+
                 await asyncio.sleep(_DISCOVER_REPLAY_POLL_SECONDS)
 
             # Timeout
             yield f"event: error\ndata: {json_mod.dumps({'message': 'Stream timed out'})}\n\n"
             return
 
-        # Case 3: No buffer — build synthetic response from DB
-        async with async_session() as session:
-            result = await session.execute(
-                select(Course)
-                .options(selectinload(Course.sections))
-                .where(Course.id == course_id)
-            )
-            db_course = result.scalar_one_or_none()
+        # Case 3: No buffer — fall back to DB state and wait for a terminal status
+        max_polls = int(_DISCOVER_REPLAY_TIMEOUT_SECONDS / _DISCOVER_REPLAY_POLL_SECONDS)
+        last_heartbeat = time.monotonic()
+        emitted_section_positions: set[int] = set()
 
-        if db_course is None:
-            yield f"event: error\ndata: {json_mod.dumps({'message': 'Course not found'})}\n\n"
-            return
+        for _ in range(max_polls):
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Course)
+                    .options(selectinload(Course.sections))
+                    .where(Course.id == course_id)
+                )
+                db_course = result.scalar_one_or_none()
 
-        for section in sorted(db_course.sections, key=lambda s: s.position):
-            payload = {
-                "position": section.position,
-                "title": section.title,
-                "summary": section.summary,
-            }
-            yield f"event: section\ndata: {json_mod.dumps(payload)}\n\n"
+            if db_course is None:
+                yield f"event: error\ndata: {json_mod.dumps({'message': 'Course not found'})}\n\n"
+                return
 
-        yield f"event: complete\ndata: {json_mod.dumps({'course_id': course_id_str, 'status': db_course.status})}\n\n"
+            for section in sorted(db_course.sections, key=lambda s: s.position):
+                if section.position in emitted_section_positions:
+                    continue
+                emitted_section_positions.add(section.position)
+                payload = {
+                    "position": section.position,
+                    "title": section.title,
+                    "summary": section.summary,
+                }
+                yield f"event: section\ndata: {json_mod.dumps(payload)}\n\n"
+                last_heartbeat = time.monotonic()
+
+            if db_course.status == "outline_ready":
+                yield f"event: complete\ndata: {json_mod.dumps({'course_id': course_id_str, 'status': db_course.status})}\n\n"
+                return
+
+            if db_course.status == "failed":
+                yield f"event: error\ndata: {json_mod.dumps({'message': 'Course creation failed. Please try again.'})}\n\n"
+                return
+
+            if time.monotonic() - last_heartbeat >= _DISCOVER_HEARTBEAT_SECONDS:
+                yield ": keep-alive\n\n"
+                last_heartbeat = time.monotonic()
+
+            await asyncio.sleep(_DISCOVER_REPLAY_POLL_SECONDS)
+
+        yield f"event: error\ndata: {json_mod.dumps({'message': 'Stream timed out'})}\n\n"
 
     return StreamingResponse(
         event_generator(),

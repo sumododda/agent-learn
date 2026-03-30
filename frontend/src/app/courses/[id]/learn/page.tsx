@@ -3,8 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import ReactMarkdown from 'react-markdown';
-import { Check } from 'lucide-react';
+import { Check, Download, Loader2 } from 'lucide-react';
 import MermaidBlock from '@/components/MermaidBlock';
 import CitationRenderer from '@/components/CitationRenderer';
 import EvidencePanel from '@/components/EvidencePanel';
@@ -12,7 +11,7 @@ import { ChatPanel } from '@/components/ChatDrawer';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
-import { getCourse, getProgress, updateProgress } from '@/lib/api';
+import { exportCoursePdf, getCourse, getProgress, updateProgress } from '@/lib/api';
 import { Course, Section } from '@/lib/types';
 
 export default function LearnPage() {
@@ -25,6 +24,8 @@ export default function LearnPage() {
   const [completedSections, setCompletedSections] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const initialLoadDone = useRef(false);
 
   // Scroll progress tracking — use ref + RAF to avoid re-renders on every scroll
@@ -76,6 +77,14 @@ export default function LearnPage() {
       cancelAnimationFrame(rafId.current);
     };
   }, [currentIndex]);
+
+  useEffect(() => {
+    if (!exportError) return;
+    const timeoutId = window.setTimeout(() => {
+      setExportError(null);
+    }, 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [exportError]);
 
   useEffect(() => {
     async function loadCourse() {
@@ -157,6 +166,28 @@ export default function LearnPage() {
     [trackProgress]
   );
 
+  const handleExportPdf = useCallback(async () => {
+    try {
+      setExporting(true);
+      setExportError(null);
+
+      const token = await getToken();
+      const { blob, filename } = await exportCoursePdf(courseId, token);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  }, [courseId, getToken]);
+
   if (loading) return <div className="text-center text-muted-foreground mt-20">Loading lessons...</div>;
   if (error) return <div className="text-center text-destructive mt-20">{error}</div>;
   if (!course) return <div className="text-center text-muted-foreground mt-20">Course not found</div>;
@@ -177,15 +208,36 @@ export default function LearnPage() {
 
   return (
     <div className="h-screen flex flex-col">
+      {exportError ? (
+        <div
+          aria-live="polite"
+          className="fixed top-4 right-4 z-50 rounded-lg border border-destructive/30 bg-background px-4 py-3 text-sm text-destructive shadow-lg"
+          role="status"
+        >
+          {exportError}
+        </div>
+      ) : null}
+
       {/* Top bar: breadcrumb + progress */}
-      <div className="h-10 border-b border-border flex items-center px-4 shrink-0">
-        <span className="text-xs text-muted-foreground">
+      <div className="h-10 border-b border-border flex items-center justify-between gap-4 px-4 shrink-0">
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
           <Link href="/library" className="hover:text-foreground transition-colors">Library</Link>
           {' / '}
           <span className="text-foreground">{course.topic}</span>
           {' / '}
           <span>{currentSection.title}</span>
         </span>
+        {course.status === 'completed' ? (
+          <Button
+            onClick={handleExportPdf}
+            disabled={exporting}
+            size="sm"
+            variant="outline"
+          >
+            {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+            {exporting ? 'Generating PDF...' : 'Export PDF'}
+          </Button>
+        ) : null}
       </div>
 
       {/* Reading progress bar */}

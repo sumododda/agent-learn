@@ -26,3 +26,5 @@ resend==2.25.0
 email-validator==2.3.0
 aiohttp>=3.9.0
 docling>=2.80.0
+markdown-it-py==4.0.0
+typst==0.14.8

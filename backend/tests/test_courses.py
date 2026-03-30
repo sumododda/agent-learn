@@ -1,4 +1,5 @@
 import uuid
+from contextlib import asynccontextmanager
 
 import pytest
 from unittest.mock import patch, AsyncMock
@@ -162,6 +163,58 @@ async def test_create_and_get_course(client, mock_outline_with_briefs):
     get_response = await client.get(f"/api/courses/{course_id}")
     assert get_response.status_code == 200
     assert get_response.json()["topic"] == "Testing"
+
+
+@pytest.mark.anyio
+async def test_discover_stream_does_not_fake_complete_while_researching(setup_db):
+    from app.database import get_session
+    from app.main import app
+    from app.models import Course
+    from app.routers.courses import discover_stream
+
+    session_gen = app.dependency_overrides[get_session]()
+    session = await session_gen.__anext__()
+
+    course = Course(
+        topic="Streaming",
+        status="researching",
+        user_id=TEST_USER_UUID,
+    )
+    session.add(course)
+    await session.commit()
+
+    try:
+        await session_gen.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    @asynccontextmanager
+    async def test_async_session():
+        agen = app.dependency_overrides[get_session]()
+        test_session = await agen.__anext__()
+        try:
+            yield test_session
+        finally:
+            try:
+                await agen.__anext__()
+            except StopAsyncIteration:
+                pass
+
+    with (
+        patch("app.routers.courses.get_user_from_query_token", new_callable=AsyncMock, return_value=str(TEST_USER_UUID)),
+        patch("app.routers.courses.async_session", test_async_session),
+        patch("app.routers.courses._DISCOVER_REPLAY_POLL_SECONDS", 0.01),
+        patch("app.routers.courses._DISCOVER_REPLAY_TIMEOUT_SECONDS", 0.03),
+        patch("app.routers.courses._DISCOVER_HEARTBEAT_SECONDS", 0.01),
+    ):
+        response = await discover_stream(course.id, token="test-ticket")
+        chunks: list[str] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    body = "".join(chunks)
+    assert "event: complete" not in body
+    assert "event: error" in body
 
 
 @pytest.mark.anyio
