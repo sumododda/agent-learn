@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.agent import TopicBrief
+from app.academic_search import AcademicResult
 from app.search_service import SearchResult
 
 
@@ -36,24 +37,20 @@ async def test_discover_topic_streams_web_and_academic_events_in_completion_orde
 
     async def mock_academic_search(
         query: str,
-        academic_credentials: dict[str, dict],
-        academic_options: dict,
-        max_results: int = 5,
-        timeout_seconds: float | None = None,
-    ) -> list[SearchResult]:
+        max_results: int = 10,
+        options: dict | None = None,
+    ) -> list[AcademicResult]:
         await asyncio.sleep(0.015 if query == "slow query" else 0.005)
         return [
-            SearchResult(
+            AcademicResult(
                 title=f"Paper for {query}",
                 url=f"https://arxiv.org/abs/{query.replace(' ', '-')}",
-                content=f"Abstract for {query}",
-                score=0.0,
+                abstract=f"Abstract for {query}",
                 authors=["Ada Lovelace"],
                 year=2024,
                 venue="NeurIPS",
                 citation_count=42,
                 doi=f"10.1234/{query.replace(' ', '-')}",
-                is_academic=True,
             )
         ]
 
@@ -73,7 +70,7 @@ async def test_discover_topic_streams_web_and_academic_events_in_completion_orde
     with (
         patch("app.agent_service._generate_discovery_queries", new_callable=AsyncMock, return_value=["slow query", "fast query"]),
         patch("app.search_service.search_with_fallback", new_callable=AsyncMock, side_effect=mock_web_search),
-        patch("app.search_service.academic_search", new_callable=AsyncMock, side_effect=mock_academic_search),
+        patch("app.academic_search.academic_search", new_callable=AsyncMock, side_effect=mock_academic_search),
         patch("app.agent_service.create_discovery_researcher", return_value=mock_agent),
     ):
         result = await discover_topic(
@@ -85,7 +82,6 @@ async def test_discover_topic_streams_web_and_academic_events_in_completion_orde
             search_credentials={},
             on_event=on_event,
             user_id="user-1",
-            academic_credentials={"arxiv": {}},
             academic_options={"enabled": True, "year_range": "all", "min_citations": 0, "open_access_only": False},
         )
 
