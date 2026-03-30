@@ -769,6 +769,14 @@ async def course_for_discovery(db_session):
     return course
 
 
+def test_writer_prompt_no_rigid_template():
+    """Writer prompt should not enforce the rigid Why This Matters / Key Takeaways template."""
+    from app.agent import WRITER_PROMPT
+    assert "Why This Matters" not in WRITER_PROMPT
+    assert "Key Takeaways" not in WRITER_PROMPT
+    assert "What Comes Next" not in WRITER_PROMPT
+
+
 @pytest.mark.anyio
 async def test_discovery_brief_contains_serialized_topic_brief(db_session, course_for_discovery):
     """run_discover_and_plan persists the TopicBrief JSON in the discovery brief findings field."""
