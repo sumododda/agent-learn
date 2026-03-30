@@ -39,7 +39,7 @@ interface PlannedSection {
   summary: string;
 }
 
-type ActiveStep = 'searching' | 'synthesizing' | 'planning' | 'complete' | 'error' | null;
+type ActiveStep = 'preparing' | 'searching' | 'synthesizing' | 'planning' | 'complete' | 'error' | null;
 
 function upsertQueryGroup(
   prev: QueryGroup[],
@@ -99,6 +99,7 @@ export default function DiscoverPage() {
   const [academicQueries, setAcademicQueries] = useState<QueryGroup[]>([]);
   const [webSourceCount, setWebSourceCount] = useState(0);
   const [academicSourceCount, setAcademicSourceCount] = useState(0);
+  const [plannedQueryCount, setPlannedQueryCount] = useState<number | null>(null);
   const [keyConcepts, setKeyConcepts] = useState<string[]>([]);
   const [sections, setSections] = useState<PlannedSection[]>([]);
   const [activeStep, setActiveStep] = useState<ActiveStep>(null);
@@ -111,6 +112,23 @@ export default function DiscoverPage() {
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const receivedEvents = useRef(false);
   const totalSources = webSourceCount + academicSourceCount;
+  const showWebSearch = activeStep === 'preparing' || activeStep === 'searching' || webQueries.length > 0;
+  const showAcademicSearch = hasAcademicResearch && (
+    activeStep === 'preparing' || activeStep === 'searching' || academicQueries.length > 0
+  );
+  const statusText = activeStep === 'complete'
+    ? 'Discovery complete'
+    : activeStep === 'error'
+      ? 'An error occurred'
+      : activeStep === 'planning'
+        ? 'Planning your course outline...'
+        : activeStep === 'synthesizing'
+          ? 'Synthesizing sources into key concepts...'
+          : activeStep === 'searching'
+            ? 'Running live web and academic research...'
+            : activeStep === 'preparing'
+              ? 'Generating discovery queries...'
+              : 'Researching sources and building your course outline...';
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -135,6 +153,8 @@ export default function DiscoverPage() {
         );
         setActiveStep('complete');
         setTimeout(() => router.push(`/courses/${courseId}`), 2500);
+      } else if (course.status === 'researching') {
+        setActiveStep((prev) => prev ?? 'preparing');
       }
     } catch {
       // Fallback fetch failed silently
@@ -168,15 +188,50 @@ export default function DiscoverPage() {
       const url = getDiscoverStreamUrl(courseId, ticket);
       const es = new EventSource(url);
       eventSourceRef.current = es;
+      const markLive = () => {
+        receivedEvents.current = true;
+        if (fallbackTimerRef.current) {
+          clearTimeout(fallbackTimerRef.current);
+          fallbackTimerRef.current = null;
+        }
+      };
 
       // Start fallback timer
       fallbackTimerRef.current = setTimeout(() => {
         fallbackToStatic();
       }, 5000);
 
+      es.addEventListener('created', () => {
+        markLive();
+        setActiveStep((prev) => prev ?? 'preparing');
+      });
+
+      es.addEventListener('generating_queries', (e: MessageEvent) => {
+        markLive();
+        try {
+          const data = JSON.parse(e.data);
+          setTopic((prev) => prev || data.topic || '');
+          if (typeof data.academic_enabled === 'boolean') {
+            setHasAcademicResearch(data.academic_enabled);
+          }
+        } catch {}
+        setActiveStep('preparing');
+      });
+
+      es.addEventListener('search_started', (e: MessageEvent) => {
+        markLive();
+        try {
+          const data = JSON.parse(e.data);
+          setPlannedQueryCount(typeof data.total_queries === 'number' ? data.total_queries : null);
+          if (typeof data.academic_enabled === 'boolean') {
+            setHasAcademicResearch(data.academic_enabled);
+          }
+        } catch {}
+        setActiveStep('searching');
+      });
+
       es.addEventListener('query', (e: MessageEvent) => {
-        receivedEvents.current = true;
-        if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setActiveStep('searching');
@@ -185,7 +240,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('source', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setWebQueries((prev) => appendSourceToGroup(prev, data.query_index ?? 0, {
@@ -198,7 +253,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('query_done', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setWebQueries((prev) => markQueryDone(prev, data.index ?? 0));
@@ -206,7 +261,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('academic_query', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setHasAcademicResearch(true);
@@ -216,7 +271,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('academic_source', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setHasAcademicResearch(true);
@@ -234,7 +289,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('academic_query_done', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setAcademicQueries((prev) => markQueryDone(prev, data.index ?? 0));
@@ -242,7 +297,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('discovery_done', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           if (data.web_sources !== undefined) setWebSourceCount(data.web_sources);
@@ -252,12 +307,12 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('synthesizing', () => {
-        receivedEvents.current = true;
+        markLive();
         setActiveStep('synthesizing');
       });
 
       es.addEventListener('synthesis_done', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           if (data.key_concepts) setKeyConcepts(data.key_concepts);
@@ -265,12 +320,12 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('planning', () => {
-        receivedEvents.current = true;
+        markLive();
         setActiveStep('planning');
       });
 
       es.addEventListener('section', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setSections((prev) => [
@@ -281,7 +336,7 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('complete', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           if (data.topic) setTopic(data.topic);
@@ -294,12 +349,12 @@ export default function DiscoverPage() {
       });
 
       es.addEventListener('ungrounded', () => {
-        receivedEvents.current = true;
+        markLive();
         setUngrounded(true);
       });
 
       es.addEventListener('error', (e: MessageEvent) => {
-        receivedEvents.current = true;
+        markLive();
         try {
           const data = JSON.parse(e.data);
           setErrorMessage(data.message || data.error || 'Discovery failed');
@@ -338,73 +393,79 @@ export default function DiscoverPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-semibold">{topic || 'Discovering...'}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {activeStep === 'complete'
-              ? 'Discovery complete'
-              : activeStep === 'error'
-                ? 'An error occurred'
-                : 'Researching sources and building your course outline...'}
+            {statusText}
           </p>
         </div>
 
         {/* Feed */}
         <div ref={feedRef} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           {/* Web search section */}
-          {webQueries.length > 0 && (
+          {showWebSearch && (
             <Card>
               <CardContent>
                 <div className="flex items-center gap-2 mb-3">
-                  {activeStep === 'searching' && <PulsingDot />}
+                  {(activeStep === 'preparing' || activeStep === 'searching') && <PulsingDot />}
                   <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
                     Web Search
                   </span>
                 </div>
-                <div className="space-y-3">
-                  {webQueries.map((q) => (
-                    <div key={`web-${q.index}`}>
-                      <div className="flex items-center gap-2">
-                        <code className="text-sm font-mono text-foreground bg-muted px-2 py-0.5 rounded">
-                          {q.query}
-                        </code>
-                        {q.done && (
-                          <span className="text-xs text-green-500">
-                            {q.sources.length} sources
-                          </span>
+                {webQueries.length > 0 ? (
+                  <div className="space-y-3">
+                    {webQueries.map((q) => (
+                      <div key={`web-${q.index}`}>
+                        <div className="flex items-center gap-2">
+                          <code className="text-sm font-mono text-foreground bg-muted px-2 py-0.5 rounded">
+                            {q.query}
+                          </code>
+                          {q.done && (
+                            <span className="text-xs text-green-500">
+                              {q.sources.length} sources
+                            </span>
+                          )}
+                        </div>
+                        {q.sources.length > 0 && (
+                          <div className="ml-4 mt-1.5 space-y-1">
+                            {q.sources.map((s, j) => (
+                              <div key={j} className="text-sm">
+                                <a
+                                  href={safeHref(s.url)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-primary hover:underline"
+                                >
+                                  {s.title || s.url}
+                                </a>
+                                {s.snippet && (
+                                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                                    {s.snippet}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         )}
                       </div>
-                      {q.sources.length > 0 && (
-                        <div className="ml-4 mt-1.5 space-y-1">
-                          {q.sources.map((s, j) => (
-                            <div key={j} className="text-sm">
-                              <a
-                                href={safeHref(s.url)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary hover:underline"
-                              >
-                                {s.title || s.url}
-                              </a>
-                              {s.snippet && (
-                                <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                                  {s.snippet}
-                                </p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {activeStep === 'preparing'
+                      ? 'Generating web search queries...'
+                      : plannedQueryCount
+                        ? `Running ${plannedQueryCount} web search queries in parallel...`
+                        : 'Starting web search...'}
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
 
           {/* Academic research section */}
-          {hasAcademicResearch && (
+          {showAcademicSearch && (
             <Card>
               <CardContent>
                 <div className="flex items-center gap-2 mb-3">
-                  {activeStep === 'searching' && <PulsingDot />}
+                  {(activeStep === 'preparing' || activeStep === 'searching') && <PulsingDot />}
                   <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
                     Academic Research
                   </span>
@@ -460,7 +521,13 @@ export default function DiscoverPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Preparing academic research...</p>
+                  <p className="text-sm text-muted-foreground">
+                    {activeStep === 'preparing'
+                      ? 'Generating academic research queries...'
+                      : plannedQueryCount
+                        ? `Running academic lookups for ${plannedQueryCount} queries in parallel...`
+                        : 'Preparing academic research...'}
+                  </p>
                 )}
               </CardContent>
             </Card>

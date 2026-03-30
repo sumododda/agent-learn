@@ -92,6 +92,8 @@ async def test_discover_topic_streams_web_and_academic_events_in_completion_orde
     assert result.key_concepts == ["Agents"]
 
     event_types = [event_type for event_type, _ in emitted]
+    assert "generating_queries" in event_types
+    assert "search_started" in event_types
     assert "query" in event_types
     assert "source" in event_types
     assert "query_done" in event_types
@@ -100,6 +102,14 @@ async def test_discover_topic_streams_web_and_academic_events_in_completion_orde
     assert "academic_query_done" in event_types
     assert "synthesizing" in event_types
     assert "synthesis_done" in event_types
+
+    generating_queries_idx = event_types.index("generating_queries")
+    search_started_idx = event_types.index("search_started")
+    first_query_idx = event_types.index("query")
+
+    assert generating_queries_idx < search_started_idx < first_query_idx
+    assert emitted[generating_queries_idx][1]["academic_enabled"] is True
+    assert emitted[search_started_idx][1]["total_queries"] == 2
 
     slow_web_done = next(
         idx for idx, (event_type, data) in enumerate(emitted)
