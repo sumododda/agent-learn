@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
+import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
+
+logger = logging.getLogger(__name__)
+
+KROKI_MERMAID_URL = os.environ.get("KROKI_MERMAID_URL", "https://kroki.io/mermaid/png")
 
 from app.schemas import CourseResponse, SectionFull
 
@@ -18,7 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in runtime environme
     typst = None
 
 
-_MARKDOWN = MarkdownIt("commonmark")
+_MARKDOWN = MarkdownIt("commonmark").enable("table")
 _LEADING_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}[^\n]*(?:\r?\n){1,2}")
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 _REMOTE_ASSET_RE = re.compile(r"^[a-z]+://", re.IGNORECASE)
@@ -65,9 +73,22 @@ def build_reference_index(
     return section_maps, references
 
 
-def render_course_typst(course: CourseResponse) -> str:
+@dataclass
+class MermaidCollector:
+    """Collects mermaid diagram sources during Typst generation."""
+    blocks: list[str] = field(default_factory=list)
+
+    def add(self, source: str) -> int:
+        index = len(self.blocks)
+        self.blocks.append(source)
+        return index
+
+
+def render_course_typst(course: CourseResponse) -> tuple[str, list[str]]:
+    """Returns (typst_source, mermaid_blocks)."""
     section_maps, references = build_reference_index(course.sections)
     generated_at = _format_cover_date(datetime.now())
+    mermaid = MermaidCollector()
 
     parts = [
         '#import "course.typ": render_cover, render_references, render_section',
@@ -80,7 +101,7 @@ def render_course_typst(course: CourseResponse) -> str:
         if not markdown:
             continue
 
-        body = convert_markdown_to_typst(markdown, section_maps.get(str(section.id), {}))
+        body = convert_markdown_to_typst(markdown, section_maps.get(str(section.id), {}), mermaid)
         if not body.strip():
             continue
 
@@ -91,7 +112,7 @@ def render_course_typst(course: CourseResponse) -> str:
     if references:
         parts.append(render_references_typst(references))
 
-    return "\n\n".join(parts) + "\n"
+    return "\n\n".join(parts) + "\n", mermaid.blocks
 
 
 def render_references_typst(references: list[ReferenceEntry]) -> str:
@@ -118,15 +139,51 @@ def render_references_typst(references: list[ReferenceEntry]) -> str:
     return "#render_references[\n" + _indent("\n".join(items)) + "\n]"
 
 
+def _render_mermaid_png(source: str) -> bytes | None:
+    """Render mermaid source to PNG via Kroki. Returns PNG bytes or None on failure."""
+    try:
+        resp = httpx.post(
+            KROKI_MERMAID_URL,
+            content=source,
+            headers={"Content-Type": "text/plain"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        return resp.content
+    except Exception as e:
+        logger.warning("[pdf_export] Kroki mermaid render failed: %s", e)
+        return None
+
+
+_PLACEHOLDER_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"
+)
+
+
+def _write_placeholder_png(path: Path) -> None:
+    """Write a minimal valid PNG (1x1 white pixel) as a fallback."""
+    path.write_bytes(_PLACEHOLDER_PNG)
+
+
 def generate_course_pdf(course: CourseResponse) -> bytes:
     if typst is None:
         raise RuntimeError("Typst dependency is not installed")
 
-    main_source = render_course_typst(course)
+    main_source, mermaid_blocks = render_course_typst(course)
     template_source = _TEMPLATE_PATH.read_text(encoding="utf-8")
 
     with tempfile.TemporaryDirectory(prefix="course-export-") as tmpdir:
         root = Path(tmpdir)
+
+        # Render mermaid diagrams to PNG via Kroki
+        for i, block in enumerate(mermaid_blocks):
+            png = _render_mermaid_png(block)
+            if png:
+                (root / f"mermaid-{i}.png").write_bytes(png)
+            else:
+                # Write a minimal 1x1 placeholder PNG so Typst doesn't fail
+                _write_placeholder_png(root / f"mermaid-{i}.png")
+
         (root / "main.typ").write_text(main_source, encoding="utf-8")
         (root / "course.typ").write_text(template_source, encoding="utf-8")
         return typst.compile(root / "main.typ")
@@ -136,13 +193,13 @@ def strip_leading_heading(markdown: str) -> str:
     return _LEADING_HEADING_RE.sub("", markdown, count=1)
 
 
-def convert_markdown_to_typst(markdown: str, citation_map: dict[int, int] | None = None) -> str:
+def convert_markdown_to_typst(markdown: str, citation_map: dict[int, int] | None = None, mermaid: MermaidCollector | None = None) -> str:
     root = SyntaxTreeNode(_MARKDOWN.parse(markdown))
-    blocks = [_render_block(node, citation_map or {}) for node in root.children]
+    blocks = [_render_block(node, citation_map or {}, mermaid) for node in root.children]
     return "\n\n".join(block for block in blocks if block.strip())
 
 
-def _render_block(node: SyntaxTreeNode, citation_map: dict[int, int]) -> str:
+def _render_block(node: SyntaxTreeNode, citation_map: dict[int, int], mermaid: MermaidCollector | None = None) -> str:
     if node.type == "heading":
         level = max(1, int(node.tag.removeprefix("h") or "1"))
         return f"{'=' * level} {_render_inline_nodes(node.children, citation_map)}"
@@ -151,26 +208,29 @@ def _render_block(node: SyntaxTreeNode, citation_map: dict[int, int]) -> str:
         return _render_inline_nodes(node.children, citation_map)
 
     if node.type == "bullet_list":
-        return _render_list(node.children, "- ", citation_map)
+        return _render_list(node.children, "- ", citation_map, mermaid)
 
     if node.type == "ordered_list":
-        return _render_list(node.children, "+ ", citation_map)
+        return _render_list(node.children, "+ ", citation_map, mermaid)
 
     if node.type == "blockquote":
-        inner = _render_blocks(node.children, citation_map)
+        inner = _render_blocks(node.children, citation_map, mermaid)
         return f"#quote(block: true)[\n{_indent(inner)}\n]"
 
+    if node.type == "table":
+        return _render_table(node, citation_map)
+
     if node.type in {"fence", "code_block"}:
-        return _render_code_block(node.content, node.info)
+        return _render_code_block(node.content, node.info, mermaid)
 
     if node.type == "html_block":
         return f"#raw({_typst_string(node.content)}, block: true)"
 
-    return _render_blocks(node.children, citation_map)
+    return _render_blocks(node.children, citation_map, mermaid)
 
 
-def _render_blocks(nodes: list[SyntaxTreeNode], citation_map: dict[int, int]) -> str:
-    blocks = [_render_block(node, citation_map) for node in nodes]
+def _render_blocks(nodes: list[SyntaxTreeNode], citation_map: dict[int, int], mermaid: MermaidCollector | None = None) -> str:
+    blocks = [_render_block(node, citation_map, mermaid) for node in nodes]
     return "\n\n".join(block for block in blocks if block.strip())
 
 
@@ -178,10 +238,11 @@ def _render_list(
     items: list[SyntaxTreeNode],
     marker: str,
     citation_map: dict[int, int],
+    mermaid: MermaidCollector | None = None,
 ) -> str:
     rendered: list[str] = []
     for item in items:
-        body = _render_blocks(item.children, citation_map).strip()
+        body = _render_blocks(item.children, citation_map, mermaid).strip()
         if not body:
             continue
         lines = body.splitlines()
@@ -241,13 +302,54 @@ def _render_inline_node(node: SyntaxTreeNode, citation_map: dict[int, int]) -> s
     return ""
 
 
-def _render_code_block(content: str, info: str | None) -> str:
+def _render_code_block(content: str, info: str | None, mermaid: MermaidCollector | None = None) -> str:
     language = (info or "").strip().split(maxsplit=1)[0]
     if language == "mermaid":
+        if mermaid is not None:
+            index = mermaid.add(content.strip())
+            return f'#image("mermaid-{index}.png", width: 80%)'
         return _render_mermaid_placeholder(content)
     if language:
         return f"#raw({_typst_string(content)}, lang: {_typst_string(language)}, block: true)"
     return f"#raw({_typst_string(content)}, block: true)"
+
+
+def _render_table(node: SyntaxTreeNode, citation_map: dict[int, int]) -> str:
+    """Render a GFM table as a Typst table."""
+    rows: list[list[str]] = []
+    header_count = 0
+
+    for child in node.children:
+        if child.type == "thead":
+            for tr in child.children:
+                cells = [_render_inline_nodes(td.children, citation_map) for td in tr.children]
+                rows.append(cells)
+                header_count += 1
+        elif child.type == "tbody":
+            for tr in child.children:
+                cells = [_render_inline_nodes(td.children, citation_map) for td in tr.children]
+                rows.append(cells)
+
+    if not rows:
+        return ""
+
+    cols = max(len(row) for row in rows)
+    col_spec = ", ".join(["1fr"] * cols)
+
+    parts = [f"#table(columns: ({col_spec}), align: left, stroke: 0.5pt + luma(180),"]
+
+    # Header rows (bold)
+    for row in rows[:header_count]:
+        for cell in row:
+            parts.append(f"  table.header[#strong[{cell}]],")
+
+    # Body rows
+    for row in rows[header_count:]:
+        for cell in row:
+            parts.append(f"  [{cell}],")
+
+    parts.append(")")
+    return "\n".join(parts)
 
 
 def _render_mermaid_placeholder(content: str) -> str:

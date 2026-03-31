@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kroki-mermaid
+  namespace: agent-learn
+  labels:
+    app: kroki-mermaid
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kroki-mermaid
+  template:
+    metadata:
+      labels:
+        app: kroki-mermaid
+    spec:
+      containers:
+        - name: kroki-mermaid
+          image: yuzutech/kroki-mermaid
+          ports:
+            - containerPort: 8002
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kroki-mermaid
+  namespace: agent-learn
+  labels:
+    app: kroki-mermaid
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8002
+      targetPort: 8002
+      protocol: TCP
+  selector:
+    app: kroki-mermaid
