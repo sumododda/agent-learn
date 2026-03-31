@@ -472,23 +472,6 @@ async def regenerate_course(
         body,
     )
 
-    # Delete old sections
-    for section in course.sections:
-        await session.delete(section)
-    await session.flush()
-
-    # Delete old research briefs
-    old_briefs_result = await session.execute(
-        select(ResearchBrief).where(ResearchBrief.course_id == course.id)
-    )
-    for brief in old_briefs_result.scalars().all():
-        await session.delete(brief)
-    await session.flush()
-
-    # Set status to researching for the new outline generation
-    course.status = "researching"
-    await session.flush()
-
     try:
         # Get provider credentials from cache
         provider, model, creds, extra_fields = await _get_user_provider(user_id, session)
@@ -500,6 +483,18 @@ async def regenerate_course(
         )
 
         course.ungrounded = ungrounded
+
+        # Replace the old outline only after the new one has been validated/generated.
+        for section in list(course.sections):
+            await session.delete(section)
+        await session.flush()
+
+        old_briefs_result = await session.execute(
+            select(ResearchBrief).where(ResearchBrief.course_id == course.id)
+        )
+        for brief in old_briefs_result.scalars().all():
+            await session.delete(brief)
+        await session.flush()
 
         for section_data in outline_with_briefs.sections:
             section = Section(
@@ -536,10 +531,10 @@ async def regenerate_course(
 
     except Exception as e:
         logger.error("Failed to regenerate outline: %s", e)
-        course.status = "failed"
+        course.status = "outline_ready"
         await session.commit()
         raise HTTPException(
-            status_code=500, detail="Internal server error"
+            status_code=500, detail="Outline regeneration failed; existing outline preserved"
         )
 
     result = await session.execute(

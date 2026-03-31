@@ -469,13 +469,21 @@ async def test_pipeline_no_section_briefs(setup_db, error_session):
 async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
     """generate_outline returns ungrounded=True when discover_topic raises."""
     mock_outline = CourseOutlineWithBriefs(
-        sections=[OutlineSection(position=1, title="Intro", summary="Start")],
+        sections=[
+            OutlineSection(position=1, title="Intro", summary="Start"),
+            OutlineSection(position=2, title="Core Concepts", summary="Continue"),
+        ],
         research_briefs=[
             ResearchBriefItem(
                 section_position=1,
                 questions=["Q1?"],
                 source_policy={},
-            )
+            ),
+            ResearchBriefItem(
+                section_position=2,
+                questions=["Q2?"],
+                source_policy={},
+            ),
         ],
     )
 
@@ -508,6 +516,82 @@ async def test_generate_outline_tavily_error_returns_ungrounded(setup_db):
     assert ungrounded is True
     assert isinstance(result, CourseOutlineWithBriefs)
     assert topic_brief is None
+
+
+@pytest.mark.anyio
+async def test_generate_outline_retries_single_section_when_not_requested(setup_db):
+    first_outline = CourseOutlineWithBriefs(
+        sections=[OutlineSection(position=1, title="Only Section", summary="Too short")],
+        research_briefs=[
+            ResearchBriefItem(
+                section_position=1,
+                questions=["Q1?"],
+                source_policy={},
+            )
+        ],
+    )
+    corrected_outline = CourseOutlineWithBriefs(
+        sections=[
+            OutlineSection(position=1, title="Intro", summary="Start here"),
+            OutlineSection(position=2, title="Threat Models", summary="Build context"),
+        ],
+        research_briefs=[
+            ResearchBriefItem(
+                section_position=1,
+                questions=["Q1?"],
+                source_policy={},
+            ),
+            ResearchBriefItem(
+                section_position=2,
+                questions=["Q2?"],
+                source_policy={},
+            ),
+        ],
+    )
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.side_effect = [
+        {"structured_response": first_outline, "messages": []},
+        {"structured_response": corrected_outline, "messages": []},
+    ]
+
+    with patch("app.agent_service.create_planner", return_value=mock_agent):
+        from app.agent_service import generate_outline
+
+        result, ungrounded, topic_brief = await generate_outline("AI Agents Security")
+
+    assert len(result.sections) == 2
+    assert mock_agent.ainvoke.await_count == 2
+    assert ungrounded is True
+    assert topic_brief is None
+
+
+@pytest.mark.anyio
+async def test_generate_outline_allows_single_section_when_explicitly_requested(setup_db):
+    single_outline = CourseOutlineWithBriefs(
+        sections=[OutlineSection(position=1, title="Single Section", summary="Exactly what was asked for")],
+        research_briefs=[
+            ResearchBriefItem(
+                section_position=1,
+                questions=["Q1?"],
+                source_policy={},
+            )
+        ],
+    )
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {"structured_response": single_outline, "messages": []}
+
+    with patch("app.agent_service.create_planner", return_value=mock_agent):
+        from app.agent_service import generate_outline
+
+        result, _, _ = await generate_outline(
+            "AI Agents Security",
+            instructions="Please make this a single section course.",
+        )
+
+    assert len(result.sections) == 1
+    assert mock_agent.ainvoke.await_count == 1
 
 
 # ---------------------------------------------------------------------------
