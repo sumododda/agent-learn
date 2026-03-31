@@ -347,7 +347,7 @@ export default function LearnPage() {
         <aside style={{ width: sidebarWidth }} className="border-l border-border shrink-0 flex flex-col">
           <Tabs defaultValue={1} className="flex flex-col h-full">
             <TabsList className="w-full shrink-0">
-              <TabsTrigger value={0} className="flex-1">Sources</TabsTrigger>
+              <TabsTrigger value={0} className="flex-1">Evidence</TabsTrigger>
               <TabsTrigger value={1} className="flex-1">Chat</TabsTrigger>
             </TabsList>
             <TabsContent value={0} className="overflow-y-auto flex-1">
