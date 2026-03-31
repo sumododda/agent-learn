@@ -79,7 +79,7 @@ export default function CitationRenderer({ content, citations, markdownComponent
 
       {citations.length > 0 && (
         <div className="mt-8 pt-6 border-t border-border">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Sources</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Citations</h3>
           <ol className="space-y-3">
             {citations.map((citation) => (
               <li
