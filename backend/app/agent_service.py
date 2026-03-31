@@ -595,9 +595,15 @@ async def generate_lessons(
                     discovery_context=discovery_context, user_instructions=user_instructions,
                 )
 
+                # Post-process content (fix tables, validate mermaid)
+                from app.content_postprocess import postprocess_content
+                raw_content = editor_result.edited_content if editor_result.edited_content.strip() else draft
+                final_content = await postprocess_content(
+                    raw_content, provider, model, credentials,
+                )
+
                 # Persist
                 verified_cards = [c for c in cards if c.verified]
-                final_content = editor_result.edited_content if editor_result.edited_content.strip() else draft
                 citations = extract_citations(final_content, verified_cards)
                 section.content = final_content
                 section.citations = citations
@@ -1915,6 +1921,12 @@ async def run_edit_section(
             section_position, max_edit_attempts,
         )
         edited_content = draft
+
+    # Post-process content (fix tables, validate mermaid)
+    from app.content_postprocess import postprocess_content
+    edited_content = await postprocess_content(
+        edited_content, provider, model, credentials,
+    )
 
     # Update section content with edited version
     verified_cards = [c for c in cards if c.verified]

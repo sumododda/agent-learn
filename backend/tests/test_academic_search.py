@@ -198,7 +198,7 @@ async def test_serper_scholar_adapter_maps_fields():
                 "publicationInfo": "A Vaswani, N Shazeer, N Parmar - Advances in neural information processing systems, 2017 - proceedings.neurips.cc",
                 "citedBy": 119097,
                 "year": 2017,
-                "pdfLink": "https://example.com/paper.pdf",
+                "pdfUrl": "https://example.com/paper.pdf",
             }
         ],
     }
@@ -221,7 +221,7 @@ async def test_serper_scholar_adapter_maps_fields():
     assert r.citation_count == 119097
     assert r.year == 2017
     assert r.pdf_url == "https://example.com/paper.pdf"
-    assert r.doi is None  # Serper Scholar does not return DOIs
+    assert r.doi is None  # No DOI extractable from this URL
     assert "Vaswani" in r.authors[0]
     assert r.venue is not None
 
@@ -275,7 +275,7 @@ async def test_serper_scholar_handles_missing_fields():
     assert len(results) == 1
     r = results[0]
     assert r.citation_count is None  # citedBy missing
-    assert r.pdf_url is None  # pdfLink missing
+    assert r.pdf_url is None  # pdfUrl missing
 
 
 @pytest.mark.asyncio

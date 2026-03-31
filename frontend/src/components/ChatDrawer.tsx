@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import MermaidBlock from '@/components/MermaidBlock';
 import { getChatHistory, sendChatMessage } from '@/lib/api';
 import { ChatMessage, ChatModel } from '@/lib/types';
@@ -334,7 +335,7 @@ export function ChatPanel({
               </div>
             ) : (
               <div className="max-w-[85%] prose prose-sm dark:prose-invert max-w-none text-foreground">
-                <ReactMarkdown components={markdownComponents}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {msg.content}
                 </ReactMarkdown>
               </div>
@@ -347,7 +348,7 @@ export function ChatPanel({
           <div className="flex justify-start">
             <div className="max-w-[85%] prose prose-sm dark:prose-invert max-w-none text-foreground">
               {streamingContent ? (
-                <ReactMarkdown components={markdownComponents}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {streamingContent}
                 </ReactMarkdown>
               ) : (
