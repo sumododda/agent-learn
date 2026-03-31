@@ -21,7 +21,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 DEFAULT_PROVIDER = "openai"
 DEFAULT_MODEL = "gpt-5.4-mini"
-REQUEST_TIMEOUT = 120.0
+REQUEST_TIMEOUT = 360.0
 
 
 @dataclass(frozen=True)
