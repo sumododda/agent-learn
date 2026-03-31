@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from app.pdf_export import build_reference_index, convert_markdown_to_typst, generate_course_pdf
+from app.pdf_export import MermaidCollector, build_reference_index, convert_markdown_to_typst, generate_course_pdf
 from app.schemas import Citation, CourseResponse, SectionFull
 from tests.conftest import TEST_USER_UUID
 
@@ -191,8 +191,72 @@ def test_convert_markdown_to_typst_renders_supported_elements():
     assert '#raw("print(1)\\n", lang: "python", block: true)' in rendered
 
 
+def test_convert_markdown_to_typst_renders_mermaid_as_page_fitted_svg():
+    markdown = (
+        "```mermaid\n"
+        "flowchart TD\n"
+        '    A["Start"] --> B["Finish"]\n'
+        "```\n"
+    )
+    mermaid = MermaidCollector()
+
+    rendered = convert_markdown_to_typst(markdown, mermaid=mermaid)
+
+    assert mermaid.blocks == ['flowchart TD\n    A["Start"] --> B["Finish"]']
+    assert "#align(center)[" in rendered
+    assert '#image("mermaid-0.svg", width: 100%, height: 19cm, fit: "contain")' in rendered
+
+
 def test_generate_course_pdf_returns_pdf_bytes():
     pdf = generate_course_pdf(_sample_course_response())
+
+    assert pdf.startswith(b"%PDF-")
+
+
+def test_generate_course_pdf_returns_pdf_bytes_for_mermaid(monkeypatch):
+    mermaid_course = CourseResponse(
+        id=uuid.uuid4(),
+        topic="Mermaid Export",
+        instructions=None,
+        status="completed",
+        ungrounded=False,
+        academic_search=None,
+        pipeline_status=None,
+        sections=[
+            SectionFull(
+                id=uuid.uuid4(),
+                position=1,
+                title="Diagram",
+                summary="Mermaid diagram",
+                content=(
+                    "## Diagram\n\n"
+                    "```mermaid\n"
+                    "flowchart TD\n"
+                    '    A["Unvetted Shadow AI App"] --> B["IT Discovery & Containment"]\n'
+                    '    B --> C["NIST Map: Asset Inventory"]\n'
+                    '    C --> D["MITRE ATLAS Threat Modeling"]\n'
+                    '    D --> E["Probabilistic SAST / DAST"]\n'
+                    '    E --> F["ISO 42001 Lifecycle Audit"]\n'
+                    '    F --> G["Provision Sanctioned AI Agent"]\n'
+                    "```\n"
+                ),
+                citations=[],
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.pdf_export._render_mermaid_svg",
+        lambda _source: (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="276" height="766" viewBox="0 0 276 766">'
+            '<rect width="276" height="766" fill="white" />'
+            '<rect x="8" y="8" width="260" height="90" fill="#ece9ff" stroke="#b39ddb" stroke-width="2" />'
+            '<text x="30" y="60" font-size="20">Readable diagram</text>'
+            "</svg>"
+        ),
+    )
+
+    pdf = generate_course_pdf(mermaid_course)
 
     assert pdf.startswith(b"%PDF-")
 

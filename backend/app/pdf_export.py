@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -17,6 +16,8 @@ from markdown_it.tree import SyntaxTreeNode
 logger = logging.getLogger(__name__)
 
 KROKI_MERMAID_URL = os.environ.get("KROKI_MERMAID_URL", "https://kroki.io/mermaid/png")
+MERMAID_MAX_HEIGHT = "19cm"
+MERMAID_RENDER_PARAMS = {"html-labels": "false"}
 
 from app.schemas import CourseResponse, SectionFull
 
@@ -31,6 +32,7 @@ _LEADING_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}[^\n]*(?:\r?\n){1,2}")
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 _REMOTE_ASSET_RE = re.compile(r"^[a-z]+://", re.IGNORECASE)
 _TEMPLATE_PATH = Path(__file__).with_name("templates") / "course.typ"
+_KROKI_FORMAT_RE = re.compile(r"/(?:png|svg)(?=(?:\?.*)?$)")
 
 
 @dataclass(frozen=True)
@@ -139,30 +141,49 @@ def render_references_typst(references: list[ReferenceEntry]) -> str:
     return "#render_references[\n" + _indent("\n".join(items)) + "\n]"
 
 
-def _render_mermaid_png(source: str) -> bytes | None:
-    """Render mermaid source to PNG via Kroki. Returns PNG bytes or None on failure."""
+def _kroki_mermaid_url(fmt: str) -> str:
+    """Return the Kroki Mermaid endpoint for the requested format."""
+    if _KROKI_FORMAT_RE.search(KROKI_MERMAID_URL):
+        return _KROKI_FORMAT_RE.sub(f"/{fmt}", KROKI_MERMAID_URL)
+    return KROKI_MERMAID_URL
+
+
+def _render_mermaid_svg(source: str) -> str | None:
+    """Render mermaid source to SVG via Kroki. Returns SVG text or None on failure."""
     try:
         resp = httpx.post(
-            KROKI_MERMAID_URL,
+            _kroki_mermaid_url("svg"),
             content=source,
-            headers={"Content-Type": "text/plain"},
+            headers={
+                "Content-Type": "text/plain",
+                "Accept": "image/svg+xml",
+            },
+            params=MERMAID_RENDER_PARAMS,
             timeout=15.0,
         )
         resp.raise_for_status()
-        return resp.content
+        return resp.text
     except Exception as e:
-        logger.warning("[pdf_export] Kroki mermaid render failed: %s", e)
+        logger.warning("[pdf_export] Kroki mermaid SVG render failed: %s", e)
         return None
 
 
-_PLACEHOLDER_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"
-)
+_PLACEHOLDER_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="220" viewBox="0 0 800 220">
+  <rect width="800" height="220" rx="16" fill="#f7f7fb" stroke="#c7c7d1" stroke-width="2" />
+  <text x="400" y="88" text-anchor="middle" font-size="26" font-family="Arial, sans-serif" fill="#333333">
+    Mermaid diagram unavailable
+  </text>
+  <text x="400" y="126" text-anchor="middle" font-size="18" font-family="Arial, sans-serif" fill="#666666">
+    The PDF exported without a raster fallback so the rest of the document stays readable.
+  </text>
+</svg>
+"""
 
 
-def _write_placeholder_png(path: Path) -> None:
-    """Write a minimal valid PNG (1x1 white pixel) as a fallback."""
-    path.write_bytes(_PLACEHOLDER_PNG)
+def _write_placeholder_svg(path: Path) -> None:
+    """Write a valid SVG fallback so Typst can still compile the PDF."""
+    path.write_text(_PLACEHOLDER_SVG, encoding="utf-8")
 
 
 def generate_course_pdf(course: CourseResponse) -> bytes:
@@ -175,14 +196,13 @@ def generate_course_pdf(course: CourseResponse) -> bytes:
     with tempfile.TemporaryDirectory(prefix="course-export-") as tmpdir:
         root = Path(tmpdir)
 
-        # Render mermaid diagrams to PNG via Kroki
+        # Render mermaid diagrams to SVG via Kroki so exported PDFs stay sharp
         for i, block in enumerate(mermaid_blocks):
-            png = _render_mermaid_png(block)
-            if png:
-                (root / f"mermaid-{i}.png").write_bytes(png)
+            svg = _render_mermaid_svg(block)
+            if svg:
+                (root / f"mermaid-{i}.svg").write_text(svg, encoding="utf-8")
             else:
-                # Write a minimal 1x1 placeholder PNG so Typst doesn't fail
-                _write_placeholder_png(root / f"mermaid-{i}.png")
+                _write_placeholder_svg(root / f"mermaid-{i}.svg")
 
         (root / "main.typ").write_text(main_source, encoding="utf-8")
         (root / "course.typ").write_text(template_source, encoding="utf-8")
@@ -307,7 +327,11 @@ def _render_code_block(content: str, info: str | None, mermaid: MermaidCollector
     if language == "mermaid":
         if mermaid is not None:
             index = mermaid.add(content.strip())
-            return f'#image("mermaid-{index}.png", width: 80%)'
+            return (
+                "#align(center)["
+                f'#image("mermaid-{index}.svg", width: 100%, height: {MERMAID_MAX_HEIGHT}, fit: "contain")'
+                "]"
+            )
         return _render_mermaid_placeholder(content)
     if language:
         return f"#raw({_typst_string(content)}, lang: {_typst_string(language)}, block: true)"
