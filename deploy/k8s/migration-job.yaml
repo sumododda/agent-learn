@@ -15,7 +15,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: us-central1-docker.pkg.dev/agent-learn-491717/agent-learn/backend:v2
+          image: ghcr.io/sumododda/agent-learn/backend:latest
           imagePullPolicy: Always
           args: ["alembic", "upgrade", "head"]
           env:
