@@ -338,10 +338,13 @@ def _render_table(node: SyntaxTreeNode, citation_map: dict[int, int]) -> str:
 
     parts = [f"#table(columns: ({col_spec}), align: left, stroke: 0.5pt + luma(180),"]
 
-    # Header rows (bold)
-    for row in rows[:header_count]:
-        for cell in row:
-            parts.append(f"  table.header[#strong[{cell}]],")
+    # Header rows (bold) — wrapped in a single table.header() call
+    if header_count:
+        header_cells: list[str] = []
+        for row in rows[:header_count]:
+            for cell in row:
+                header_cells.append(f"    [#strong[{cell}]]")
+        parts.append("  table.header(\n" + ",\n".join(header_cells) + ",\n  ),")
 
     # Body rows
     for row in rows[header_count:]:
