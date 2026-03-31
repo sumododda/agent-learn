@@ -1098,6 +1098,16 @@ def _openrouter_extract_text(payload: Mapping[str, Any]) -> str:
     raise ProviderResponseError("OpenRouter response did not contain text output")
 
 
+def _strip_code_fences(text: str) -> str:
+    """Strip markdown code fences if the model wrapped its JSON output in them."""
+    if text.startswith("```"):
+        lines = text.split("\n", 1)
+        text = lines[1] if len(lines) > 1 else ""
+    if text.endswith("```"):
+        text = text[: -3]
+    return text.strip()
+
+
 def _repair_stringified_objects(data: Any) -> Any:
     """Some models via OpenRouter return nested objects/arrays as JSON strings.
     Recursively detect and parse them back into dicts/lists."""
@@ -1141,7 +1151,7 @@ def _openrouter_extract_structured(
     if raw_json is None:
         content = message.get("content")
         if isinstance(content, str) and content.strip():
-            raw_json = content.strip()
+            raw_json = _strip_code_fences(content.strip())
 
     if raw_json is None:
         raise ProviderResponseError("OpenRouter response contained neither tool call nor parseable content")
