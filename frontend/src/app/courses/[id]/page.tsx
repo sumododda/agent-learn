@@ -36,8 +36,8 @@ export default function OutlineReviewPage() {
         const data = await getCourse(courseId, t);
         setCourse(data);
 
-        // If course is in any active pipeline state, show progress
-        if (['generating', 'researching', 'writing', 'verifying', 'editing', 'stale'].includes(data.status)) {
+        // Discovery (`researching`) has its own live page; only lesson generation uses /generating.
+        if (['generating', 'writing', 'verifying', 'editing', 'stale'].includes(data.status)) {
           setGenerating(true);
         }
       } catch (err) {
@@ -94,12 +94,14 @@ export default function OutlineReviewPage() {
   const hasComments = overallComment.trim() || Object.values(sectionComments).some(c => c.trim());
   const busy = generating || regenerating;
   const isCompleted = !!(course && (course.status === 'completed' || course.status === 'completed_partial'));
-  const isGenerating = generating || !!(course && ['generating', 'researching', 'writing', 'verifying', 'editing'].includes(course.status));
+  const isResearching = !!(course && course.status === 'researching');
+  const isGenerating = generating || !!(course && ['generating', 'writing', 'verifying', 'editing', 'stale'].includes(course.status));
 
   useEffect(() => {
     if (isCompleted) router.push(`/courses/${courseId}/learn`);
+    else if (isResearching) router.push(`/courses/${courseId}/discover`);
     else if (isGenerating) router.push(`/courses/${courseId}/generating`);
-  }, [isCompleted, isGenerating, courseId, router]);
+  }, [isCompleted, isResearching, isGenerating, courseId, router]);
 
   if (loading) return (
     <>
@@ -113,7 +115,7 @@ export default function OutlineReviewPage() {
       <div className="text-center text-destructive mt-20">{error}</div>
     </>
   );
-  if (!course || isCompleted || isGenerating) return null;
+  if (!course || isCompleted || isResearching || isGenerating) return null;
 
   const sortedSections = [...course.sections].sort((a, b) => a.position - b.position);
   const totalSections = sortedSections.length;

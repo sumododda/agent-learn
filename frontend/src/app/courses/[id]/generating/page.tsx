@@ -104,12 +104,16 @@ export default function GeneratingPage() {
   }, [sectionStates, overallStage]);
 
   // Initialize section states from course data
-  const initSections = useCallback(async () => {
+  const initSections = useCallback(async (): Promise<string | null> => {
     try {
       const token = await getToken();
       const course = await getCourse(courseId, token);
       setTopic(course.topic);
       setHasAcademicSearch(!!course.academic_search?.enabled);
+      if (course.status === 'researching') {
+        router.replace(`/courses/${courseId}/discover`);
+        return course.status;
+      }
       if (course.sections && course.sections.length > 0) {
         setSectionStates((prev) => {
           if (prev.length > 0) return prev; // Already initialized
@@ -136,8 +140,10 @@ export default function GeneratingPage() {
           setOverallStage('stale');
         }
       }
+      return course.status;
     } catch {
       // Silent
+      return null;
     }
   }, [courseId, getToken, router]);
 
@@ -336,7 +342,8 @@ export default function GeneratingPage() {
 
     async function start() {
       // Initialize sections from course data first
-      await initSections();
+      const courseStatus = await initSections();
+      if (courseStatus === 'researching') return;
 
       const token = await getToken();
       if (!token || cancelled) return;
