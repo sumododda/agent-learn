@@ -1,4 +1,4 @@
-"""PDF download, Docling parsing, section normalization, and paper reader orchestration."""
+"""PDF download, parsing, section normalization, and paper reader orchestration."""
 import asyncio
 import logging
 import re
@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import httpx
+import pymupdf4llm
 
 from app.academic_search import AcademicResult, rank_for_deep_reading
 
@@ -63,39 +64,37 @@ async def download_pdf(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Docling Parsing
+# PDF Parsing (PyMuPDF4LLM)
 # ---------------------------------------------------------------------------
 
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+
+
 async def parse_pdf_sections(pdf_path: str) -> list[dict[str, str]]:
-    """Parse a PDF into labeled sections using Docling.
+    """Parse a PDF into labeled sections using PyMuPDF4LLM.
     Returns list of {heading, text, canonical} dicts. Empty list on failure.
     """
     try:
         def _parse():
-            from docling.document_converter import DocumentConverter
-            converter = DocumentConverter()
-            result = converter.convert(pdf_path)
-            doc = result.document
+            md_text = pymupdf4llm.to_markdown(pdf_path)
 
-            sections = []
+            sections: list[dict[str, str]] = []
             current_heading = "Untitled"
             current_text_parts: list[str] = []
 
-            for item in doc.iterate_items():
-                label = item[1].label if hasattr(item[1], "label") else ""
-                text = item[1].text if hasattr(item[1], "text") else ""
-
-                if label in ("section_header", "title") and text.strip():
+            for line in md_text.split("\n"):
+                m = _HEADING_RE.match(line)
+                if m:
                     if current_text_parts:
                         sections.append({
                             "heading": current_heading,
                             "text": "\n".join(current_text_parts),
                             "canonical": normalize_section_name(current_heading),
                         })
-                    current_heading = text.strip()
+                    current_heading = m.group(2).strip()
                     current_text_parts = []
-                elif text.strip():
-                    current_text_parts.append(text.strip())
+                elif line.strip():
+                    current_text_parts.append(line.strip())
 
             if current_text_parts:
                 sections.append({
@@ -108,7 +107,7 @@ async def parse_pdf_sections(pdf_path: str) -> list[dict[str, str]]:
 
         return await asyncio.to_thread(_parse)
     except Exception as e:
-        logger.warning("[paper_reader] Docling parsing failed for %s: %s", pdf_path, e)
+        logger.warning("[paper_reader] PDF parsing failed for %s: %s", pdf_path, e)
         return []
 
 
