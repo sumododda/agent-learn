@@ -1128,17 +1128,28 @@ def _openrouter_extract_structured(
         raise ProviderResponseError("OpenRouter structured response missing choices")
     message = choices[0].get("message", {}) if isinstance(choices[0], Mapping) else {}
     tool_calls = message.get("tool_calls", [])
-    if not isinstance(tool_calls, Sequence) or not tool_calls:
-        raise ProviderResponseError("OpenRouter response did not contain a tool call")
 
-    function = tool_calls[0].get("function", {}) if isinstance(tool_calls[0], Mapping) else {}
-    arguments = function.get("arguments")
-    if not isinstance(arguments, str):
-        raise ProviderResponseError("OpenRouter tool call arguments missing")
+    # Primary path: extract from tool call arguments
+    raw_json: str | None = None
+    if isinstance(tool_calls, Sequence) and tool_calls:
+        function = tool_calls[0].get("function", {}) if isinstance(tool_calls[0], Mapping) else {}
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            raw_json = arguments
+
+    # Fallback: some models ignore tool_choice and return JSON in content
+    if raw_json is None:
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            raw_json = content.strip()
+
+    if raw_json is None:
+        raise ProviderResponseError("OpenRouter response contained neither tool call nor parseable content")
+
     try:
-        parsed = json.loads(arguments)
+        parsed = json.loads(raw_json)
     except json.JSONDecodeError as exc:
-        raise ProviderResponseError(f"OpenRouter tool call arguments invalid JSON: {arguments[:200]}") from exc
+        raise ProviderResponseError(f"OpenRouter structured output invalid JSON: {raw_json[:200]}") from exc
     parsed = _repair_stringified_objects(parsed)
     try:
         return response_schema.model_validate(parsed)
