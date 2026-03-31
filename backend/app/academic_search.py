@@ -43,6 +43,17 @@ _SECURITY_VENUE_TERMS = {
 }
 
 
+_DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s&?#]+)")
+
+
+def _extract_doi_from_url(url: str) -> str | None:
+    """Extract a DOI from common academic URL patterns."""
+    if not url:
+        return None
+    m = _DOI_RE.search(url)
+    return m.group(1).rstrip(".,;)") if m else None
+
+
 @dataclass
 class AcademicResult:
     title: str
@@ -92,8 +103,19 @@ def _metadata_richness(r: AcademicResult) -> int:
     return score
 
 
+def _merge_result(existing: AcademicResult, incoming: AcademicResult) -> AcademicResult:
+    """Merge two AcademicResult records, keeping the best of each field."""
+    base = existing if _metadata_richness(existing) >= _metadata_richness(incoming) else incoming
+    other = incoming if base is existing else existing
+    base.doi = base.doi or other.doi
+    base.pdf_url = base.pdf_url or other.pdf_url
+    base.venue = base.venue or other.venue
+    base.citation_count = base.citation_count if base.citation_count is not None else other.citation_count
+    return base
+
+
 def deduplicate_results(results: list[AcademicResult]) -> list[AcademicResult]:
-    """Remove duplicate papers, keeping the result with richest metadata."""
+    """Remove duplicate papers, merging metadata from both sources."""
     seen_dois: dict[str, int] = {}
     seen_titles: dict[str, int] = {}
     output: list[AcademicResult] = []
@@ -103,16 +125,14 @@ def deduplicate_results(results: list[AcademicResult]) -> list[AcademicResult]:
             doi_key = r.doi.lower().strip()
             if doi_key in seen_dois:
                 idx = seen_dois[doi_key]
-                if _metadata_richness(r) > _metadata_richness(output[idx]):
-                    output[idx] = r
+                output[idx] = _merge_result(output[idx], r)
                 continue
             seen_dois[doi_key] = len(output)
 
         norm_title = _normalize_title(r.title)
         if norm_title in seen_titles:
             idx = seen_titles[norm_title]
-            if _metadata_richness(r) > _metadata_richness(output[idx]):
-                output[idx] = r
+            output[idx] = _merge_result(output[idx], r)
             continue
         seen_titles[norm_title] = len(output)
 
@@ -466,16 +486,19 @@ async def _search_serper_scholar(
     results = []
     for item in data.get("organic", []):
         authors, venue = _parse_publication_info(item.get("publicationInfo", ""))
+        url = item.get("link", "")
+        pdf_url = item.get("pdfUrl")
+        doi = _extract_doi_from_url(url) or _extract_doi_from_url(pdf_url or "")
         results.append(AcademicResult(
             title=item.get("title", ""),
-            url=item.get("link", ""),
+            url=url,
             abstract=item.get("snippet", ""),
             authors=authors,
             year=item.get("year"),
             venue=venue,
             citation_count=item.get("citedBy"),
-            doi=None,  # Serper Scholar does not return DOIs
-            pdf_url=item.get("pdfLink"),
+            doi=doi,
+            pdf_url=pdf_url,
             score=0.0,
         ))
 

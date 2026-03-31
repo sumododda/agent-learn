@@ -243,9 +243,22 @@ def _render_inline_node(node: SyntaxTreeNode, citation_map: dict[int, int]) -> s
 
 def _render_code_block(content: str, info: str | None) -> str:
     language = (info or "").strip().split(maxsplit=1)[0]
+    if language == "mermaid":
+        return _render_mermaid_placeholder(content)
     if language:
         return f"#raw({_typst_string(content)}, lang: {_typst_string(language)}, block: true)"
     return f"#raw({_typst_string(content)}, block: true)"
+
+
+def _render_mermaid_placeholder(content: str) -> str:
+    """Render a mermaid diagram as a styled box with the raw definition for PDF export."""
+    return (
+        "#block(width: 100%, inset: 12pt, stroke: 0.5pt + luma(180), radius: 4pt, fill: luma(245))[\n"
+        f"  #text(weight: \"bold\", size: 9pt)[Diagram]\n"
+        f"  #v(4pt)\n"
+        f"  #raw({_typst_string(content.strip())}, block: true)\n"
+        "]"
+    )
 
 
 def _render_text_with_citations(text: str, citation_map: dict[int, int]) -> str:

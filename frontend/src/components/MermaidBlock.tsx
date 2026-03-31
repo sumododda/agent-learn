@@ -12,6 +12,21 @@ mermaid.initialize({
 
 let diagramCounter = 0;
 
+/**
+ * Sanitize common LLM mermaid syntax mistakes before rendering.
+ */
+function sanitizeMermaid(raw: string): string {
+  return raw
+    .split('\n')
+    .map((line) => {
+      // Strip style/classDef/linkStyle directives that break strict mode
+      if (/^\s*(style|classDef|linkStyle|click)\s/i.test(line)) return '';
+      return line;
+    })
+    .filter((line) => line !== '')
+    .join('\n');
+}
+
 export default function MermaidBlock({ definition }: { definition: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,8 +36,10 @@ export default function MermaidBlock({ definition }: { definition: string }) {
     const id = `mermaid-diagram-${diagramCounter++}`;
     let cancelled = false;
 
+    const cleaned = sanitizeMermaid(definition);
+
     mermaid
-      .render(id, definition)
+      .render(id, cleaned)
       .then(({ svg: renderedSvg }) => {
         if (!cancelled) {
           setSvg(renderedSvg);

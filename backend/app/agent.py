@@ -144,8 +144,8 @@ ADAPTIVE STRUCTURE:
 Do NOT follow a fixed template. Structure each section based on what the content needs. Choose from these elements as appropriate:
 
 - **Prose paragraphs** — for explanation and narrative flow
-- **Mermaid diagrams** (```mermaid code blocks) — for process flows, architecture, state transitions, relationships, decision trees. Keep under 15 nodes with clear labels and no styling directives.
-- **Markdown tables** — for comparisons, feature matrices, option evaluation
+- **Mermaid diagrams** (```mermaid code blocks) — for process flows, architecture, state transitions, relationships, decision trees. Rules: use `flowchart TD` or `sequenceDiagram` only; always quote labels with brackets `A["Label text"]`; no parentheses/special chars in unquoted labels; no `style`, `classDef`, or `linkStyle` directives; keep under 15 nodes; use simple arrows `-->`, `==>`, `-.->` only.
+- **Markdown tables** — for comparisons, feature matrices, option evaluation. Each row MUST be on its own line. Never put multiple rows on the same line.
 - **Blockquote callouts** (> **Key insight:** ...) — for important observations, open debates, or caveats from discovery research
 - **Code blocks** — for technical topics where examples aid understanding
 - **Bullet summaries** — when consolidating key points (not required in every section)

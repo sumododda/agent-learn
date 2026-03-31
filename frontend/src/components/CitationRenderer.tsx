@@ -2,6 +2,7 @@
 
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Citation } from '@/lib/types';
 
 function safeHref(url: string): string {
@@ -49,6 +50,7 @@ export default function CitationRenderer({ content, citations, markdownComponent
     <div>
       <div className="prose dark:prose-invert max-w-none">
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
             ...markdownComponents,
             p: ({ children }) => {
