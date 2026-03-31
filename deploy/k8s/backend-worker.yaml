@@ -27,11 +27,11 @@ spec:
           args: ["python", "-m", "app.worker"]
           resources:
             requests:
-              memory: "1Gi"
+              memory: "2Gi"
               cpu: "250m"
               ephemeral-storage: "1Gi"
             limits:
-              memory: "2Gi"
+              memory: "3Gi"
               cpu: "500m"
               ephemeral-storage: "1Gi"
           env:

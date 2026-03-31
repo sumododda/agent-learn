@@ -360,9 +360,12 @@ async def generate_course(
     }
     if course.academic_search:
         config["academic_search"] = course.academic_search
+    # Discovery already created sections + research briefs, so skip Phase 1
+    # (CHECKPOINT_PLANNING = 1) and go straight to Phase 2 (research).
     job = PipelineJob(
         course_id=course_id,
         user_id=uuid.UUID(user_id),
+        checkpoint=1,
         config=config,
     )
     session.add(job)
