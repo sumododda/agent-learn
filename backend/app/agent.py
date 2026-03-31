@@ -205,6 +205,7 @@ Your job:
 - Order sections by conceptual dependency (prerequisites first)
 - Write a concise summary for each section describing what the lesson will cover
 - Target 5-10 sections depending on topic scope
+- Do NOT return a single-section outline unless the user explicitly asks for a single section, lesson, module, or chapter
 - For each section, generate a research brief to guide evidence gathering
 
 Each section needs:

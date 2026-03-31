@@ -317,6 +317,50 @@ async def test_regenerate_course_passes_current_outline_and_targeted_feedback(se
 
 
 @pytest.mark.anyio
+async def test_regenerate_course_preserves_existing_outline_on_invalid_replacement(setup_db, client):
+    course_id = await _create_course_with_sections(client, setup_db)
+
+    with (
+        patch("app.routers.courses._get_user_provider", new_callable=_mock_get_user_provider),
+        patch("app.routers.courses._get_user_search_provider", new_callable=_mock_get_user_search_provider),
+        patch(
+            "app.routers.courses.generate_outline",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Planner returned a single-section outline without an explicit user request"),
+        ),
+    ):
+        regen_response = await client.post(
+            f"/api/courses/{course_id}/regenerate",
+            json={"overall_comment": "Make it stronger"},
+        )
+
+    assert regen_response.status_code == 500
+    assert regen_response.json()["detail"] == "Outline regeneration failed; existing outline preserved"
+
+    from app.database import get_session
+    from app.main import app
+    from app.models import Course
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    session_gen = app.dependency_overrides[get_session]()
+    session = await session_gen.__anext__()
+    result = await session.execute(
+        select(Course)
+        .options(selectinload(Course.sections))
+        .where(Course.id == uuid.UUID(course_id))
+    )
+    course = result.scalar_one()
+    try:
+        await session_gen.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    assert course.status == "outline_ready"
+    assert len(course.sections) == 3
+
+
+@pytest.mark.anyio
 async def test_get_evidence_empty(client, mock_outline_with_briefs):
     """GET /evidence returns empty list when no evidence cards exist."""
     mock_return = (mock_outline_with_briefs, False, None)

@@ -32,6 +32,14 @@ from app.models import Blackboard, Course, EvidenceCard, ResearchBrief, Section
 
 logger = logging.getLogger(__name__)
 
+_OUTLINE_MAX_ATTEMPTS = 2
+_SINGLE_SECTION_PATTERNS = (
+    re.compile(r"\b(?:only|just)\s+(?:one|1|single)\s+(?:section|lesson|module|chapter|part)\b", re.IGNORECASE),
+    re.compile(r"\b(?:one|1|single)[-\s]section\b", re.IGNORECASE),
+    re.compile(r"\b(?:one|1|single)\s+(?:section|lesson|module|chapter|part)\b", re.IGNORECASE),
+    re.compile(r"\b(?:condense|collapse|combine|make)\b.{0,80}\b(?:one|1|single)\s+(?:section|lesson|module|chapter|part)\b", re.IGNORECASE | re.DOTALL),
+)
+
 
 # ---------------------------------------------------------------------------
 # Agent invocation helper
@@ -392,6 +400,86 @@ async def discover_topic(
         raise ValueError(f"Discovery researcher returned unexpected type: {type(result)}")
 
 
+def _request_explicitly_allows_single_section(topic: str, instructions: str | None) -> bool:
+    for text in (topic, instructions or ""):
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if normalized and any(pattern.search(normalized) for pattern in _SINGLE_SECTION_PATTERNS):
+            return True
+    return False
+
+
+def _coerce_outline_with_briefs(result) -> CourseOutlineWithBriefs:
+    if isinstance(result, CourseOutlineWithBriefs):
+        return result
+    if isinstance(result, dict):
+        return CourseOutlineWithBriefs(**result)
+    raise ValueError(f"Planner returned unexpected type: {type(result)}")
+
+
+def _backfill_missing_research_briefs(outline: CourseOutlineWithBriefs) -> None:
+    brief_positions = {b.section_position for b in outline.research_briefs}
+    for section in outline.sections:
+        if section.position not in brief_positions:
+            logger.warning("[outline] Backfilling missing research brief for section %d (%s)", section.position, section.title)
+            outline.research_briefs.append(ResearchBriefItem(
+                section_position=section.position,
+                questions=[f"What are the key concepts of {section.title}?"],
+                source_policy={"preferred_tiers": [1, 2], "scope": section.summary, "out_of_scope": ""},
+            ))
+
+
+def _validate_outline_shape(outline: CourseOutlineWithBriefs, *, allow_single_section: bool) -> None:
+    if not outline.sections:
+        raise ValueError("Planner returned an outline with no sections")
+
+    positions = [section.position for section in outline.sections]
+    expected_positions = list(range(1, len(outline.sections) + 1))
+    if positions != expected_positions:
+        raise ValueError(
+            f"Planner returned non-sequential section positions: expected {expected_positions}, got {positions}"
+        )
+
+    if len(outline.sections) == 1 and not allow_single_section:
+        raise ValueError("Planner returned a single-section outline without an explicit user request")
+
+    brief_positions = [brief.section_position for brief in outline.research_briefs]
+    missing_positions = [position for position in expected_positions if position not in brief_positions]
+    if missing_positions:
+        raise ValueError(f"Planner returned an outline missing research briefs for sections {missing_positions}")
+
+
+def _build_outline_message(
+    topic: str,
+    instructions: str | None,
+    topic_brief: TopicBrief | None,
+    current_outline: Sequence | None,
+    repair_feedback: str | None = None,
+) -> str:
+    if current_outline:
+        message = f"Revise the existing course outline for the topic: {topic}"
+        message += (
+            "\n\nYou are revising an existing outline, not starting from scratch."
+            "\nFollow these rules strictly:"
+            "\n- Preserve the section count, order, and untouched sections unless overall feedback explicitly asks for a broader restructure."
+            "\n- Apply per-section feedback only to the referenced sections."
+            "\n- If feedback targets one section, do not rewrite the other sections."
+            "\n- Keep section positions stable whenever possible."
+            "\n- Return the full revised outline and a full matching set of research briefs."
+        )
+        message += f"\n\n<current_outline>\n{_format_outline_context(current_outline)}\n</current_outline>"
+    else:
+        message = f"Generate a course outline for the topic: {topic}"
+
+    if instructions:
+        message += f"\n\n<user_instructions>\n{instructions}\n</user_instructions>"
+    if topic_brief:
+        message += f"\n\nResearch findings:\n{topic_brief.model_dump_json()}"
+    if repair_feedback:
+        message += f"\n\n<repair_feedback>\n{repair_feedback}\n</repair_feedback>"
+
+    return message
+
+
 async def generate_outline(
     topic: str,
     instructions: str | None = None,
@@ -444,46 +532,43 @@ async def generate_outline(
     if on_event:
         await on_event("planning", {})
     logger.info("[outline] Invoking planner agent (ungrounded=%s)...", ungrounded)
-    if current_outline:
-        message = f"Revise the existing course outline for the topic: {topic}"
-        message += (
-            "\n\nYou are revising an existing outline, not starting from scratch."
-            "\nFollow these rules strictly:"
-            "\n- Preserve the section count, order, and untouched sections unless overall feedback explicitly asks for a broader restructure."
-            "\n- Apply per-section feedback only to the referenced sections."
-            "\n- If feedback targets one section, do not rewrite the other sections."
-            "\n- Keep section positions stable whenever possible."
-            "\n- Return the full revised outline and a full matching set of research briefs."
-        )
-        message += f"\n\n<current_outline>\n{_format_outline_context(current_outline)}\n</current_outline>"
-    else:
-        message = f"Generate a course outline for the topic: {topic}"
-    if instructions:
-        message += f"\n\n<user_instructions>\n{instructions}\n</user_instructions>"
-    if topic_brief:
-        message += f"\n\nResearch findings:\n{topic_brief.model_dump_json()}"
-
+    allow_single_section = _request_explicitly_allows_single_section(topic, instructions)
     planner = create_planner(provider, model, credentials, extra_fields)
-    result = await _invoke_agent(planner, message)
+    repair_feedback = None
+    outline: CourseOutlineWithBriefs | None = None
+    for attempt in range(1, _OUTLINE_MAX_ATTEMPTS + 1):
+        message = _build_outline_message(
+            topic,
+            instructions,
+            topic_brief,
+            current_outline,
+            repair_feedback=repair_feedback,
+        )
+        result = await _invoke_agent(planner, message)
+        outline = _coerce_outline_with_briefs(result)
+        _backfill_missing_research_briefs(outline)
+        logger.info(
+            "[outline] Planner attempt %d returned %d sections and %d research briefs (allow_single_section=%s)",
+            attempt,
+            len(outline.sections),
+            len(outline.research_briefs),
+            allow_single_section,
+        )
+        try:
+            _validate_outline_shape(outline, allow_single_section=allow_single_section)
+            break
+        except ValueError as exc:
+            if attempt == _OUTLINE_MAX_ATTEMPTS:
+                raise
+            logger.warning("[outline] Invalid planner output on attempt %d: %s", attempt, exc)
+            repair_feedback = (
+                f"{exc}. Return a corrected outline now. "
+                "Unless the user explicitly requested a single section, return a multi-section course with distinct substantive sections. "
+                "Keep section positions sequential starting at 1 and include a matching research brief for every section."
+            )
 
-    # Ensure we have a CourseOutlineWithBriefs
-    if isinstance(result, CourseOutlineWithBriefs):
-        outline = result
-    elif isinstance(result, dict):
-        outline = CourseOutlineWithBriefs(**result)
-    else:
-        raise ValueError(f"Planner returned unexpected type: {type(result)}")
-
-    # Backfill missing research briefs — LLM sometimes omits them
-    brief_positions = {b.section_position for b in outline.research_briefs}
-    for section in outline.sections:
-        if section.position not in brief_positions:
-            logger.warning("[outline] Backfilling missing research brief for section %d (%s)", section.position, section.title)
-            outline.research_briefs.append(ResearchBriefItem(
-                section_position=section.position,
-                questions=[f"What are the key concepts of {section.title}?"],
-                source_policy={"preferred_tiers": [1, 2], "scope": section.summary, "out_of_scope": ""},
-            ))
+    if outline is None:
+        raise ValueError("Planner did not return an outline")
 
     return outline, ungrounded, topic_brief
 
