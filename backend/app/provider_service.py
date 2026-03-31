@@ -1098,6 +1098,27 @@ def _openrouter_extract_text(payload: Mapping[str, Any]) -> str:
     raise ProviderResponseError("OpenRouter response did not contain text output")
 
 
+def _repair_stringified_objects(data: Any) -> Any:
+    """Some models via OpenRouter return nested objects/arrays as JSON strings.
+    Recursively detect and parse them back into dicts/lists."""
+    if isinstance(data, dict):
+        return {k: _repair_stringified_objects(v) for k, v in data.items()}
+    if isinstance(data, list):
+        repaired = []
+        for item in data:
+            if isinstance(item, str):
+                try:
+                    parsed = json.loads(item)
+                    if isinstance(parsed, (dict, list)):
+                        repaired.append(_repair_stringified_objects(parsed))
+                        continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            repaired.append(_repair_stringified_objects(item))
+        return repaired
+    return data
+
+
 def _openrouter_extract_structured(
     payload: Mapping[str, Any],
     response_schema: type[BaseModel],
@@ -1115,7 +1136,12 @@ def _openrouter_extract_structured(
     if not isinstance(arguments, str):
         raise ProviderResponseError("OpenRouter tool call arguments missing")
     try:
-        return response_schema.model_validate_json(arguments)
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as exc:
+        raise ProviderResponseError(f"OpenRouter tool call arguments invalid JSON: {arguments[:200]}") from exc
+    parsed = _repair_stringified_objects(parsed)
+    try:
+        return response_schema.model_validate(parsed)
     except ValidationError as exc:
         raise ProviderResponseError(
             f"OpenRouter structured output validation failed: {exc}"
