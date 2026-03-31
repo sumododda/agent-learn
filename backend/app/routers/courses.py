@@ -102,8 +102,8 @@ async def _ensure_cache(user_id: str, session) -> None:
 
 
 async def _get_user_provider(user_id: str, session) -> tuple[str, str, dict, dict]:
-    """Get (provider, model, api_key, extra_fields) for the user's OpenRouter config."""
-    from app.provider_service import DEFAULT_MODEL
+    """Get (provider, model, credentials, extra_fields) for the user's default LLM provider."""
+    from app.provider_service import get_default_model
     await _ensure_cache(user_id, session)
     default = key_cache.get_default(user_id)
     if default is None:
@@ -117,7 +117,7 @@ async def _get_user_provider(user_id: str, session) -> tuple[str, str, dict, dic
     )
     pc = result.scalar_one_or_none()
     extra_fields = pc.extra_fields if pc else {}
-    model = (extra_fields or {}).get("model") or DEFAULT_MODEL
+    model = (extra_fields or {}).get("model") or get_default_model(provider)
     return provider, model, creds, extra_fields or {}
 
 

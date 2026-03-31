@@ -1,16 +1,15 @@
-"""Chat service: context assembly and streaming via OpenRouter."""
+"""Chat service: context assembly and provider-backed streaming chat."""
 
 import json
 import logging
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
-from langchain_openai import ChatOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.provider_service import OPENROUTER_BASE
+from app import provider_service
 from app.models import Blackboard, ChatMessage, Course, EvidenceCard
 
 logger = logging.getLogger(__name__)
@@ -116,11 +115,13 @@ async def assemble_context(
 
 
 async def stream_chat(
+    provider: str,
     model: str,
     messages: list[dict],
-    api_key: str,
+    credentials: dict,
+    extra_fields: dict | None = None,
 ) -> tuple[AsyncGenerator[bytes, None], list[str]]:
-    """Stream a chat completion via OpenRouter using LangChain.
+    """Stream a chat completion via the selected provider.
 
     Returns (async byte generator, collected_content list).
     """
@@ -128,25 +129,33 @@ async def stream_chat(
 
     async def generate() -> AsyncGenerator[bytes, None]:
         try:
-            llm = ChatOpenAI(
-                base_url=OPENROUTER_BASE,
-                api_key=api_key,
-                model=model,
-                streaming=True,
-                request_timeout=120,
-            )
-            lc_messages = [
-                {"role": m["role"], "content": m["content"]} for m in messages
-            ]
-            async for chunk in llm.astream(lc_messages):
-                text = chunk.content if chunk.content else ""
-                if text:
-                    collected_content.append(text)
-                chunk_data = {"choices": [{"delta": {"content": text}}]}
-                yield f"data: {json.dumps(chunk_data)}\n\n".encode()
+            async for event in provider_service.stream_text(
+                provider,
+                model,
+                messages,
+                credentials,
+                extra_fields,
+            ):
+                if event.type == "text_delta":
+                    if event.text:
+                        collected_content.append(event.text)
+                        chunk_data = {"choices": [{"delta": {"content": event.text}}]}
+                        yield f"data: {json.dumps(chunk_data)}\n\n".encode()
+                elif event.type == "error":
+                    yield f"data: {json.dumps({'error': event.error or 'Streaming failed'})}\n\n".encode()
+                    return
             yield b"data: [DONE]\n\n"
         except Exception as e:
             logger.error("Stream error: %s", e)
             yield f"data: {json.dumps({'error': 'An error occurred while streaming the response'})}\n\n".encode()
 
     return generate(), collected_content
+
+
+async def get_models(
+    provider: str,
+    credentials: dict,
+    extra_fields: dict | None = None,
+) -> list[dict]:
+    """Return live models for the selected provider."""
+    return await provider_service.list_models(provider, credentials, extra_fields)

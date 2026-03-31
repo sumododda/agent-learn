@@ -108,7 +108,7 @@ export interface ProviderDefinition {
   name: string;
   model_prefix?: string;
   fields: ProviderField[];
-  models?: { id: string; name: string }[] | "dynamic";
+  models?: { id: string; name: string }[];
 }
 
 export interface PipelineJob {

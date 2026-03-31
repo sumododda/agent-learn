@@ -335,6 +335,22 @@ export async function getProviders(token: string | null): Promise<ProviderConfig
   return res.json();
 }
 
+export async function getProviderModels(
+  provider: string,
+  token: string | null
+): Promise<ChatModel[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/providers/${provider}/models`, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
 export async function saveProvider(
   data: { provider: string; credentials: Record<string, string>; extra_fields: Record<string, string> },
   token: string | null
@@ -380,7 +396,7 @@ export async function testProvider(
   provider: string,
   data: { credentials: Record<string, string>; extra_fields: Record<string, string> },
   token: string | null
-): Promise<{ status: string }> {
+): Promise<{ status: string; message?: string; models?: ChatModel[] }> {
   const res = await fetch(`${API_BASE}/api/providers/${provider}/test`, {
     method: 'POST',
     headers: authHeaders(token),
@@ -490,4 +506,3 @@ export async function setDefaultSearchProvider(provider: string, token: string |
   if (!res.ok) throw new Error('Set default failed');
   return res.json();
 }
-
