@@ -1,3 +1,4 @@
+# CI noop: backend source touchpoint for deploy pipeline verification.
 from pydantic_settings import BaseSettings
 
 
