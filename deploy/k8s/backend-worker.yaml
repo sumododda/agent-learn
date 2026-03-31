@@ -7,6 +7,11 @@ metadata:
     app: backend-worker
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: backend-worker
@@ -22,11 +27,13 @@ spec:
           args: ["python", "-m", "app.worker"]
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
               memory: "1Gi"
+              cpu: "250m"
+              ephemeral-storage: "1Gi"
+            limits:
+              memory: "2Gi"
               cpu: "500m"
+              ephemeral-storage: "1Gi"
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:

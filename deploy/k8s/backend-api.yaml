@@ -7,6 +7,11 @@ metadata:
     app: backend-api
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: backend-api
@@ -35,11 +40,13 @@ spec:
             periodSeconds: 30
           resources:
             requests:
-              memory: "256Mi"
+              memory: "1Gi"
               cpu: "250m"
+              ephemeral-storage: "1Gi"
             limits:
-              memory: "512Mi"
+              memory: "2Gi"
               cpu: "500m"
+              ephemeral-storage: "1Gi"
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:

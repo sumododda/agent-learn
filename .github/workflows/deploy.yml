@@ -35,10 +35,7 @@ jobs:
               - 'frontend/**'
               - 'deploy/Dockerfile.frontend'
             infra:
-              - 'deploy/k8s/ingress.yaml'
-              - 'deploy/k8s/backend-config.yaml'
-              - 'deploy/k8s/frontend-config.yaml'
-              - 'deploy/k8s/managed-cert.yaml'
+              - 'deploy/k8s/**'
               - '.github/workflows/deploy.yml'
 
   # ── Build Backend ───────────────────────────────────────────────
@@ -141,61 +138,57 @@ jobs:
           location: ${{ vars.GCP_REGION }}
           project_id: ${{ vars.GCP_PROJECT_ID }}
 
-      - name: Apply ingress and LB config
-        if: needs.changes.outputs.infra == 'true'
-        run: |
-          kubectl apply -f deploy/k8s/backend-config.yaml
-          kubectl apply -f deploy/k8s/frontend-config.yaml
-          kubectl apply -f deploy/k8s/managed-cert.yaml
-          kubectl apply -f deploy/k8s/ingress.yaml
-
-      # Update backend if changed
-      - name: Deploy backend
-        if: needs.changes.outputs.backend == 'true'
+      - name: Select deploy images
         env:
           FULL_SHA: ${{ github.sha }}
         run: |
           SHORT=${FULL_SHA:0:7}
-          IMAGE="${{ env.IMAGE_BASE }}/backend:${SHORT}"
-          kubectl set image deployment/backend-api backend-api=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
-          kubectl set image deployment/backend-worker backend-worker=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
+
+          if [[ "${{ needs.changes.outputs.backend }}" == "true" ]]; then
+            echo "BACKEND_IMAGE=${{ env.IMAGE_BASE }}/backend:${SHORT}" >> "$GITHUB_ENV"
+          else
+            echo "BACKEND_IMAGE=${{ env.IMAGE_BASE }}/backend:latest" >> "$GITHUB_ENV"
+          fi
+
+          if [[ "${{ needs.changes.outputs.frontend }}" == "true" ]]; then
+            echo "FRONTEND_IMAGE=${{ env.IMAGE_BASE }}/frontend:${SHORT}" >> "$GITHUB_ENV"
+          else
+            echo "FRONTEND_IMAGE=${{ env.IMAGE_BASE }}/frontend:latest" >> "$GITHUB_ENV"
+          fi
+
+      - name: Render Kubernetes manifests
+        run: |
+          chmod +x deploy/k8s/render-manifests.sh
+          deploy/k8s/render-manifests.sh rendered-k8s
+
+      - name: Apply cluster base manifests
+        run: |
+          kubectl apply -f rendered-k8s/namespace.yaml
+          kubectl apply -f rendered-k8s/postgres.yaml
+          kubectl rollout status statefulset/postgres -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
+          kubectl apply -f rendered-k8s/backend-config.yaml
+          kubectl apply -f rendered-k8s/frontend-config.yaml
+          kubectl apply -f rendered-k8s/managed-cert.yaml
+          kubectl apply -f rendered-k8s/network-policies.yaml
+
+      - name: Run migrations from rendered manifest
+        run: |
+          kubectl delete job alembic-migrate -n ${{ vars.GKE_NAMESPACE }} --ignore-not-found
+          kubectl wait --for=delete job/alembic-migrate -n ${{ vars.GKE_NAMESPACE }} --timeout=60s || true
+          kubectl apply -f rendered-k8s/migration-job.yaml
+          kubectl wait --for=condition=complete job/alembic-migrate -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
+
+      - name: Apply app manifests
+        run: |
+          kubectl apply -f rendered-k8s/backend-api.yaml
+          kubectl apply -f rendered-k8s/backend-worker.yaml
+          kubectl apply -f rendered-k8s/frontend.yaml
+          kubectl apply -f rendered-k8s/ingress.yaml
+
+      - name: Wait for workloads
+        run: |
           kubectl rollout status deployment/backend-api -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
           kubectl rollout status deployment/backend-worker -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
-
-      # Run migrations if backend changed
-      - name: Run migrations
-        if: needs.changes.outputs.backend == 'true'
-        env:
-          FULL_SHA: ${{ github.sha }}
-        run: |
-          SHORT=${FULL_SHA:0:7}
-          IMAGE="${{ env.IMAGE_BASE }}/backend:${SHORT}"
-          NAMESPACE="${{ vars.GKE_NAMESPACE }}"
-
-          # Delete previous job if exists
-          kubectl delete job alembic-migrate -n ${NAMESPACE} --ignore-not-found
-
-          # Create and run migration job with the new image
-          kubectl create job alembic-migrate \
-            --from=cronjob/placeholder --dry-run=client -o yaml 2>/dev/null || true
-
-          # Apply migration job with updated image
-          cat deploy/k8s/migration-job.yaml | \
-            sed "s|image:.*|image: ${IMAGE}|" | \
-            kubectl apply -f -
-
-          kubectl wait --for=condition=complete job/alembic-migrate \
-            -n ${NAMESPACE} --timeout=300s
-
-      # Update frontend if changed
-      - name: Deploy frontend
-        if: needs.changes.outputs.frontend == 'true'
-        env:
-          FULL_SHA: ${{ github.sha }}
-        run: |
-          SHORT=${FULL_SHA:0:7}
-          IMAGE="${{ env.IMAGE_BASE }}/frontend:${SHORT}"
-          kubectl set image deployment/frontend frontend=${IMAGE} -n ${{ vars.GKE_NAMESPACE }}
           kubectl rollout status deployment/frontend -n ${{ vars.GKE_NAMESPACE }} --timeout=300s
 
       # Verify
