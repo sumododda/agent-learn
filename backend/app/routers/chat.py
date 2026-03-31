@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from app import chat_service, key_cache
+from app import chat_service, key_cache, provider_service
 from app.auth import get_current_user
 from app.database import SessionDep
 from app.limiter import limiter
@@ -104,6 +104,7 @@ async def chat_stream(
     )
     pc = pc_result.scalar_one_or_none()
     extra_fields = pc.extra_fields if pc else {}
+    selected_model = body.model or (extra_fields or {}).get("model") or provider_service.get_default_model(provider)
 
     # Persist user message
     user_msg = ChatMessage(
@@ -123,9 +124,12 @@ async def chat_stream(
     )
 
     async def wrapper():
-        api_key = creds.get("api_key", "")
         gen, collected = await chat_service.stream_chat(
-            body.model, messages, api_key
+            provider,
+            selected_model,
+            messages,
+            creds,
+            extra_fields,
         )
         try:
             async for chunk in gen:
@@ -143,7 +147,7 @@ async def chat_stream(
                         user_id=uuid.UUID(user_id),
                         role="assistant",
                         content=full_content,
-                        model=body.model,
+                        model=selected_model,
                         section_context=body.section_context,
                     )
                     persist_session.add(assistant_msg)

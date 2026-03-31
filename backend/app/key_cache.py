@@ -136,7 +136,7 @@ def remove_credentials(user_id: str, provider: str) -> None:
     entry.credentials.pop(provider, None)
 
 
-def set_default_llm(user_id: str, provider: str) -> None:
+def set_default_llm(user_id: str, provider: str | None) -> None:
     """Update the cached default LLM provider."""
     entry = _cache.get(user_id)
     if entry is None:

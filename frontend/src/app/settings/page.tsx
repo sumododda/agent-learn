@@ -9,11 +9,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  getProviderRegistry,
   getProviders,
+  getProviderModels,
   saveProvider,
   updateProvider,
   deleteProvider,
   testProvider,
+  setDefaultProvider,
   getSearchProviderRegistry,
   getSearchProviders,
   saveSearchProvider,
@@ -22,15 +25,32 @@ import {
   testSearchProvider,
   setDefaultSearchProvider,
 } from '@/lib/api';
-import type { ProviderDefinition, ProviderConfig } from '@/lib/types';
+import type { ChatModel, ProviderDefinition, ProviderConfig } from '@/lib/types';
 
-// ---------------------------------------------------------------------------
-// OpenRouter Section (API key + model)
-// ---------------------------------------------------------------------------
-
-interface OpenRouterModel {
+interface ModelOption {
   id: string;
   name: string;
+}
+
+function toChatModel(model: ModelOption): ChatModel {
+  return {
+    id: model.id,
+    name: model.name,
+    context_length: 0,
+    pricing_prompt: '0',
+    pricing_completion: '0',
+  };
+}
+
+function mergeModels(preferred: ModelOption[], live: ChatModel[]): ChatModel[] {
+  const merged = new Map<string, ChatModel>();
+  for (const model of preferred) {
+    merged.set(model.id, toChatModel(model));
+  }
+  for (const model of live) {
+    merged.set(model.id, model);
+  }
+  return Array.from(merged.values());
 }
 
 function ModelSearch({
@@ -39,44 +59,40 @@ function ModelSearch({
   value,
   onChange,
   disabled,
+  placeholder,
 }: {
-  models: OpenRouterModel[];
+  models: ChatModel[];
   loading: boolean;
   value: string;
   onChange: (id: string) => void;
   disabled?: boolean;
+  placeholder?: string;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Sync display text when value changes externally
   useEffect(() => {
-    if (!value) {
-      setQuery('');
-    } else {
-      const m = models.find((m) => m.id === value);
-      setQuery(m ? m.name : value);
+    function handleOutsideClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
     }
-  }, [value, models]);
 
-  // Close on outside click
-  useEffect(() => {
-    function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
   const filtered = query
     ? models.filter(
-        (m) =>
-          m.name.toLowerCase().includes(query.toLowerCase()) ||
-          m.id.toLowerCase().includes(query.toLowerCase())
+        (model) =>
+          model.name.toLowerCase().includes(query.toLowerCase()) ||
+          model.id.toLowerCase().includes(query.toLowerCase())
       )
     : models;
   const shown = filtered.slice(0, 50);
+  const selectedModel = value ? models.find((model) => model.id === value) : null;
+  const displayValue = open ? query : selectedModel?.name || value || '';
 
   return (
     <div ref={ref} className="relative space-y-2">
@@ -87,38 +103,41 @@ function ModelSearch({
         <>
           <Input
             type="text"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
+            value={displayValue}
+            onChange={(event) => {
+              setQuery(event.target.value);
               setOpen(true);
-              if (!e.target.value) onChange('');
+              if (!event.target.value) onChange('');
             }}
-            onFocus={() => setOpen(true)}
-            placeholder="Search models... (default: openai/gpt-4o-mini)"
+            onFocus={() => {
+              setQuery(selectedModel?.name || value || '');
+              setOpen(true);
+            }}
+            placeholder={placeholder || 'Search models...'}
             disabled={disabled}
           />
           {open && shown.length > 0 && (
-            <div className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto bg-popover border border-border rounded-lg shadow-lg">
-              {shown.map((m) => (
+            <div className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-border bg-popover shadow-lg">
+              {shown.map((model) => (
                 <button
-                  key={m.id}
+                  key={model.id}
                   type="button"
                   onClick={() => {
-                    onChange(m.id);
-                    setQuery(m.name);
+                    onChange(model.id);
+                    setQuery(model.name);
                     setOpen(false);
                   }}
-                  className={`w-full text-left px-4 py-2 text-sm hover:bg-accent transition-colors ${
-                    m.id === value ? 'text-primary' : 'text-foreground'
+                  className={`w-full px-4 py-2 text-left text-sm transition-colors hover:bg-accent ${
+                    model.id === value ? 'text-primary' : 'text-foreground'
                   }`}
                 >
-                  <span className="font-medium">{m.name}</span>
-                  <span className="text-muted-foreground ml-2 text-xs">{m.id}</span>
+                  <span className="font-medium">{model.name}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">{model.id}</span>
                 </button>
               ))}
               {filtered.length > 50 && (
                 <p className="px-4 py-2 text-xs text-muted-foreground">
-                  {filtered.length - 50} more &mdash; type to narrow
+                  {filtered.length - 50} more and type to narrow
                 </p>
               )}
             </div>
@@ -129,18 +148,25 @@ function ModelSearch({
   );
 }
 
-function OpenRouterSection({
-  config,
+function LLMProviderSection({
+  registry,
+  configs,
   getToken,
   onRefresh,
 }: {
-  config: ProviderConfig | null;
+  registry: Record<string, ProviderDefinition>;
+  configs: ProviderConfig[];
   getToken: () => Promise<string | null>;
   onRefresh: () => Promise<void>;
 }) {
+  const providerKeys = useMemo(() => Object.keys(registry), [registry]);
+  const defaultConfig = configs.find((config) => config.is_default) || null;
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [hasValidatedKey, setHasValidatedKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
-  const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [models, setModels] = useState<ChatModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -148,54 +174,86 @@ function OpenRouterSection({
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Fetch models from OpenRouter public API
   useEffect(() => {
-    let cancelled = false;
-    setModelsLoading(true);
-    fetch('https://openrouter.ai/api/v1/models')
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        const list: OpenRouterModel[] = (data.data || [])
-          .filter((m: Record<string, unknown>) => {
-            const arch = (m.architecture as Record<string, string[]>) || {};
-            return (arch.input_modalities || []).includes('text') && (arch.output_modalities || []).includes('text');
-          })
-          .map((m: Record<string, unknown>) => ({ id: m.id as string, name: (m.name as string) || (m.id as string) }));
-        setModels(list);
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setModelsLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
+    if (providerKeys.length === 0 || selectedProvider) return;
+    setSelectedProvider(defaultConfig?.provider || providerKeys[0]);
+  }, [providerKeys, selectedProvider, defaultConfig]);
+
+  const currentDef = selectedProvider ? registry[selectedProvider] : null;
+  const currentConfig = configs.find((config) => config.provider === selectedProvider) || null;
+  const curatedModels = useMemo(() => currentDef?.models || [], [currentDef]);
+  const isConfigured = !!currentConfig;
 
   useEffect(() => {
-    setModel(config?.extra_fields?.model || '');
+    if (!selectedProvider || !currentDef) return;
     setApiKey('');
+    setModels(curatedModels.map(toChatModel));
+    setModel(currentConfig?.extra_fields?.model || curatedModels[0]?.id || '');
+    setIsEditing(!currentConfig);
+    setHasValidatedKey(!!currentConfig);
+    setModelsLoading(false);
     setTestResult(null);
     setError(null);
     setSuccessMsg(null);
-  }, [config]);
+  }, [selectedProvider, currentDef, currentConfig, curatedModels]);
 
-  const isConfigured = !!config;
+  useEffect(() => {
+    if (!selectedProvider || !currentDef) return;
+    if (!currentConfig && selectedProvider !== 'openrouter') return;
 
-  async function handleTest() {
+    let cancelled = false;
+
+    async function loadLiveModels() {
+      setModelsLoading(true);
+      const token = await getToken();
+      const liveModels = await getProviderModels(selectedProvider, token);
+      if (!cancelled) {
+        setModels(mergeModels(curatedModels, liveModels));
+        setModelsLoading(false);
+      }
+    }
+
+    loadLiveModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProvider, currentDef, currentConfig, curatedModels, getToken]);
+
+  async function handleValidate() {
+    if (!selectedProvider) return;
     if (!apiKey) return;
+
     setTesting(true);
     setTestResult(null);
     setError(null);
     try {
       const token = await getToken();
-      await testProvider('openrouter', { credentials: { api_key: apiKey }, extra_fields: {} }, token);
-      setTestResult({ ok: true, message: 'Connection successful' });
+      const result = await testProvider(
+        selectedProvider,
+        { credentials: { api_key: apiKey }, extra_fields: {} },
+        token
+      );
+      if (result.models?.length) {
+        setModels(mergeModels(curatedModels, result.models));
+      }
+      setHasValidatedKey(true);
+      setTestResult({ ok: true, message: result.message || 'Connection successful' });
     } catch (err) {
-      setTestResult({ ok: false, message: err instanceof Error ? err.message : 'Test failed' });
+      const message = err instanceof Error ? err.message : 'Validation failed';
+      setHasValidatedKey(false);
+      setTestResult({ ok: false, message });
+      setError(message);
     } finally {
       setTesting(false);
     }
   }
 
   async function handleSave() {
+    if (!selectedProvider) return;
+    const needsValidatedNewKey = !!apiKey;
+    if (!isConfigured && !hasValidatedKey) return;
+    if (needsValidatedNewKey && !hasValidatedKey) return;
+
     setSaving(true);
     setError(null);
     setSuccessMsg(null);
@@ -207,26 +265,36 @@ function OpenRouterSection({
       if (model) extra_fields.model = model;
 
       if (isConfigured) {
-        await updateProvider('openrouter', { credentials: Object.keys(credentials).length ? credentials : undefined, extra_fields }, token);
+        await updateProvider(
+          selectedProvider,
+          {
+            credentials: Object.keys(credentials).length ? credentials : undefined,
+            extra_fields,
+          },
+          token
+        );
       } else {
-        await saveProvider({ provider: 'openrouter', credentials, extra_fields }, token);
+        await saveProvider({ provider: selectedProvider, credentials, extra_fields }, token);
       }
       setSuccessMsg('Saved');
       await onRefresh();
+      setIsEditing(false);
+      setHasValidatedKey(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed');
+      const message = err instanceof Error ? err.message : 'Save failed';
+      setError(message);
     } finally {
       setSaving(false);
     }
   }
 
   async function handleRemove() {
-    if (!isConfigured) return;
+    if (!selectedProvider || !isConfigured) return;
     setSaving(true);
     setError(null);
     try {
       const token = await getToken();
-      await deleteProvider('openrouter', token);
+      await deleteProvider(selectedProvider, token);
       setSuccessMsg('Removed');
       await onRefresh();
     } catch (err) {
@@ -236,17 +304,43 @@ function OpenRouterSection({
     }
   }
 
+  async function handleMakeDefault() {
+    if (!selectedProvider || !isConfigured || currentConfig?.is_default) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      await setDefaultProvider(selectedProvider, token);
+      setSuccessMsg('Default provider updated');
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Set default failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (providerKeys.length === 0) return null;
+
+  const modelPlaceholder = curatedModels[0]?.id
+    ? `Search models... (default: ${curatedModels[0].id})`
+    : 'Search models...';
+  const configuredModelId = currentConfig?.extra_fields?.model || curatedModels[0]?.id || '';
+  const configuredModelName = models.find((entry) => entry.id === configuredModelId)?.name || configuredModelId || 'Not set';
+  const canSelectModel = isConfigured ? (!apiKey || hasValidatedKey) : hasValidatedKey;
+
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-foreground">AI Provider</h2>
-        <p className="text-xs text-muted-foreground mt-1">
-          Powered by <a href="https://openrouter.ai/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">OpenRouter</a> (more providers will be added soon)
+        <p className="mt-1 text-xs text-muted-foreground">
+          Pick one provider, add your API key, and choose the model you want the app to use.
         </p>
       </div>
 
-      <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
-        You can use multiple providers through OpenRouter BYOK. See the{' '}
+      <p className="rounded-lg border border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
+        Configure one provider to get started. OpenRouter also supports BYOK for other model
+        providers.{' '}
         <a
           href="https://openrouter.ai/docs/guides/overview/auth/byok"
           target="_blank"
@@ -254,75 +348,142 @@ function OpenRouterSection({
           className="text-primary hover:underline"
         >
           BYOK docs
-        </a>{' '}
-        or open the{' '}
-        <a
-          href="https://openrouter.ai/workspaces/default/byok"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-primary hover:underline"
-        >
-          BYOK console
-        </a>.
+        </a>
+        .
       </p>
+
+      <div className="space-y-2">
+        <Label>Provider</Label>
+        <select
+          value={selectedProvider}
+          onChange={(event) => setSelectedProvider(event.target.value)}
+          disabled={saving}
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+        >
+          {providerKeys.map((key) => {
+            const configured = configs.find((config) => config.provider === key);
+            return (
+              <option key={key} value={key}>
+                {registry[key].name}{configured ? ' (configured)' : ''}
+              </option>
+            );
+          })}
+        </select>
+      </div>
 
       {isConfigured && (
         <div className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+          <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
           <span className="text-xs text-green-500">
-            Active{config?.credential_hint ? ` \u2014 ${config.credential_hint}` : ''}
+            Default provider: {registry[defaultConfig?.provider || selectedProvider]?.name || currentDef?.name || selectedProvider}
           </span>
         </div>
       )}
 
-      <div className="space-y-2">
-        <Label>
-          API Key <span className="text-destructive">*</span>
-        </Label>
-        <Input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={isConfigured ? 'Leave blank to keep existing' : 'sk-or-v1-...'}
-          disabled={saving}
-        />
-      </div>
+      {isConfigured && !isEditing ? (
+        <>
+          <div className="space-y-3 rounded-lg border border-border bg-card px-4 py-4">
+            <div className="space-y-1">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Provider</p>
+              <p className="text-sm text-foreground">{currentDef?.name || selectedProvider}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">API Key</p>
+              <p className="text-sm text-foreground">{currentConfig?.credential_hint || 'Not saved'}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Model</p>
+              <p className="text-sm text-foreground">{configuredModelName}</p>
+            </div>
+          </div>
 
-      <ModelSearch
-        models={models}
-        loading={modelsLoading}
-        value={model}
-        onChange={setModel}
-        disabled={saving}
-      />
+          <div className="flex flex-wrap gap-3 pt-1">
+            <Button size="sm" onClick={() => setIsEditing(true)} disabled={saving}>
+              Update Provider
+            </Button>
+            {isConfigured && !currentConfig?.is_default && (
+              <Button variant="outline" size="sm" onClick={handleMakeDefault} disabled={saving}>
+                Set as Default
+              </Button>
+            )}
+            <Button variant="destructive" size="sm" onClick={handleRemove} disabled={saving}>
+              Delete
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="space-y-2">
+            <Label>
+              API Key <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              type="password"
+              value={apiKey}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setApiKey(nextValue);
+                if (nextValue) {
+                  setHasValidatedKey(false);
+                } else {
+                  setHasValidatedKey(!!currentConfig);
+                }
+                setTestResult(null);
+                setError(null);
+              }}
+              placeholder={
+                isConfigured ? 'Leave blank to keep existing' : (currentDef?.fields?.[0]?.placeholder || '')
+              }
+              disabled={saving}
+            />
+          </div>
 
-      <div className="flex flex-wrap gap-3 pt-1">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleTest}
-          disabled={testing || saving || !apiKey}
-        >
-          {testing ? 'Testing...' : 'Test'}
-        </Button>
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={saving}
-        >
-          {saving ? 'Saving...' : isConfigured ? 'Update' : 'Save'}
-        </Button>
-        {isConfigured && (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleRemove}
-            disabled={saving}
-          >
-            Remove
-          </Button>
-        )}
-      </div>
+          <div className="flex flex-wrap gap-3 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleValidate}
+              disabled={testing || saving || !apiKey}
+            >
+              {testing ? 'Validating...' : 'Validate'}
+            </Button>
+          </div>
+
+          <ModelSearch
+            models={models}
+            loading={modelsLoading}
+            value={model}
+            onChange={setModel}
+            disabled={saving || !canSelectModel}
+            placeholder={modelPlaceholder}
+          />
+          {!canSelectModel && (
+            <p className="text-xs text-muted-foreground">
+              Validate the API key first to unlock model selection.
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-3 pt-1">
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || (!isConfigured && !hasValidatedKey) || (!!apiKey && !hasValidatedKey)}
+            >
+              {saving ? 'Saving...' : isConfigured ? 'Save' : 'Save'}
+            </Button>
+            {isConfigured && (
+              <Button variant="outline" size="sm" onClick={() => setIsEditing(false)} disabled={saving}>
+                Cancel
+              </Button>
+            )}
+            {isConfigured && (
+              <Button variant="destructive" size="sm" onClick={handleRemove} disabled={saving}>
+                Delete
+              </Button>
+            )}
+          </div>
+        </>
+      )}
 
       {testResult && (
         <p className={`text-sm ${testResult.ok ? 'text-green-500' : 'text-destructive'}`}>
@@ -334,10 +495,6 @@ function OpenRouterSection({
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Search Provider Section (dropdown + key)
-// ---------------------------------------------------------------------------
 
 function SearchProviderSection({
   registry,
@@ -459,7 +616,7 @@ function SearchProviderSection({
     <div className="space-y-5">
       <h2 className="text-lg font-semibold text-foreground">Search Provider</h2>
 
-      <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
+      <p className="rounded-lg border border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
         DuckDuckGo is enabled by default as a last fallback option. Add as many providers as you
         want. Fallbacks kick in automatically.
       </p>
@@ -487,7 +644,7 @@ function SearchProviderSection({
               >
                 <span className="font-medium">{registry[key].name}</span>
                 {isActive && (
-                  <span className="absolute top-1.5 right-1.5 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+                  <span className="absolute right-1.5 top-1.5 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
                 )}
               </button>
             );
@@ -497,23 +654,23 @@ function SearchProviderSection({
 
       {isConfigured ? (
         <div className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+          <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
           <span className="text-xs text-green-500">
             Active{currentConfig?.credential_hint ? ` \u2014 ${currentConfig.credential_hint}` : ''}
           </span>
         </div>
       ) : currentDef && !hasFields ? (
         <div className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+          <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
           <span className="text-xs text-green-500">Enabled by default</span>
         </div>
       ) : null}
 
       {currentDef && !hasFields && (
-        <p className="text-sm text-muted-foreground bg-muted/50 border border-border rounded-lg px-4 py-3">
+        <p className="rounded-lg border border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
           {isDuckDuckGo
             ? 'No API key required. DuckDuckGo is available immediately and works without authentication.'
-            : 'No API key required &mdash; works without authentication.'}
+            : 'No API key required and works without authentication.'}
         </p>
       )}
 
@@ -521,12 +678,12 @@ function SearchProviderSection({
         <div key={field.key} className="space-y-2">
           <Label>
             {field.label}
-            {field.required && <span className="text-destructive ml-1">*</span>}
+            {field.required && <span className="ml-1 text-destructive">*</span>}
           </Label>
           <Input
             type={field.secret ? 'password' : 'text'}
             value={formValues[field.key] || ''}
-            onChange={(e) => setFormValues((p) => ({ ...p, [field.key]: e.target.value }))}
+            onChange={(event) => setFormValues((prev) => ({ ...prev, [field.key]: event.target.value }))}
             placeholder={isConfigured && field.secret ? 'Leave blank to keep existing' : field.placeholder || ''}
             disabled={saving}
           />
@@ -535,29 +692,15 @@ function SearchProviderSection({
 
       <div className="flex flex-wrap gap-3 pt-1">
         {hasFields && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleTest}
-            disabled={testing || saving}
-          >
+          <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || saving}>
             {testing ? 'Testing...' : 'Test'}
           </Button>
         )}
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={saving}
-        >
+        <Button size="sm" onClick={handleSave} disabled={saving}>
           {saving ? 'Saving...' : isConfigured ? 'Update' : 'Save'}
         </Button>
         {isConfigured && !isDuckDuckGo && (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleRemove}
-            disabled={saving}
-          >
+          <Button variant="destructive" size="sm" onClick={handleRemove} disabled={saving}>
             Remove
           </Button>
         )}
@@ -574,40 +717,26 @@ function SearchProviderSection({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Account Section
-// ---------------------------------------------------------------------------
-
 function AccountSection({ email }: { email: string | null }) {
-
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-semibold text-foreground">Account</h2>
 
       <div className="space-y-2">
         <Label>Email</Label>
-        <Input
-          type="email"
-          value={email || ''}
-          disabled
-        />
+        <Input type="email" value={email || ''} disabled />
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        More account settings coming soon.
-      </p>
+      <p className="text-sm text-muted-foreground">More account settings coming soon.</p>
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Main settings page
-// ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
   const router = useRouter();
   const { getToken, isSignedIn, isLoaded, userEmail } = useAuth();
 
+  const [llmRegistry, setLlmRegistry] = useState<Record<string, ProviderDefinition>>({});
   const [llmConfigs, setLlmConfigs] = useState<ProviderConfig[]>([]);
   const [searchRegistry, setSearchRegistry] = useState<Record<string, ProviderDefinition>>({});
   const [searchConfigs, setSearchConfigs] = useState<ProviderConfig[]>([]);
@@ -615,15 +744,22 @@ export default function SettingsPage() {
 
   const fetchData = useCallback(async () => {
     const token = await getToken();
-    const [cfgs, sReg, sCfgs] = await Promise.all([
+    const [llmReg, llmCfgs, searchReg, searchCfgs] = await Promise.all([
+      getProviderRegistry(token),
       getProviders(token),
       getSearchProviderRegistry(token),
       getSearchProviders(token),
     ]);
-    setLlmConfigs(cfgs);
-    const searchRegInner = (sReg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
-    setSearchRegistry(searchRegInner || sReg);
-    setSearchConfigs(sCfgs);
+
+    const llmProviders =
+      (llmReg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
+    const searchProviders =
+      (searchReg as Record<string, unknown>).providers as Record<string, ProviderDefinition> | undefined;
+
+    setLlmRegistry(llmProviders || llmReg);
+    setLlmConfigs(llmCfgs);
+    setSearchRegistry(searchProviders || searchReg);
+    setSearchConfigs(searchCfgs);
     setLoadingData(false);
   }, [getToken]);
 
@@ -633,37 +769,48 @@ export default function SettingsPage() {
       return;
     }
     if (isLoaded && isSignedIn) {
-      fetchData();
+      async function load() {
+        await fetchData();
+      }
+      void load();
     }
   }, [isLoaded, isSignedIn, router, fetchData]);
 
   if (!isLoaded || !isSignedIn) {
-    return <div className="text-center text-muted-foreground mt-20">Loading...</div>;
+    return <div className="mt-20 text-center text-muted-foreground">Loading...</div>;
   }
   if (loadingData) {
-    return <div className="text-center text-muted-foreground mt-20">Loading...</div>;
+    return <div className="mt-20 text-center text-muted-foreground">Loading...</div>;
   }
-
-  const openrouterConfig = llmConfigs.find((c) => c.provider === 'openrouter') || null;
 
   return (
     <>
       <Navbar />
-      <div className="max-w-[720px] mx-auto px-4 py-8">
-        <h1 className="text-2xl font-semibold mb-6">Settings</h1>
-        <Tabs defaultValue={0}>
+      <div className="mx-auto max-w-[720px] px-4 py-8">
+        <h1 className="mb-6 text-2xl font-semibold">Settings</h1>
+        <Tabs defaultValue="ai">
           <TabsList>
-            <TabsTrigger value={0}>AI Provider</TabsTrigger>
-            <TabsTrigger value={1}>Search</TabsTrigger>
-            <TabsTrigger value={2}>Account</TabsTrigger>
+            <TabsTrigger value="ai">AI Provider</TabsTrigger>
+            <TabsTrigger value="search">Search</TabsTrigger>
+            <TabsTrigger value="account">Account</TabsTrigger>
           </TabsList>
-          <TabsContent value={0} className="pt-6">
-            <OpenRouterSection config={openrouterConfig} getToken={getToken} onRefresh={fetchData} />
+          <TabsContent value="ai" className="pt-6">
+            <LLMProviderSection
+              registry={llmRegistry}
+              configs={llmConfigs}
+              getToken={getToken}
+              onRefresh={fetchData}
+            />
           </TabsContent>
-          <TabsContent value={1} className="pt-6">
-            <SearchProviderSection registry={searchRegistry} configs={searchConfigs} getToken={getToken} onRefresh={fetchData} />
+          <TabsContent value="search" className="pt-6">
+            <SearchProviderSection
+              registry={searchRegistry}
+              configs={searchConfigs}
+              getToken={getToken}
+              onRefresh={fetchData}
+            />
           </TabsContent>
-          <TabsContent value={2} className="pt-6">
+          <TabsContent value="account" className="pt-6">
             <AccountSection email={userEmail} />
           </TabsContent>
         </Tabs>
