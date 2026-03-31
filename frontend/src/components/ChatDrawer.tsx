@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import MermaidBlock from '@/components/MermaidBlock';
-import { getChatHistory, sendChatMessage } from '@/lib/api';
+import { getChatHistory, getChatModels, sendChatMessage } from '@/lib/api';
 import { ChatMessage, ChatModel } from '@/lib/types';
 
 interface ChatPanelProps {
@@ -24,7 +24,7 @@ export function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [models, setModels] = useState<ChatModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState('google/gemini-3.1-flash-lite-preview');
+  const [selectedModel, setSelectedModel] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -32,27 +32,23 @@ export function ChatPanel({
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const { getToken } = useAuth();
 
-  // Load models from OpenRouter public API
   useEffect(() => {
     let cancelled = false;
-    fetch('https://openrouter.ai/api/v1/models')
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        const list: ChatModel[] = (data.data || [])
-          .filter((m: Record<string, unknown>) => typeof m.id === 'string')
-          .map((m: Record<string, unknown>) => ({
-            id: m.id as string,
-            name: (m.name as string) || (m.id as string),
-            context_length: (m.context_length as number) || 0,
-            pricing_prompt: String((m.pricing as Record<string, unknown>)?.prompt || '0'),
-            pricing_completion: String((m.pricing as Record<string, unknown>)?.completion || '0'),
-          }));
-        setModels(list);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+    async function loadModels() {
+      const token = await getToken();
+      const list = await getChatModels(token);
+      if (cancelled) return;
+      setModels(list);
+      setSelectedModel((current) => {
+        if (current && list.some((model) => model.id === current)) return current;
+        return list[0]?.id || '';
+      });
+    }
+    loadModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken]);
 
   // Auto-load history on mount (always visible, not toggled)
   useEffect(() => {
@@ -244,7 +240,7 @@ export function ChatPanel({
             className="flex items-center gap-1 px-2 py-0.5 text-xs bg-muted border border-border rounded-md hover:bg-accent transition-colors"
           >
             <span className="text-foreground">
-              {formatModelName(selectedModel)}
+              {selectedModel ? formatModelName(selectedModel) : 'Select model'}
             </span>
             <svg
               className="w-3 h-3 text-muted-foreground"

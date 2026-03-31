@@ -4,6 +4,7 @@ import logging
 import re
 from collections.abc import Callable, Awaitable
 from datetime import date
+from types import SimpleNamespace
 from typing import Sequence
 
 EventCallback = Callable[[str, dict], Awaitable[None]]
@@ -47,7 +48,7 @@ _SINGLE_SECTION_PATTERNS = (
 
 
 async def _invoke_agent(agent, message: str):
-    """Invoke a langchain agent and return structured response or parsed output."""
+    """Invoke an agent wrapper and return structured response or parsed output."""
     msg_preview = message[:120].replace("\n", " ")
     logger.info("[invoke_agent] Calling agent with message: %s...", msg_preview)
     try:
@@ -1410,14 +1411,16 @@ async def write_section(
         message += f"--- USER INSTRUCTIONS (style preferences) ---\n{user_instructions}\n\n"
     message += f"Write the section now. Start with ## {sec_title}"
 
-    # Invoke LLM directly — the writer needs plain markdown, not structured
-    # output via an agent framework. Direct call avoids tool distractions.
+    # Invoke the provider directly — the writer needs plain markdown, not
+    # structured output.
     from app.agent import WRITER_PROMPT
-    from langchain_core.messages import SystemMessage, HumanMessage
 
     logger.info("[write] Invoking LLM for section '%s'...", sec_title)
     llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    messages = [SystemMessage(content=WRITER_PROMPT), HumanMessage(content=message)]
+    messages = [
+        SimpleNamespace(role="system", content=WRITER_PROMPT),
+        SimpleNamespace(role="user", content=message),
+    ]
     response = await llm.ainvoke(messages)
     content = response.content if hasattr(response, "content") else str(response)
 

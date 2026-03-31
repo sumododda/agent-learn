@@ -2,8 +2,6 @@
 import logging
 
 from pydantic import BaseModel
-from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
 from app import provider_service
 
 logger = logging.getLogger(__name__)
@@ -402,76 +400,82 @@ Focus on what the abstract CANNOT tell you: specific numbers, methodology detail
 nuanced findings, and supporting evidence."""
 
 
-# --- Agent creators (langchain create_agent — no built-in tools) ---
+# --- Agent creators (local compatibility wrapper) ---
 
 
 def create_planner(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a planner agent with structured output."""
     logger.info("[agent:planner] Creating planner agent (model=%s)", model)
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_agent(
-        model=llm,
+    return provider_service.build_structured_agent(
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        extra_fields=extra_fields,
         system_prompt=PLANNER_PROMPT,
-        response_format=ToolStrategy(CourseOutlineWithBriefs),
-        name="agent-learn-planner",
+        response_schema=CourseOutlineWithBriefs,
     )
 
 
 def create_discovery_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a discovery researcher with structured TopicBrief output."""
     logger.info("[agent:discovery] Creating discovery researcher agent (model=%s)", model)
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_agent(
-        model=llm,
+    return provider_service.build_structured_agent(
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        extra_fields=extra_fields,
         system_prompt=DISCOVERY_RESEARCHER_PROMPT,
-        response_format=ToolStrategy(TopicBrief),
-        name="agent-learn-discovery-researcher",
+        response_schema=TopicBrief,
     )
 
 
 def create_section_researcher(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a section researcher with structured EvidenceCardSet output."""
     logger.info("[agent:researcher] Creating section researcher agent (model=%s)", model)
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_agent(
-        model=llm,
+    return provider_service.build_structured_agent(
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        extra_fields=extra_fields,
         system_prompt=SECTION_RESEARCHER_PROMPT,
-        response_format=ToolStrategy(EvidenceCardSet),
-        name="agent-learn-section-researcher",
+        response_schema=EvidenceCardSet,
     )
 
 
 def create_paper_reader(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a paper reader agent with structured PaperReading output."""
     logger.info("[agent:paper_reader] Creating paper reader agent (model=%s)", model)
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_agent(
-        model=llm,
+    return provider_service.build_structured_agent(
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        extra_fields=extra_fields,
         system_prompt=PAPER_READER_PROMPT,
-        response_format=ToolStrategy(PaperReading),
-        name="agent-learn-paper-reader",
+        response_schema=PaperReading,
     )
 
 
 def create_verifier(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create a verifier with structured VerificationResult output."""
     logger.info("[agent:verifier] Creating verifier agent (model=%s)", model)
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_agent(
-        model=llm,
+    return provider_service.build_structured_agent(
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        extra_fields=extra_fields,
         system_prompt=VERIFIER_PROMPT,
-        response_format=ToolStrategy(VerificationResult),
-        name="agent-learn-verifier",
+        response_schema=VerificationResult,
     )
 
 
 def create_editor(provider: str, model: str, credentials: dict, extra_fields: dict | None = None):
     """Create an editor with structured EditorResult output."""
     logger.info("[agent:editor] Creating editor agent (model=%s)", model)
-    llm = provider_service.build_chat_model(provider, model, credentials, extra_fields)
-    return create_agent(
-        model=llm,
+    return provider_service.build_structured_agent(
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        extra_fields=extra_fields,
         system_prompt=EDITOR_PROMPT,
-        response_format=ToolStrategy(EditorResult),
-        name="agent-learn-editor",
+        response_schema=EditorResult,
     )
