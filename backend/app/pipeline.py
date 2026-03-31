@@ -299,18 +299,21 @@ async def run_pipeline(
     # Phase 2: Research all sections in parallel
     # ------------------------------------------------------------------
     if checkpoint < CHECKPOINT_RESEARCHED:
-        logger.info("[pipeline:%s] === PHASE 2: RESEARCHING %d sections in parallel ===", tag, total)
+        logger.info("[pipeline:%s] === PHASE 2: RESEARCHING %d sections (sem=7) ===", tag, total)
         async with async_session() as session:
             from app.agent_service import update_course_status
             await update_course_status(course_id, "researching", session)
 
+        research_sem = asyncio.Semaphore(7)
+
         async def _research_with_events(pos: int) -> dict:
-            title = section_titles.get(pos, f"section-{pos}")
-            await emit("research_start", {"section": pos, "title": title})
-            result = await _research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id, academic_options=academic_options)
-            sources_found = len(result.get("evidence_cards", []))
-            await emit("research_done", {"section": pos, "sources_found": sources_found})
-            return result
+            async with research_sem:
+                title = section_titles.get(pos, f"section-{pos}")
+                await emit("research_start", {"section": pos, "title": title})
+                result = await _research_section(course_id, pos, provider, model, credentials, extra_fields, search_provider, search_credentials, user_id=user_id, academic_options=academic_options)
+                sources_found = len(result.get("evidence_cards", []))
+                await emit("research_done", {"section": pos, "sources_found": sources_found})
+                return result
 
         research_results = await asyncio.gather(
             *[_research_with_events(pos) for pos in positions],
