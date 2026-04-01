@@ -228,7 +228,11 @@ export async function getProgress(courseId: string, token?: string | null): Prom
   if (!text || text === 'null') {
     return null;
   }
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 export async function updateProgress(
