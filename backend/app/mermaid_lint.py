@@ -133,9 +133,10 @@ async def repair_mermaid_in_content(
     if not blocks:
         return markdown
 
-    repairs: list[tuple[str, str]] = []  # (original, fixed)
+    # Build replacement list from last to first so offsets stay valid
+    replacements: list[tuple[int, int, str]] = []  # (start, end, new_text)
 
-    for code, _, _ in blocks:
+    for code, start, end in blocks:
         errors = validate_mermaid(code)
         if not errors:
             continue
@@ -144,26 +145,20 @@ async def repair_mermaid_in_content(
 
         fixed = await _ask_llm_to_fix(code, errors, provider, model, credentials)
         if fixed and not validate_mermaid(fixed):
-            repairs.append((code, fixed))
+            replacements.append((start, end, f"```mermaid\n{fixed}\n```"))
             logger.info("[mermaid_lint] Successfully repaired diagram")
         else:
             # LLM fix still broken — remove the mermaid block entirely
-            repairs.append((code, None))
+            replacements.append((start, end, ""))
             logger.warning("[mermaid_lint] LLM repair still invalid, removing diagram")
 
-    if not repairs:
+    if not replacements:
         return markdown
 
+    # Apply replacements from last to first to preserve earlier offsets
     result = markdown
-    for original, fixed in repairs:
-        if fixed:
-            result = result.replace(
-                f"```mermaid\n{original}\n```",
-                f"```mermaid\n{fixed}\n```",
-            )
-        else:
-            # Remove broken diagram entirely
-            result = result.replace(f"```mermaid\n{original}\n```", "")
+    for start, end, new_text in reversed(replacements):
+        result = result[:start] + new_text + result[end:]
 
     return result
 
