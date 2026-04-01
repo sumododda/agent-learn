@@ -1,7 +1,7 @@
 """Agent definitions: schemas, system prompts, and agent creators."""
 import logging
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from app import provider_service
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,14 @@ class PaperReading(BaseModel):
     methodology_summary: str = ""
     limitations: list[str] = []
 
+    @field_validator("findings", mode="before")
+    @classmethod
+    def _filter_non_dict_findings(cls, v: list) -> list:
+        """LLMs sometimes return findings as plain strings instead of dicts."""
+        if isinstance(v, list):
+            return [item for item in v if item is not None and not isinstance(item, str)]
+        return v
+
 
 # --- Structured output schemas for verifier ---
 
@@ -109,6 +117,14 @@ class VerificationResult(BaseModel):
     card_verifications: list[CardVerification] = []
     needs_more_research: bool = False
     gaps: list[str] = []
+
+    @field_validator("card_verifications", mode="before")
+    @classmethod
+    def _filter_non_dict_verifications(cls, v: list) -> list:
+        """LLMs sometimes return verifications as plain strings instead of dicts."""
+        if isinstance(v, list):
+            return [item for item in v if item is not None and not isinstance(item, str)]
+        return v
 
 
 # --- Structured output schemas for editor ---
