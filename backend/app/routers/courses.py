@@ -624,7 +624,7 @@ async def export_course_pdf(
         raise HTTPException(status_code=404, detail="Course not found")
     if str(course.user_id) != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this course")
-    if course.status != "completed":
+    if course.status not in ("completed", "completed_partial"):
         raise HTTPException(status_code=400, detail="Course must be completed before export")
 
     try:
