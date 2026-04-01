@@ -135,6 +135,7 @@ async def search_with_fallback(
     except Exception as e:
         logger.warning("[search_fallback] DuckDuckGo fallback also failed: %s", e)
 
+    logger.warning("[search_fallback] All search providers failed for query: '%s'", query[:80])
     return []
 
 
