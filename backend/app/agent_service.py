@@ -89,8 +89,9 @@ async def _invoke_agent(agent, message: str):
                                attempt, "retrying..." if attempt < _INVOKE_MAX_RETRIES else "giving up")
         except Exception as e:
             last_error = e
-            logger.warning("[invoke_agent] Attempt %d failed: %s, %s",
-                           attempt, e, "retrying..." if attempt < _INVOKE_MAX_RETRIES else "giving up")
+            logger.warning("[invoke_agent] Attempt %d failed (%s): %s, %s",
+                           attempt, type(e).__name__, e or "(no message)",
+                           "retrying..." if attempt < _INVOKE_MAX_RETRIES else "giving up")
 
     raise last_error or ValueError("Agent invocation failed after retries")
 

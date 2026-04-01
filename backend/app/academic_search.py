@@ -200,10 +200,10 @@ def score_result(
     result_tokens = _tokenize(
         " ".join(
             [
-                result.title,
-                result.abstract,
+                result.title or "",
+                result.abstract or "",
                 result.venue or "",
-                " ".join(result.authors or []),
+                " ".join(a for a in (result.authors or []) if a),
             ]
         )
     )
