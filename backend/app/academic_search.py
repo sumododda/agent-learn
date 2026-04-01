@@ -80,8 +80,10 @@ def reconstruct_abstract(inverted_index: dict | None) -> str:
     return " ".join(w for _, w in words)
 
 
-def _normalize_title(title: str) -> str:
+def _normalize_title(title: str | None) -> str:
     """Normalize a paper title for comparison."""
+    if not title:
+        return ""
     title = unicodedata.normalize("NFKD", title).lower()
     title = re.sub(r"[^\w\s]", "", title)
     return " ".join(title.split())
