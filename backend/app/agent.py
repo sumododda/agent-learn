@@ -96,15 +96,19 @@ class PaperReading(BaseModel):
 
 
 class CardVerification(BaseModel):
-    card_index: int
-    verified: bool
+    model_config = ConfigDict(extra="ignore")
+
+    card_index: int = 0
+    verified: bool = False
     note: str | None = None
 
 
 class VerificationResult(BaseModel):
-    card_verifications: list[CardVerification]
-    needs_more_research: bool
-    gaps: list[str]  # unanswered questions or weak areas
+    model_config = ConfigDict(extra="ignore")
+
+    card_verifications: list[CardVerification] = []
+    needs_more_research: bool = False
+    gaps: list[str] = []
 
 
 # --- Structured output schemas for editor ---
