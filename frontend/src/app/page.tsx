@@ -60,9 +60,6 @@ function HomePageInner() {
   const [error, setError] = useState<string | null>(null);
   const [hasProvider, setHasProvider] = useState<boolean | null>(null);
   const [useResearchPapers, setUseResearchPapers] = useState(false);
-  const [yearRange, setYearRange] = useState('5y');
-  const [minCitations, setMinCitations] = useState(0);
-  const [openAccessOnly, setOpenAccessOnly] = useState(false);
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
       setHasProvider(null);
@@ -111,7 +108,7 @@ function HomePageInner() {
     try {
       const token = await getToken();
       const academicSearch = useResearchPapers
-        ? { enabled: true, year_range: yearRange, min_citations: minCitations, open_access_only: openAccessOnly }
+        ? { enabled: true, year_range: 'all', min_citations: 0, open_access_only: false }
         : null;
       const course = await createCourse(topic.trim(), buildInstructions(), token, academicSearch);
       router.push(`/courses/${course.id}/discover`);
@@ -303,9 +300,12 @@ function HomePageInner() {
             </div>
 
             {/* Research Papers */}
-            <div className="mb-6 space-y-3">
+            <div className="mb-6">
               <div className="flex items-center justify-between">
-                <Label htmlFor="research-toggle">Use Research Papers</Label>
+                <div>
+                  <Label htmlFor="research-toggle">Include Research Papers</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Ground your course in academic sources</p>
+                </div>
                 <button
                   id="research-toggle"
                   role="switch"
@@ -320,58 +320,6 @@ function HomePageInner() {
                   }`} />
                 </button>
               </div>
-
-              {useResearchPapers && (
-                <div className="space-y-3 pl-1 border-l-2 border-primary/20 ml-1">
-                  <div className="space-y-1">
-                    <Label className="text-sm">Year Range</Label>
-                    <select
-                      value={yearRange}
-                      onChange={(e) => setYearRange(e.target.value)}
-                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="5y">Last 5 years</option>
-                      <option value="10y">Last 10 years</option>
-                      <option value="20y">Last 20 years</option>
-                      <option value="all">All time</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-sm">Minimum Citations</Label>
-                    <select
-                      value={minCitations}
-                      onChange={(e) => setMinCitations(Number(e.target.value))}
-                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    >
-                      <option value={0}>Any</option>
-                      <option value={10}>10+</option>
-                      <option value={50}>50+</option>
-                      <option value={100}>100+</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-sm" htmlFor="oa-toggle">Open Access Only</Label>
-                    <button
-                      id="oa-toggle"
-                      role="switch"
-                      aria-checked={openAccessOnly}
-                      onClick={() => setOpenAccessOnly(!openAccessOnly)}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                        openAccessOnly ? 'bg-primary' : 'bg-muted'
-                      } cursor-pointer`}
-                    >
-                      <span className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
-                        openAccessOnly ? 'translate-x-5' : 'translate-x-1'
-                      }`} />
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">Only include papers with free full-text PDFs</p>
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="flex gap-3">
@@ -423,11 +371,7 @@ function HomePageInner() {
                 {useResearchPapers && (
                   <div>
                     <div className="text-muted-foreground text-xs uppercase tracking-wider mb-1">Research papers</div>
-                    <div className="text-foreground text-sm">
-                      {yearRange === 'all' ? 'All time' : `Last ${yearRange.replace('y', ' years')}`}
-                      {minCitations > 0 ? `, ${minCitations}+ citations` : ''}
-                      {openAccessOnly ? ', open access only' : ''}
-                    </div>
+                    <div className="text-foreground text-sm">Enabled</div>
                   </div>
                 )}
               </CardContent>
