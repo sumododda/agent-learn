@@ -1161,6 +1161,12 @@ def _openrouter_extract_structured(
     try:
         return response_schema.model_validate(parsed)
     except ValidationError as exc:
+        logger.warning(
+            "OpenRouter structured output validation failed for %s: %s\nParsed data keys: %s",
+            response_schema.__name__,
+            exc,
+            list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+        )
         raise ProviderResponseError(
             f"OpenRouter structured output validation failed: {exc}"
         ) from exc
