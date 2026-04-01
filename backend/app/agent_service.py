@@ -47,34 +47,52 @@ _SINGLE_SECTION_PATTERNS = (
 # ---------------------------------------------------------------------------
 
 
+_INVOKE_MAX_RETRIES = 2
+
+
 async def _invoke_agent(agent, message: str):
-    """Invoke an agent wrapper and return structured response or parsed output."""
+    """Invoke an agent wrapper and return structured response or parsed output.
+
+    Retries once on failure (e.g. structured output validation) since LLMs
+    may produce valid output on a second attempt.
+    """
     msg_preview = message[:120].replace("\n", " ")
-    logger.info("[invoke_agent] Calling agent with message: %s...", msg_preview)
-    try:
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": message}]}
-        )
-    except AttributeError:
-        logger.debug("[invoke_agent] ainvoke not available, falling back to sync invoke")
-        result = await asyncio.to_thread(
-            agent.invoke,
-            {"messages": [{"role": "user", "content": message}]},
-        )
-    if "structured_response" in result and result["structured_response"] is not None:
-        resp_type = type(result["structured_response"]).__name__
-        logger.info("[invoke_agent] Got structured_response of type %s", resp_type)
-        return result["structured_response"]
-    last_message = result["messages"][-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
-    logger.debug("[invoke_agent] No structured_response, parsing last message (%d chars)", len(content))
-    try:
-        data = json.loads(content)
-        logger.info("[invoke_agent] Parsed JSON from message content")
-        return data
-    except (json.JSONDecodeError, ValueError):
-        logger.error("[invoke_agent] Failed to parse agent output: %s", content[:500])
-        raise ValueError(f"Failed to parse agent output: {content[:500]}")
+    last_error: Exception | None = None
+
+    for attempt in range(1, _INVOKE_MAX_RETRIES + 1):
+        logger.info("[invoke_agent] Calling agent (attempt %d/%d): %s...", attempt, _INVOKE_MAX_RETRIES, msg_preview)
+        try:
+            try:
+                result = await agent.ainvoke(
+                    {"messages": [{"role": "user", "content": message}]}
+                )
+            except AttributeError:
+                logger.debug("[invoke_agent] ainvoke not available, falling back to sync invoke")
+                result = await asyncio.to_thread(
+                    agent.invoke,
+                    {"messages": [{"role": "user", "content": message}]},
+                )
+            if "structured_response" in result and result["structured_response"] is not None:
+                resp_type = type(result["structured_response"]).__name__
+                logger.info("[invoke_agent] Got structured_response of type %s", resp_type)
+                return result["structured_response"]
+            last_message = result["messages"][-1]
+            content = last_message.content if hasattr(last_message, "content") else str(last_message)
+            logger.debug("[invoke_agent] No structured_response, parsing last message (%d chars)", len(content))
+            try:
+                data = json.loads(content)
+                logger.info("[invoke_agent] Parsed JSON from message content")
+                return data
+            except (json.JSONDecodeError, ValueError):
+                last_error = ValueError(f"Failed to parse agent output: {content[:500]}")
+                logger.warning("[invoke_agent] Attempt %d failed to parse output, %s",
+                               attempt, "retrying..." if attempt < _INVOKE_MAX_RETRIES else "giving up")
+        except Exception as e:
+            last_error = e
+            logger.warning("[invoke_agent] Attempt %d failed: %s, %s",
+                           attempt, e, "retrying..." if attempt < _INVOKE_MAX_RETRIES else "giving up")
+
+    raise last_error or ValueError("Agent invocation failed after retries")
 
 
 # ---------------------------------------------------------------------------
