@@ -19,7 +19,7 @@ interface AuthContextValue {
   logout: () => void;
   isSignedIn: boolean;
   isLoaded: boolean;
-  providerKeysLoaded: number;
+  providerKeysLoaded: boolean;
   userEmail: string | null;
 }
 
@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const [providerKeysLoaded, setProviderKeysLoaded] = useState(0);
+  const [providerKeysLoaded, setProviderKeysLoaded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -143,13 +143,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const err = await res.json().catch(() => ({ detail: 'Login failed' }));
       throw new Error(err.detail || 'Login failed');
     }
-    const data: { token: string; user_id: string; provider_keys_loaded?: number } = await res.json();
+    const data: { token: string; user_id: string; provider_keys_loaded?: boolean } = await res.json();
     localStorage.setItem('token', data.token);
     localStorage.setItem('userEmail', email);
     setToken(data.token);
     setUserEmail(email);
     scheduleRefresh(data.token);
-    if (typeof data.provider_keys_loaded === 'number') {
+    if (typeof data.provider_keys_loaded === 'boolean') {
       setProviderKeysLoaded(data.provider_keys_loaded);
     }
   }, [scheduleRefresh]);
@@ -180,13 +180,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const err = await res.json().catch(() => ({ detail: 'Verification failed' }));
       throw new Error(err.detail || 'Verification failed');
     }
-    const data: { token: string; user_id: string; provider_keys_loaded?: number } = await res.json();
+    const data: { token: string; user_id: string; provider_keys_loaded?: boolean } = await res.json();
     localStorage.setItem('token', data.token);
     localStorage.setItem('userEmail', email);
     setToken(data.token);
     setUserEmail(email);
     scheduleRefresh(data.token);
-    if (typeof data.provider_keys_loaded === 'number') {
+    if (typeof data.provider_keys_loaded === 'boolean') {
       setProviderKeysLoaded(data.provider_keys_loaded);
     }
   }, [scheduleRefresh]);
