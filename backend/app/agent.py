@@ -1,7 +1,7 @@
 """Agent definitions: schemas, system prompts, and agent creators."""
 import logging
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from app import provider_service
 
 logger = logging.getLogger(__name__)
@@ -74,18 +74,22 @@ class EvidenceCardSet(BaseModel):
 
 
 class DeepFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     claim: str
-    supporting_text: str
-    paper_section: str
+    supporting_text: str = ""
+    paper_section: str = ""
     data_point: str | None = None
-    finding_type: str  # "quantitative_result" | "methodology" | "theoretical" | "observation"
-    answers_question: str
+    finding_type: str = "observation"
+    answers_question: str = ""
 
 
 class PaperReading(BaseModel):
-    findings: list[DeepFinding]
-    methodology_summary: str
-    limitations: list[str]
+    model_config = ConfigDict(extra="ignore")
+
+    findings: list[DeepFinding] = []
+    methodology_summary: str = ""
+    limitations: list[str] = []
 
 
 # --- Structured output schemas for verifier ---
