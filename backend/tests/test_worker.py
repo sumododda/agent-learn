@@ -9,7 +9,7 @@ Tests cover:
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import event as sa_event, select
@@ -353,6 +353,9 @@ async def test_resolve_credentials_with_duckduckgo_search():
         def scalar_one(self):
             return self._value
 
+        def scalar_one_or_none(self):
+            return self._value
+
     fake_session = AsyncMock()
     fake_session.execute = AsyncMock(side_effect=[
         _ScalarResult(UserKeySalt(user_id=job.user_id, salt=salt)),
@@ -382,6 +385,79 @@ async def test_resolve_credentials_with_duckduckgo_search():
     assert creds == llm_creds
     assert s_creds == {}
     assert fake_session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_credentials_missing_salt():
+    """_resolve_credentials raises ValueError when user has no encryption salt."""
+    job = PipelineJob(
+        id=uuid.uuid4(),
+        course_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        status="claimed",
+        config={"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    )
+
+    fake_session = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    fake_session.execute = AsyncMock(return_value=result_mock)
+
+    class _FakeSessionCtx:
+        def __init__(self, s):
+            self._s = s
+        async def __aenter__(self):
+            return self._s
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch("app.worker.async_session", return_value=_FakeSessionCtx(fake_session)):
+        with patch("app.worker.settings") as mock_settings:
+            mock_settings.ENCRYPTION_PEPPER = "a" * 32
+            with pytest.raises(ValueError, match="No encryption salt"):
+                await _resolve_credentials(job)
+
+
+@pytest.mark.asyncio
+async def test_resolve_credentials_missing_provider():
+    """_resolve_credentials raises ValueError when provider config doesn't exist."""
+    pepper = b"a" * 32
+    salt = generate_salt()
+    key = derive_key(salt, pepper)
+
+    job = PipelineJob(
+        id=uuid.uuid4(),
+        course_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        status="claimed",
+        config={"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    )
+
+    class _ScalarResult:
+        def __init__(self, value):
+            self._value = value
+        def scalar_one_or_none(self):
+            return self._value
+
+    fake_session = AsyncMock()
+    fake_session.execute = AsyncMock(side_effect=[
+        _ScalarResult(UserKeySalt(user_id=job.user_id, salt=salt)),
+        _ScalarResult(None),
+    ])
+
+    class _FakeSessionCtx:
+        def __init__(self, s):
+            self._s = s
+        async def __aenter__(self):
+            return self._s
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch("app.worker.async_session", return_value=_FakeSessionCtx(fake_session)):
+        with patch("app.worker.settings") as mock_settings:
+            mock_settings.ENCRYPTION_PEPPER = pepper.decode()
+            with pytest.raises(ValueError, match="No provider config"):
+                await _resolve_credentials(job)
 
 
 # ---------------------------------------------------------------------------

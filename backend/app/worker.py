@@ -160,7 +160,9 @@ async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None]:
         salt_result = await session.execute(
             select(UserKeySalt).where(UserKeySalt.user_id == job.user_id)
         )
-        salt_row = salt_result.scalar_one()
+        salt_row = salt_result.scalar_one_or_none()
+        if salt_row is None:
+            raise ValueError(f"No encryption salt found for user {job.user_id}")
         key = derive_key(salt_row.salt, pepper)
 
         # Fetch LLM provider config
@@ -171,7 +173,9 @@ async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None]:
                 ProviderConfig.provider == provider_name,
             )
         )
-        provider_row = provider_result.scalar_one()
+        provider_row = provider_result.scalar_one_or_none()
+        if provider_row is None:
+            raise ValueError(f"No provider config '{provider_name}' for user {job.user_id}")
         creds = json.loads(decrypt_credentials(key, provider_row.encrypted_credentials))
 
         # Fetch search provider config if configured
@@ -187,10 +191,16 @@ async def _resolve_credentials(job: PipelineJob) -> tuple[dict, dict | None]:
                         ProviderConfig.provider == search_provider,
                     )
                 )
-                search_row = search_result.scalar_one()
-                search_creds = json.loads(
-                    decrypt_credentials(key, search_row.encrypted_credentials)
-                )
+                search_row = search_result.scalar_one_or_none()
+                if search_row is None:
+                    logger.warning(
+                        "Search provider '%s' not found for user %s — proceeding without search",
+                        search_provider, job.user_id,
+                    )
+                else:
+                    search_creds = json.loads(
+                        decrypt_credentials(key, search_row.encrypted_credentials)
+                    )
 
     return creds, search_creds
 
