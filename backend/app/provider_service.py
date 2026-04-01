@@ -1111,21 +1111,18 @@ def _strip_code_fences(text: str) -> str:
 def _repair_stringified_objects(data: Any) -> Any:
     """Some models via OpenRouter return nested objects/arrays as JSON strings.
     Recursively detect and parse them back into dicts/lists."""
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+            if isinstance(parsed, (dict, list)):
+                return _repair_stringified_objects(parsed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return data
     if isinstance(data, dict):
         return {k: _repair_stringified_objects(v) for k, v in data.items()}
     if isinstance(data, list):
-        repaired = []
-        for item in data:
-            if isinstance(item, str):
-                try:
-                    parsed = json.loads(item)
-                    if isinstance(parsed, (dict, list)):
-                        repaired.append(_repair_stringified_objects(parsed))
-                        continue
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            repaired.append(_repair_stringified_objects(item))
-        return repaired
+        return [_repair_stringified_objects(item) for item in data]
     return data
 
 
