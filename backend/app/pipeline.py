@@ -302,7 +302,7 @@ async def run_pipeline(
         logger.info("[pipeline:%s] === PHASE 2: RESEARCHING %d sections (sem=7) ===", tag, total)
         async with async_session() as session:
             from app.agent_service import update_course_status
-            await update_course_status(course_id, "researching", session)
+            await update_course_status(course_id, "generating", session)
 
         research_sem = asyncio.Semaphore(7)
 
