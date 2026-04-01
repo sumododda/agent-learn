@@ -139,19 +139,26 @@ async def chat_stream(
             # session may already be closed by the time the stream finishes.
             full_content = "".join(collected)
             if full_content:
-                from app.database import async_session
+                try:
+                    from app.database import async_session
 
-                async with async_session() as persist_session:
-                    assistant_msg = ChatMessage(
-                        course_id=uuid.UUID(course_id),
-                        user_id=uuid.UUID(user_id),
-                        role="assistant",
-                        content=full_content,
-                        model=selected_model,
-                        section_context=body.section_context,
+                    async with async_session() as persist_session:
+                        assistant_msg = ChatMessage(
+                            course_id=uuid.UUID(course_id),
+                            user_id=uuid.UUID(user_id),
+                            role="assistant",
+                            content=full_content,
+                            model=selected_model,
+                            section_context=body.section_context,
+                        )
+                        persist_session.add(assistant_msg)
+                        await persist_session.commit()
+                except Exception:
+                    logger.error(
+                        "Failed to persist assistant message for course=%s",
+                        course_id,
+                        exc_info=True,
                     )
-                    persist_session.add(assistant_msg)
-                    await persist_session.commit()
 
     return StreamingResponse(
         wrapper(),
