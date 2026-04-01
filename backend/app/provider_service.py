@@ -1126,6 +1126,24 @@ def _repair_stringified_objects(data: Any) -> Any:
     return data
 
 
+def _sanitize_list_items(data: Any) -> Any:
+    """Remove None and non-dict items from lists that expect model instances.
+
+    LLMs via OpenRouter sometimes return None items or plain strings in lists
+    that should contain structured objects. Filter them to prevent validation
+    failures while preserving valid data.
+    """
+    if isinstance(data, dict):
+        return {k: _sanitize_list_items(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [
+            _sanitize_list_items(item)
+            for item in data
+            if item is not None and not (isinstance(item, str) and not item.strip().startswith("{"))
+        ]
+    return data
+
+
 def _openrouter_extract_structured(
     payload: Mapping[str, Any],
     response_schema: type[BaseModel],
@@ -1158,6 +1176,7 @@ def _openrouter_extract_structured(
     except json.JSONDecodeError as exc:
         raise ProviderResponseError(f"OpenRouter structured output invalid JSON: {raw_json[:200]}") from exc
     parsed = _repair_stringified_objects(parsed)
+    parsed = _sanitize_list_items(parsed)
     try:
         return response_schema.model_validate(parsed)
     except ValidationError as exc:
