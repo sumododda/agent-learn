@@ -1775,10 +1775,18 @@ async def run_verify_section(
     # Fetch evidence cards
     cards = await get_evidence_cards(course_id, section_position, session)
     if not cards:
-        raise ValueError(
-            f"No evidence cards found for course {course_id}, "
-            f"section {section_position}"
+        logger.warning(
+            "[verify] No evidence cards for course %s section %d — skipping verification",
+            course_id, section_position,
         )
+        return {
+            "verification_result": {
+                "cards_verified": 0,
+                "cards_total": 0,
+                "needs_more_research": False,
+                "gaps": [],
+            },
+        }
 
     # Fetch research brief
     result = await session.execute(
