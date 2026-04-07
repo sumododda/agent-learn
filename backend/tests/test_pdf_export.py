@@ -191,7 +191,7 @@ def test_convert_markdown_to_typst_renders_supported_elements():
     assert '#raw("print(1)\\n", lang: "python", block: true)' in rendered
 
 
-def test_convert_markdown_to_typst_renders_mermaid_as_page_fitted_svg():
+def test_convert_markdown_to_typst_renders_mermaid_as_width_fitted_svg():
     markdown = (
         "```mermaid\n"
         "flowchart TD\n"
@@ -204,7 +204,7 @@ def test_convert_markdown_to_typst_renders_mermaid_as_page_fitted_svg():
 
     assert mermaid.blocks == ['flowchart TD\n    A["Start"] --> B["Finish"]']
     assert "#align(center)[" in rendered
-    assert '#image("mermaid-0.svg", width: 100%, height: 19cm, fit: "contain")' in rendered
+    assert '#image("mermaid-0.svg", width: 100%)' in rendered
 
 
 def test_generate_course_pdf_returns_pdf_bytes():

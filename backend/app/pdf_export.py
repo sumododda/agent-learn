@@ -16,7 +16,6 @@ from markdown_it.tree import SyntaxTreeNode
 logger = logging.getLogger(__name__)
 
 KROKI_MERMAID_URL = os.environ.get("KROKI_MERMAID_URL", "https://kroki.io/mermaid/png")
-MERMAID_MAX_HEIGHT = "19cm"
 MERMAID_RENDER_PARAMS = {"html-labels": "false"}
 
 from app.schemas import CourseResponse, SectionFull
@@ -329,7 +328,7 @@ def _render_code_block(content: str, info: str | None, mermaid: MermaidCollector
             index = mermaid.add(content.strip())
             return (
                 "#align(center)["
-                f'#image("mermaid-{index}.svg", width: 100%, height: {MERMAID_MAX_HEIGHT}, fit: "contain")'
+                f'#image("mermaid-{index}.svg", width: 100%)'
                 "]"
             )
         return _render_mermaid_placeholder(content)
